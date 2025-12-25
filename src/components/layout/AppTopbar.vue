@@ -85,7 +85,7 @@ const handleToggle = (event) => {
 const updateFavicon = () => {
   const link = document.querySelector("link[rel*='icon']")
   if (link) {
-    link.href = isDarkTheme.value ? '/meta/icon2.svg' : '/meta/icon1.svg?upd'
+    link.href = isDarkTheme.value ? '/app/meta/icon2.svg' : '/app/meta/icon1.svg?upd'
   }
 }
 
