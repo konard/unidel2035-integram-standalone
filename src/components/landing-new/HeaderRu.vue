@@ -22,9 +22,9 @@
         </div>
 
         <div class="landing-nav-actions">
-          <a href="#contact">
+          <a href="/app/login">
             <button class="landing-btn landing-btn-accent">
-              Начать
+              Войти
             </button>
           </a>
         </div>
@@ -51,7 +51,7 @@
         </a>
         <div class="landing-nav-mobile-actions">
           <button class="landing-btn landing-btn-accent landing-btn-full">
-            Начать
+            Войти
           </button>
         </div>
       </div>
