@@ -603,7 +603,7 @@ export default {
       info: '配置 Integram 数据库 (ddadmin) 的连接设置',
       apiSettings: 'Integram API 设置',
       apiUrl: 'Integram API URL',
-      apiUrlPlaceholder: 'https://dronedoc.ru',
+      apiUrlPlaceholder: '${import.meta.env.VITE_INTEGRAM_URL}',
       apiUrlHelp: 'Integram API 的基础 URL',
       database: '数据库名称',
       databasePlaceholder: 'ddadmin',

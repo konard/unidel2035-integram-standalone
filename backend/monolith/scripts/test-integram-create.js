@@ -22,7 +22,7 @@ axios.interceptors.response.use(response => {
 })
 
 async function test() {
-  const client = new IntegramClient('https://dronedoc.ru', 'my')
+  const client = new IntegramClient(process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io', 'my')
 
   console.log('=== AUTHENTICATING ===')
   await client.authenticate('d', 'd')

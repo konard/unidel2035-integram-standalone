@@ -1387,7 +1387,7 @@ const database = computed(() => props.databaseProp || props.database || route.pa
 const apiServerUrl = computed(() => {
   if (props.serverUrl) return props.serverUrl
   const serverFromClient = integramApiClient.getServer()
-  return serverFromClient || 'https://dronedoc.ru'
+  return serverFromClient || '${import.meta.env.VITE_INTEGRAM_URL}'
 })
 
 const breadcrumbItems = computed(() => {

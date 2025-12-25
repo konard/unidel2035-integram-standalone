@@ -1,0 +1,337 @@
+./copy-files.sh:SOURCE="/home/hive/dronedoc2025"
+./FINAL_SUMMARY.md:### ✅ 1. Авторизация (идентично proxy.drondoc.ru/login)
+./FINAL_SUMMARY.md:### ✅ 2. Welcome страница (идентично proxy.drondoc.ru/welcome)
+./FINAL_SUMMARY.md:### ✅ 3. Integram (полностью proxy.drondoc.ru/integram)
+./FINAL_SUMMARY.md:- drondoc-agents-integram.js
+./FINAL_SUMMARY.md:- **Исходный проект:** https://github.com/unidel2035/dronedoc2025
+./FINAL_SUMMARY.md:2. ✅ Включено всё с proxy.drondoc.ru/integram
+./backend/monolith/package.json:  "name": "dronedoc-monolith",
+./backend/monolith/package.json:  "description": "Monolithic backend for DronDoc - consolidates orchestrator, YouTube analytics, MCP server, and accounting services",
+./backend/monolith/package.json:    "pm2:stop": "pm2 stop dronedoc-monolith",
+./backend/monolith/package.json:    "pm2:logs": "pm2 logs dronedoc-monolith",
+./backend/monolith/package.json:    "dronedoc"
+./backend/monolith/package.json:  "author": "DronDoc Team",
+./backend/monolith/scripts/update-and-restart.sh:# DronDoc Backend - Update and Restart Script
+./backend/monolith/scripts/update-and-restart.sh:echo -e "${GREEN}║     DronDoc Backend - Update and Restart Script                ║${NC}"
+./backend/monolith/scripts/update-and-restart.sh:PM2_PROCESS_NAME="dronedoc-monolith"
+./backend/monolith/scripts/create-workspace-integram-tables.js:const INTEGRAM_SERVER = process.env.INTEGRAM_SERVER || 'https://dronedoc.ru';
+./backend/monolith/scripts/README-TEST-USER.md:curl -X POST https://dev.drondoc.ru/api/user-sync/login \
+./backend/monolith/scripts/README-TEST-USER.md:- **URL**: `https://dev.drondoc.ru/api/user-sync/login`
+./backend/monolith/scripts/README-TEST-USER.md:VITE_ORCHESTRATOR_URL=https://dev.drondoc.ru
+./backend/monolith/scripts/test-integram-create.js:  const client = new IntegramClient('https://dronedoc.ru', 'my')
+./backend/monolith/scripts/verify-env-pm2.js:// console.log('║ DronDoc Backend - PM2 Environment Verification (Issue #1917)      ║')
+./backend/monolith/scripts/verify-env-pm2.js:  // console.log('  pm2 logs dronedoc-monolith')
+./backend/monolith/scripts/deploy-resilient-logger.sh:#   RESILIENT_LOG_DIR - Custom log directory path (e.g., /var/log/dronedoc/resilient)
+./backend/monolith/scripts/deploy-resilient-logger.sh:#   RESILIENT_LOG_DIR=/var/log/dronedoc/resilient ./scripts/deploy-resilient-logger.sh
+./backend/monolith/scripts/setup-notification-tables.js:  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru',
+./backend/monolith/scripts/setup-unified-interface-tables.js:  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru',
+./backend/monolith/scripts/mcp/headhunter-server.js:    this.userAgent = 'DronDoc/1.0 (https://dronedoc.ru)';
+./backend/monolith/scripts/auto-solve-wrapper.sh:#   GITHUB_REPO - GitHub repository name (default: dronedoc2025)
+./backend/monolith/scripts/auto-solve-wrapper.sh:GITHUB_REPO="${GITHUB_REPO:-dronedoc2025}"
+./backend/monolith/scripts/auto-solve-wrapper.sh:    log_error "Example: $0 https://github.com/unidel2035/dronedoc2025/issues/1809"
+./backend/monolith/scripts/setup-database.sh:# Database Setup Script for DronDoc Monolithic Backend
+./backend/monolith/scripts/setup-database.sh:DronDoc Database Setup Script
+./backend/monolith/scripts/setup-database.sh:    read -p "Database name [dronedoc]: " DB_NAME
+./backend/monolith/scripts/setup-database.sh:    DB_NAME=${DB_NAME:-dronedoc}
+./backend/monolith/scripts/setup-database.sh:    read -p "Database user [dronedoc]: " DB_USER
+./backend/monolith/scripts/setup-database.sh:    DB_USER=${DB_USER:-dronedoc}
+./backend/monolith/scripts/analyze-datanewton-fields.js:        'User-Agent': 'DronDoc/1.0',
+./backend/monolith/scripts/create-new-parameters.js:  serverURL: 'https://dronedoc.ru',
+./backend/monolith/scripts/check-mail-config.sh:# Скрипт автоматической проверки конфигурации mail.drondoc.ru
+./backend/monolith/scripts/check-mail-config.sh:DOMAIN="drondoc.ru"
+./backend/monolith/scripts/check-mail-config.sh:MAIL_SERVER="mail.drondoc.ru"
+./backend/monolith/scripts/check-mail-config.sh:echo "║   Проверка конфигурации почтового сервера DronDoc      ║"
+./backend/monolith/scripts/check-mail-config.sh:if echo "$mx_record" | grep -q "mail.drondoc.ru"; then
+./backend/monolith/scripts/check-mail-config.sh:    if echo "$spf_record" | grep -q "mail.drondoc.ru"; then
+./backend/monolith/scripts/check-mail-config.sh:        print_result "SPF запись" "warn" "Найдена, но без mail.drondoc.ru: $spf_record"
+./backend/monolith/scripts/check-mail-config.sh:if echo "$ptr_record" | grep -q "mail.drondoc.ru"; then
+./backend/monolith/scripts/check-mail-config.sh:    print_result "Reverse DNS" "fail" "PTR указывает на: $ptr_record (должен быть mail.drondoc.ru)"
+./backend/monolith/scripts/create-default-org-template.js:  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru',
+./backend/monolith/scripts/fix-messages-table.js:  const client = new IntegramClient('https://dronedoc.ru', 'my')
+./backend/monolith/scripts/get-table-metadata.js:        serverURL: 'https://dronedoc.ru',
+./backend/monolith/scripts/create-chat-tables.js:  serverURL: 'https://dronedoc.ru',
+./backend/monolith/scripts/diagnose-claude-chat.sh:# Run this on the server where dev.drondoc.ru backend is deployed
+./backend/monolith/scripts/setup-tls.sh:# Скрипт автоматической настройки TLS/SSL для mail.drondoc.ru
+./backend/monolith/scripts/setup-tls.sh:# Запускать с правами root на сервере mail.drondoc.ru
+./backend/monolith/scripts/setup-tls.sh:DOMAIN="mail.drondoc.ru"
+./backend/monolith/scripts/setup-tls.sh:EMAIL="admin@drondoc.ru"
+./backend/monolith/scripts/setup-tls.sh:echo "   SMTP_HOST=mail.drondoc.ru"
+./backend/monolith/scripts/add-workspace-columns.js:const SERVER_URL = process.env.INTEGRAM_SERVER || 'https://dronedoc.ru';
+./backend/monolith/scripts/deploy-pm2.sh:# DronDoc Monolithic Backend - PM2 Deployment Script
+./backend/monolith/scripts/deploy-pm2.sh:echo -e "${GREEN}║     DronDoc Monolithic Backend - PM2 Deployment Script        ║${NC}"
+./backend/monolith/scripts/deploy-pm2.sh:if [ ! -d "/var/log/dronedoc" ]; then
+./backend/monolith/scripts/deploy-pm2.sh:    echo -e "${YELLOW}[INFO]${NC} Creating /var/log/dronedoc directory..."
+./backend/monolith/scripts/deploy-pm2.sh:    sudo mkdir -p /var/log/dronedoc
+./backend/monolith/scripts/deploy-pm2.sh:    sudo chown $USER:$USER /var/log/dronedoc
+./backend/monolith/scripts/deploy-pm2.sh:pm2 stop dronedoc-monolith 2>/dev/null || true
+./backend/monolith/scripts/deploy-pm2.sh:pm2 delete dronedoc-monolith 2>/dev/null || true
+./backend/monolith/scripts/deploy-pm2.sh:    echo "1. Check logs: pm2 logs dronedoc-monolith"
+./backend/monolith/scripts/deploy-pm2.sh:echo "  pm2 logs dronedoc-monolith        - View logs"
+./backend/monolith/scripts/deploy-pm2.sh:echo "  pm2 restart dronedoc-monolith     - Restart app"
+./backend/monolith/scripts/deploy-pm2.sh:echo "  pm2 stop dronedoc-monolith        - Stop app"
+./backend/monolith/scripts/deploy-pm2.sh:echo "  App logs: /var/log/dronedoc/"
+./backend/monolith/scripts/create-workspace-tables.js:const SERVER_URL = process.env.INTEGRAM_SERVER || 'https://dronedoc.ru';
+./backend/monolith/scripts/update-kag-methods.js:    namespace = 'dronedoc2025',
+./backend/monolith/scripts/setup-code-analyzer-integram.js: *   - Integram server running at https://dronedoc.ru
+./backend/monolith/scripts/setup-code-analyzer-integram.js:const SERVER_URL = process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru'
+./backend/monolith/scripts/create-workspace-tables-final.js:const SERVER_URL = 'https://dronedoc.ru';
+./backend/monolith/scripts/test-workspace-data-v2.js:const SERVER_URL = 'https://dronedoc.ru';
+./backend/monolith/scripts/test-workspace-data-v2.js:      integramServer: 'dronedoc.ru',
+./backend/monolith/scripts/test-workspace-data-v2.js:      path: `/var/lib/drondoc/workspaces/${workspaceId}`,
+./backend/monolith/scripts/install-run-kit.sh:#   ssh root@dev.drondoc.ru 'bash -s' < install-run-kit.sh
+./backend/monolith/scripts/test-organization-creation.js:    const createUrl = `https://dronedoc.ru/my/_m_new/197000?JSON_KV`
+./backend/monolith/scripts/test-organization-creation.js:    const checkUrl = `https://dronedoc.ru/my/object/209592?JSON_KV&F_U=${orgId}&LIMIT=500`
+./backend/monolith/scripts/test-organization-creation.js:    console.log(`  Организация: https://dronedoc.ru/my/object/197000/_o_${orgId}`)
+./backend/monolith/scripts/test-organization-creation.js:    console.log(`  Реквизиты: https://dronedoc.ru/my/object/209592/?&F_U=${orgId}&pg=1`)
+./backend/monolith/scripts/create-db-sessions-table.js:const SERVER_URL = 'https://dronedoc.ru';
+./backend/monolith/scripts/check-integram-dict.js:  const client = new IntegramClient('https://dronedoc.ru', 'my')
+./backend/monolith/scripts/setup-github-integration-table.js: *   - INTEGRAM_SERVER_URL (default: https://dronedoc.ru)
+./backend/monolith/scripts/setup-github-integration-table.js:  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru',
+./backend/monolith/scripts/setup-github-integration-table.js:      { name: 'User ID', type: REQ_TYPE_NUMBER, description: 'DronDoc User ID' },
+./backend/monolith/scripts/troubleshoot-pm2.sh:# DronDoc Backend - PM2 Troubleshooting Script
+./backend/monolith/scripts/troubleshoot-pm2.sh:echo -e "${BLUE}║     DronDoc Backend - PM2 Troubleshooting Diagnostic           ║${NC}"
+./backend/monolith/scripts/troubleshoot-pm2.sh:    echo -e "${YELLOW}PM2 info for dronedoc-monolith:${NC}"
+./backend/monolith/scripts/troubleshoot-pm2.sh:    pm2 info dronedoc-monolith 2>&1 || echo "No process named 'dronedoc-monolith' found"
+./backend/monolith/scripts/troubleshoot-pm2.sh:    if [ -f ~/.pm2/logs/dronedoc-monolith-error.log ]; then
+./backend/monolith/scripts/troubleshoot-pm2.sh:        tail -n 20 ~/.pm2/logs/dronedoc-monolith-error.log
+./backend/monolith/scripts/troubleshoot-pm2.sh:    if [ -f ~/.pm2/logs/dronedoc-monolith-out.log ]; then
+./backend/monolith/scripts/troubleshoot-pm2.sh:        tail -n 20 ~/.pm2/logs/dronedoc-monolith-out.log
+./backend/monolith/scripts/troubleshoot-pm2.sh:echo "  pm2 logs dronedoc-monolith --lines 50    # View recent logs"
+./backend/monolith/scripts/troubleshoot-pm2.sh:echo "  pm2 restart dronedoc-monolith            # Restart app"
+./backend/monolith/scripts/troubleshoot-pm2.sh:echo "  pm2 delete dronedoc-monolith             # Remove from PM2"
+./backend/monolith/scripts/verify-env.js:// console.log('║ DronDoc Backend - Environment Variables Verification              ║')
+./backend/monolith/scripts/setup-integram-notifications.js:const SERVER_URL = process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru'
+./backend/monolith/scripts/setup-dkim.sh:# Скрипт автоматической настройки DKIM для mail.drondoc.ru
+./backend/monolith/scripts/setup-dkim.sh:# Запускать с правами root на сервере mail.drondoc.ru
+./backend/monolith/scripts/setup-dkim.sh:DOMAIN="drondoc.ru"
+./backend/monolith/package-lock.json:  "name": "dronedoc-monolith",
+./backend/monolith/package-lock.json:      "name": "dronedoc-monolith",
+./backend/monolith/src/services/mcp/integram-sse-server.js:                description: 'Integram server URL (e.g., https://dronedoc.ru)',
+./backend/monolith/src/services/mcp/integram-server.js:   * - dronedoc.ru: https://dronedoc.ru/{database}/{endpoint}?JSON_KV
+./backend/monolith/src/services/mcp/integram-server.js:    const isDronedoc = cleanBaseURL.includes('dronedoc.ru');
+./backend/monolith/src/services/mcp/integram-server.js:    if (isDronedoc) {
+./backend/monolith/src/services/mcp/integram-server.js:      // DronDoc format: https://dronedoc.ru/{database}/{endpoint}?JSON_KV
+./backend/monolith/src/services/mcp/integram-server.js:          description: 'Integram server URL (e.g., https://dronedoc.ru or https://app.integram.io)'
+./backend/monolith/src/services/integram/integram-client.js:   * @param {string} serverURL - Integram server URL (e.g., https://dronedoc.ru)
+./backend/monolith/src/services/integram/integram-client.js:   * Example: new IntegramClient("https://dronedoc.ru", "my")
+./backend/monolith/src/services/integram/OrbityDatabaseSetupService.js:        baseURL: process.env.INTEGRAM_API_URL || 'https://dev.drondoc.ru:5443/integram'
+./backend/monolith/src/services/chat/chatService.js:  serverURL: process.env.INTEGRAM_API_URL || 'https://dronedoc.ru',
+./backend/monolith/src/services/chat/chatService.js:          const baseUrl = process.env.INTEGRAM_URL || 'https://dronedoc.ru'
+./backend/monolith/src/services/chat/chatService.js:            const baseUrl = process.env.INTEGRAM_URL || 'https://dronedoc.ru'
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:// drondoc-agents-integram.js - Integram integration for DronDoc Agents
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:export function createDronDocAgentsIntegramRoutes() {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:   * POST /api/drondoc-agents/integram/save
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Saving agent to Integram', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:        serverUrl: serverUrl || 'https://dronedoc.ru',
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      // DronDoc Agents table created via Integram MCP
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      const TYPE_ID = 217788 // DronDoc Agents table
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Successfully saved agent', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.error('[DronDoc Agents Integram] Save failed:', error)
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:   * GET /api/drondoc-agents/integram/load
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Loading agents from Integram', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:        serverUrl: serverUrl || 'https://dronedoc.ru',
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      const TYPE_ID = 217788 // DronDoc Agents table
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Loaded agents', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.error('[DronDoc Agents Integram] Load failed:', error)
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:   * PUT /api/drondoc-agents/integram/:id
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Updating agent', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:        serverUrl: serverUrl || 'https://dronedoc.ru',
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Successfully updated agent', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.error('[DronDoc Agents Integram] Update failed:', error)
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:   * DELETE /api/drondoc-agents/integram/:id
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Deleting agent', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:        serverUrl: serverUrl || 'https://dronedoc.ru',
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.info('[DronDoc Agents Integram] Successfully deleted agent', {
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:      logger.error('[DronDoc Agents Integram] Delete failed:', error)
+./backend/monolith/src/api/routes/drondoc-agents-integram.js:export default createDronDocAgentsIntegramRoutes
+./backend/monolith/src/api/routes/email-auth.js:    const baseUrl = 'https://dronedoc.ru';
+./backend/monolith/src/api/routes/general-chat.js:      const xsrfResponse = await fetch(`${process.env.INTEGRAM_API_URL || 'https://dronedoc.ru'}/${process.env.INTEGRAM_DATABASE || 'my'}/xsrf?JSON_KV=true`, {
+./backend/monolith/src/api/routes/integram-organizations.js:  serverURL: 'https://dronedoc.ru',
+./backend/monolith/src/api/routes/oauth.js:      `https://dronedoc.ru/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${providerUserId}`,
+./backend/monolith/src/api/routes/oauth.js:      `https://dronedoc.ru/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${encodeURIComponent(username)}`,
+./backend/monolith/src/api/routes/oauth.js:      `https://dronedoc.ru/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${encodeURIComponent(email)}`,
+./backend/monolith/src/api/routes/oauth.js:        `https://dronedoc.ru/my/_m_set/${existingUser.id}?JSON_KV`,
+./backend/monolith/src/api/routes/oauth.js:    `https://dronedoc.ru/my/_m_new/${USERS_TABLE}?JSON_KV`,
+./backend/monolith/src/api/routes/oauth.js:      `https://dronedoc.ru/my/_m_set/${userId}?JSON_KV`,
+./backend/monolith/src/api/routes/oauth.js:        'User-Agent': 'DronDoc/1.0',
+./backend/monolith/src/api/routes/oauth.js:      `https://dronedoc.ru/my/_m_set/${userId}?JSON_KV`,
+./backend/monolith/src/api/routes/oauth.js:    state: 'dronedoc'
+./backend/monolith/src/api/routes/oauth.js:    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+./backend/monolith/src/api/routes/oauth.js:    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+./backend/monolith/src/api/routes/oauth.js:    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+./backend/monolith/src/api/routes/oauth.js:    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+./backend/monolith/src/api/routes/oauth.js:    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+./backend/monolith/src/api/routes/oauth.js:    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+./backend/monolith/src/api/routes/chat.js:const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'https://dev.drondoc.ru';
+./backend/monolith/src/api/routes/chat.js:            serverURL: { type: 'string', description: 'Server URL (e.g., https://dronedoc.ru)' },
+./backend/monolith/src/utils/logger.js:const LOG_DIR = process.env.LOG_DIR || '/var/log/dronedoc';
+./backend/monolith/src/utils/auth/jwt.js:    issuer: 'dronedoc-auth-service',
+./backend/monolith/src/utils/auth/jwt.js:    audience: 'dronedoc-api',
+./backend/monolith/src/utils/auth/jwt.js:    issuer: 'dronedoc-auth-service',
+./backend/monolith/src/utils/auth/jwt.js:    audience: 'dronedoc-api',
+./backend/monolith/src/utils/auth/jwt.js:      issuer: 'dronedoc-auth-service',
+./backend/monolith/src/utils/auth/jwt.js:      audience: 'dronedoc-api',
+./backend/monolith/src/utils/README.md:This directory contains utility functions and modules used across the DronDoc backend application.
+./backend/monolith/src/utils/README.md:| `LOG_DIR` | Directory for log files | `/var/log/dronedoc` | `/app/logs` |
+./backend/monolith/src/utils/LOGGER_USAGE.md:This guide explains how to use and configure the logging utilities in the DronDoc application.
+./backend/monolith/src/utils/LOGGER_USAGE.md:DronDoc has two separate logger implementations:
+./backend/monolith/src/utils/LOGGER_USAGE.md:| `LOG_DIR` | Directory for log files | `/var/log/dronedoc` | `/app/logs` |
+./backend/monolith/src/utils/LOGGER_USAGE.md:1. Check log directory permissions: `ls -la /var/log/dronedoc`
+./backend/monolith/src/utils/LOGGER_USAGE.md:2. Ensure directory exists: `mkdir -p /var/log/dronedoc`
+./backend/monolith/src/utils/LOGGER_USAGE.md:- [DronDoc Contributing Guidelines](../../CONTRIBUTING.md)
+./backend/monolith/src/utils/IntegramClient.js:const INTEGRAM_BASE_URL = process.env.INTEGRAM_API_URL || 'https://dronedoc.ru';
+./backend/monolith/src/middleware/security/securityHeaders.js:      'wss://*.drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:      'https://*.drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:      'https://drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:      'https://www.drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:      'https://dev.drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:      'https://proxy.drondoc.ru', // Production proxy (Issue #5170)
+./backend/monolith/src/middleware/security/securityHeaders.js:      'http://dev.drondoc.ru:5173', // Dev server via SSH tunnel
+./backend/monolith/src/middleware/security/securityHeaders.js:    'https://drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:    'https://www.drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:    'https://dev.drondoc.ru',
+./backend/monolith/src/middleware/security/securityHeaders.js:    'https://proxy.drondoc.ru', // Production proxy (Issue #5170)
+./backend/monolith/src/middleware/security/securityHeaders.js:    'http://dev.drondoc.ru:5173', // Dev server via SSH tunnel
+./backend/monolith/src/index.js:// index.js - Monolithic DronDoc Backend Server
+./backend/monolith/src/index.js:import drondocAgentsRoutes from './api/routes/drondoc-agents.js';
+./backend/monolith/src/index.js:import { createDronDocAgentsIntegramRoutes } from './api/routes/drondoc-agents-integram.js';
+./backend/monolith/src/index.js: * DronDoc Monolithic Backend
+./backend/monolith/src/index.js:class DronDocBackend {
+./backend/monolith/src/index.js:      sslCertPath: config.sslCertPath || process.env.SSL_CERT_PATH || '/etc/letsencrypt/live/drondoc.ru/fullchain.pem',
+./backend/monolith/src/index.js:      sslKeyPath: config.sslKeyPath || process.env.SSL_KEY_PATH || '/etc/letsencrypt/live/drondoc.ru/privkey.pem',
+./backend/monolith/src/index.js:    logger.info('DronDoc Monolithic Backend initialized', this.config);
+./backend/monolith/src/index.js:    // API endpoints for DronDoc CLI tool with model selection support
+./backend/monolith/src/index.js:    // DronDoc Unified Agent API (Issue #4692)
+./backend/monolith/src/index.js:    this.app.use('/api/drondoc-agents', drondocAgentsRoutes);
+./backend/monolith/src/index.js:    console.log('✅ [MONOLITH] DronDoc Unified Agent API routes registered at /api/drondoc-agents (Issue #4692)');
+./backend/monolith/src/index.js:    // DronDoc Agents Integram Persistence
+./backend/monolith/src/index.js:    this.app.use('/api/drondoc-agents/integram', createDronDocAgentsIntegramRoutes());
+./backend/monolith/src/index.js:    console.log('✅ [MONOLITH] DronDoc Agents Integram routes registered at /api/drondoc-agents/integram');
+./backend/monolith/src/index.js:        name: 'DronDoc Monolithic Backend',
+./backend/monolith/src/index.js:      logger.info('Starting DronDoc Monolithic Backend...');
+./backend/monolith/src/index.js:      console.log('🚀 DronDoc Monolithic Backend Started Successfully');
+./backend/monolith/src/index.js:      logger.info(`DronDoc Monolithic Backend started successfully`);
+./backend/monolith/src/index.js:      logger.info(`GITHUB_REPO: ${process.env.GITHUB_REPO || 'dronedoc2025 (default)'}`);
+./backend/monolith/src/index.js:    logger.info('Shutting down DronDoc Backend...');
+./backend/monolith/src/index.js:  const backend = new DronDocBackend();
+./backend/monolith/src/index.js:export { DronDocBackend };
+./backend/monolith/src/core/CodeReviewCoordinator.js:      reviewBody += `See detailed review at: ${process.env.VITE_APP_URL || 'https://drondoc.ru'}/code-review/${reviewId}\n\n`
+./backend/monolith/src/core/CodeReviewCoordinator.js:      reviewBody += '---\n🤖 Generated by DronDoc AI Code Review System'
+./backend/monolith/src/core/TokenBasedLLMCoordinator.js:   - serverURL: "https://dronedoc.ru"
+./backend/monolith/src/core/TokenBasedLLMCoordinator.js:        name: 'DronDoc API Access',
+./backend/monolith/src/core/TokenBasedLLMCoordinator.js:        token_balance: 999999999, // Effectively unlimited via DronDoc API
+./backend/monolith/src/core/providers/KodacodeProvider.js:        'HTTP-Referer': 'https://dev.drondoc.ru',
+./backend/monolith/src/core/providers/KodacodeProvider.js:        'X-Title': 'DronDoc AI Platform'
+./backend/monolith/src/database/integram/README.md:Each organization in the DronDoc platform gets its own Integram database instance with a standard set of system tables. These schemas document the structure and purpose of each table.
+./IMPLEMENTATION_SUMMARY.md:│       │   └── drondoc-agents-integram.js
+./IMPLEMENTATION_SUMMARY.md:Скопировать из `dronedoc2025/public/` необходимые ресурсы.
+./IMPLEMENTATION_SUMMARY.md:cp ../dronedoc2025/backend/monolith/src/server.js backend/monolith/src/
+./IMPLEMENTATION_SUMMARY.md:**Исходный репозиторий:** https://github.com/unidel2035/dronedoc2025  
+./copy-backend.sh:SOURCE="/home/hive/dronedoc2025/backend/monolith"
+./copy-backend.sh:cp "$SOURCE/src/api/routes/drondoc-agents-integram.js" "$DEST/src/api/routes/" 2>/dev/null || true
+./copy-additional-backend.sh:SOURCE="../dronedoc2025/backend/monolith"
+./README.md:1. **Полная независимость** - не зависит от основного репозитория dronedoc2025
+./src/i18n/locales/ru.js:      development: 'Разработка (dev.drondoc.ru)',
+./src/i18n/locales/ru.js:      production: 'Продакшн (drondoc.ru)',
+./src/i18n/locales/ru.js:    creator: 'DronDoc Team',
+./src/i18n/locales/ru.js:      info: 'Настройте параметры подключения к монолитному бэкенду DronDoc (Node.js/Express)',
+./src/i18n/locales/ru.js:      dbNamePlaceholder: 'dronedoc',
+./src/i18n/locales/ru.js:      dbUserPlaceholder: 'dronedoc',
+./src/i18n/locales/ru.js:      apiUrlPlaceholder: 'https://dronedoc.ru',
+./src/i18n/locales/ru.js:      a4: 'Да, DronDoc поддерживает более 50 готовых интеграций с популярными сервисами: CRM, мессенджеры, платежные системы, базы данных и другие.',
+./src/i18n/locales/ru.js:          'Знание о платформе DronDoc (функции, тарифы, поддержка)',
+./src/i18n/locales/en.js:      development: 'Development (dev.drondoc.ru)',
+./src/i18n/locales/en.js:      production: 'Production (drondoc.ru)',
+./src/i18n/locales/en.js:    creator: 'DronDoc Team',
+./src/i18n/locales/en.js:      info: 'Configure the connection settings for the DronDoc monolith backend (Node.js/Express)',
+./src/i18n/locales/en.js:      dbNamePlaceholder: 'dronedoc',
+./src/i18n/locales/en.js:      dbUserPlaceholder: 'dronedoc',
+./src/i18n/locales/en.js:      apiUrlPlaceholder: 'https://dronedoc.ru',
+./src/i18n/locales/en.js:      title: 'DronDoc — Your Digital Organization',
+./src/i18n/locales/en.js:      title: 'Who We Built DronDoc For',
+./src/i18n/locales/en.js:      a4: 'Yes, DronDoc supports over 50 ready integrations with popular services: CRM, messengers, payment systems, databases, and more.',
+./src/i18n/locales/en.js:          'Knowledge about DronDoc platform (features, pricing, support)',
+./src/i18n/locales/zh.js:      development: '开发环境 (dev.drondoc.ru)',
+./src/i18n/locales/zh.js:      production: '生产环境 (drondoc.ru)',
+./src/i18n/locales/zh.js:    creator: 'DronDoc Team',
+./src/i18n/locales/zh.js:      info: '配置 DronDoc 单体后端 (Node.js/Express) 的连接设置',
+./src/i18n/locales/zh.js:      dbNamePlaceholder: 'dronedoc',
+./src/i18n/locales/zh.js:      dbUserPlaceholder: 'dronedoc',
+./src/i18n/locales/zh.js:      apiUrlPlaceholder: 'https://dronedoc.ru',
+./src/i18n/locales/zh.js:      title: 'DronDoc — 您的数字化组织',
+./src/i18n/locales/zh.js:      title: '我们为谁创建了 DronDoc',
+./src/i18n/locales/zh.js:      a4: '是的，DronDoc 支持 50 多种与流行服务的现成集成：CRM、消息应用、支付系统、数据库等。',
+./src/axios2.js: * - Endpoints served by Integram backend (dronedoc.ru, localhost, etc.)
+./src/axios2.js:  // Используем apiBase если указан, иначе дефолтный dronedoc.ru
+./src/axios2.js:  // Issue #3924: Changed from sim.sakhwings.ru to dronedoc.ru to avoid CORS errors
+./src/axios2.js:  const baseHost = apiBase || 'dronedoc.ru'
+./src/axios2.js:    // (dronedoc.ru, sim.sakhwings.ru, etc.)
+./src/stores/authStore.js:  // Issue #3924: Changed default from sim.sakhwings.ru to dronedoc.ru to avoid CORS errors
+./src/stores/authStore.js:  const primaryApiBase = ref('dronedoc.ru') // Default API base
+./src/stores/authStore.js:    // Issue #3924: Changed default from sim.sakhwings.ru to dronedoc.ru to avoid CORS errors
+./src/stores/authStore.js:    primaryApiBase.value = localStorage.getItem('apiBase') || 'dronedoc.ru'
+./src/stores/authStore.js:  // Issue #3924: Changed default from sim.sakhwings.ru to dronedoc.ru to avoid CORS errors
+./src/stores/authStore.js:    apiBase = 'dronedoc.ru',
+./src/components/integram/DataTable/composables/useUserMentions.js:                    userPhoto = `https://dronedoc.ru${extractedUrl}`
+./src/components/integram/DataTable/composables/useUserMentions.js:                    userPhoto = `https://dronedoc.ru/${extractedUrl}`
+./src/components/integram/IntegramDirAdmin.vue:    // The proxy rewrites /integram-test → dronedoc.ru
+./src/components/integram/DataTable.vue:  serverUrl: { type: String, default: '' }, // API server URL for file downloads (e.g., https://dronedoc.ru)
+./src/components/integram/IntegramDataTableWrapper.vue:// Priority: 1) prop, 2) integramApiClient.getServer(), 3) fallback to dronedoc.ru
+./src/components/integram/IntegramDataTableWrapper.vue:  return serverFromClient || 'https://dronedoc.ru'
+./src/components/onboarding/OnboardingWizard.vue:    { title: 'Добро пожаловать!', subtitle: 'Начните работу с DronDoc' },
+./src/components/onboarding/WelcomeScreen.vue:        <span class="font-bold text-2xl">Добро пожаловать в DronDoc!</span>
+./src/components/onboarding/WelcomeScreen.vue:          DronDoc - это мощная платформа для управления дронами, агентами и бизнес-процессами.
+./src/components/onboarding/WelcomeScreen.vue:        <h3 class="text-xl font-semibold mb-3">Что вы можете делать с DronDoc?</h3>
+./src/components/layout/Chat.vue:                     placeholder="https://dronedoc.ru" class="w-full" />
+./src/components/layout/AppConfigurator.vue:        <span class="config-panel-label">Цветной логотип DronDoc</span>
+./src/components/layout/Profile.vue:    const apiBase = localStorage.getItem('apiBase') || 'dronedoc.ru'
+./src/components/layout/AppFooter.vue:                <p class="text-sm">© 2025 DronDoc            <a
+./src/components/layout/AppFooter.vue:                    href="https://github.com/unidel2035/dronedoc2025/blob/master/CHANGELOG.md"
+./src/components/layout/AppMenu.vue:    return !apiBase || apiBase === '' || apiBase === 'dronedoc.ru' || apiBase === 'localhost' || apiBase === 'app.integram.io'
+./src/components/layout/AppMenu.vue:    const apiBase = localStorage.getItem('apiBase') || 'dronedoc.ru'
+./src/components/layout/AppMenu.vue:    const apiBase = localStorage.getItem('apiBase') || 'dronedoc.ru'
+./src/components/chat/AvailableAgentsList.vue:    description: 'Централизованное управление всей мультиагентной сетью DronDoc. Триггеры: "оркестратор", "управление агентами"',
+./src/views/pages/auth/Login.vue:const apiBase = ref('dronedoc.ru') // Значение по умолчанию
+./src/views/pages/auth/Login.vue:  { label: 'dronedoc.ru', value: 'dronedoc.ru' },
+./src/views/pages/auth/Login.vue:    // not hardcoded 'dronedoc.ru' when input is hidden
+./src/views/pages/auth/Login.vue:    const finalApiBase = apiBase.value || 'dronedoc.ru'
+./src/views/pages/auth/Register.vue:// Valid drondoc.ru mailboxes (from mail server configuration)
+./src/views/pages/auth/Register.vue:  'info@drondoc.ru',
+./src/views/pages/auth/Register.vue:  'admin@drondoc.ru',
+./src/views/pages/auth/Register.vue:  'support@drondoc.ru',
+./src/views/pages/auth/Register.vue:  'sales@drondoc.ru',
+./src/views/pages/auth/Register.vue:  'noreply@drondoc.ru',
+./src/views/pages/auth/Register.vue:  'contact@drondoc.ru',
+./src/views/pages/auth/Register.vue:  'help@drondoc.ru'
+./src/views/pages/auth/Register.vue:  // Validate email is one of the valid drondoc.ru mailboxes
+./src/views/pages/auth/Register.vue:                            <InputText id="email" type="email" placeholder="Например: info@drondoc.ru"
+./src/views/pages/auth/Register.vue:                                Доступные адреса: info@, admin@, support@, sales@, contact@, help@ drondoc.ru
+./src/views/pages/auth/EmailVerify.vue:            <li>🔍 Найдите письмо от DronDoc Platform</li>
+./src/views/pages/auth/EmailRegister.vue:        <p class="subtitle">Создайте аккаунт DronDoc</p>
+./src/views/pages/Welcome.vue:          👋 Добро пожаловать в DronDoc!
+./src/views/pages/Welcome.vue:            <div class="email-address">support@drondoc.ru</div>
+./src/views/pages/Welcome.vue:          <strong>DronDoc:</strong> Собирайте вашу цифровую организацию за 1 день. Не месяцы на разработку — часы на настройку.
+./src/views/pages/Welcome.vue:    url: 'https://t.me/drondoc'
+./src/views/pages/Welcome.vue:  alert('Функция чата в разработке. Пока напишите нам на support@drondoc.ru')
+./src/views/pages/Welcome.vue:  window.location.href = 'mailto:support@drondoc.ru'
+./src/views/pages/Welcome.vue:  alert('Функция планирования демо в разработке. Напишите нам на support@drondoc.ru')
+./src/views/pages/Welcome.vue:    alert(`Не удалось загрузить ансамбль. Попробуйте позже или свяжитесь с support@drondoc.ru`)
+./src/views/pages/Integram/IntegramLogin.vue:  { label: 'dronedoc.ru', value: 'https://dronedoc.ru' },
+./src/views/pages/Integram/IntegramLogin.vue:  'my': 'https://dronedoc.ru',
+./src/views/pages/Integram/IntegramLogin.vue:  'a2025': 'https://dronedoc.ru',
+./src/views/pages/Integram/IntegramLogin.vue:  server: 'https://dronedoc.ru',
+./src/views/pages/Integram/IntegramLogin.vue:      server: 'https://dronedoc.ru',
+./src/views/pages/Integram/IntegramLogin.vue:    const serverURL = loginForm.value.server || 'https://dronedoc.ru'
+./src/views/pages/Integram/IntegramLogin.vue:    const serverURL = loginForm.value.server || 'https://dronedoc.ru'
+./src/views/pages/Integram/IntegramLogin.vue:    const serverURL = loginForm.value.server || 'https://dronedoc.ru'
+./src/views/pages/Integram/IntegramLogin.vue:  if (savedServer && savedServer !== 'https://dronedoc.ru') {
+./src/views/pages/Integram/IntegramOAuthCallback.vue:        localStorage.setItem('apiBase', 'dronedoc.ru');
+./src/views/pages/Integram/IntegramApiDocs.vue:              <code class="code-inline">https://dev.drondoc.ru/api/mcp/integram</code>
+./src/views/pages/Integram/IntegramApiDocs.vue:  <span class="mcp-key">serverURL</span>: <span class="mcp-string">"https://dronedoc.ru"</span>,
+./src/views/pages/Integram/IntegramApiDocs.vue:                      <pre class="js-code"><span class="js-keyword">await</span> integramApiClient.<span class="js-function">setServer</span>(<span class="js-string">'https://dronedoc.ru'</span>)
+./src/views/pages/Integram/IntegramApiDocs.vue:    params: `serverURL — URL сервера (https://dronedoc.ru)
+./src/views/pages/Integram/UserProfile.vue:    const baseUrl = `https://dronedoc.ru/${database.value}/api`
+./copy-stores-services.sh:SOURCE="/home/hive/dronedoc2025"
+./GITHUB_INFO.md:**Исходный репозиторий:** https://github.com/unidel2035/dronedoc2025
+./DEPLOYMENT.md:INTEGRAM_URL=https://dronedoc.ru
+./DEPLOYMENT.md:  -e INTEGRAM_URL=https://dronedoc.ru \

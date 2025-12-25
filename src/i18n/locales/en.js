@@ -1287,7 +1287,7 @@ export default {
       info: 'Configure the connection settings for Integram database (ddadmin)',
       apiSettings: 'Integram API Settings',
       apiUrl: 'Integram API URL',
-      apiUrlPlaceholder: 'https://dronedoc.ru',
+      apiUrlPlaceholder: '${import.meta.env.VITE_INTEGRAM_URL}',
       apiUrlHelp: 'Base URL for Integram API',
       database: 'Database Name',
       databasePlaceholder: 'ddadmin',

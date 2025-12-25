@@ -651,7 +651,7 @@
                     <div class="mcp-code-block">
                       <div class="code-label">MCP Tool:</div>
                       <pre class="mcp-code"><span class="mcp-function">integram_authenticate</span>({
-  <span class="mcp-key">serverURL</span>: <span class="mcp-string">"https://dronedoc.ru"</span>,
+  <span class="mcp-key">serverURL</span>: <span class="mcp-string">"${import.meta.env.VITE_INTEGRAM_URL}"</span>,
   <span class="mcp-key">database</span>: <span class="mcp-string">"my"</span>,
   <span class="mcp-key">login</span>: <span class="mcp-string">"user"</span>,
   <span class="mcp-key">password</span>: <span class="mcp-string">"pass"</span>
@@ -755,7 +755,7 @@
                     </div>
                     <div class="js-code-block">
                       <div class="code-label">JavaScript:</div>
-                      <pre class="js-code"><span class="js-keyword">await</span> integramApiClient.<span class="js-function">setServer</span>(<span class="js-string">'https://dronedoc.ru'</span>)
+                      <pre class="js-code"><span class="js-keyword">await</span> integramApiClient.<span class="js-function">setServer</span>(<span class="js-string">'${import.meta.env.VITE_INTEGRAM_URL}'</span>)
 <span class="js-keyword">await</span> integramApiClient.<span class="js-function">authenticate</span>(<span class="js-string">'A2025'</span>, <span class="js-string">'user'</span>, <span class="js-string">'password'</span>)</pre>
                     </div>
                   </div>
@@ -2208,7 +2208,7 @@ const mcpTools = [
     name: 'integram_authenticate',
     category: 'auth',
     description: 'Авторизация в Integram',
-    params: `serverURL — URL сервера (https://dronedoc.ru)
+    params: `serverURL — URL сервера (${import.meta.env.VITE_INTEGRAM_URL})
 database — имя БД (a2025, my)
 login — имя пользователя
 password — пароль`
