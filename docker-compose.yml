@@ -9,11 +9,11 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - INTEGRAM_URL=${INTEGRAM_URL:-https://dronedoc.ru}
+      - INTEGRAM_URL=${INTEGRAM_URL:-https://example.integram.io}
       - INTEGRAM_DEFAULT_DB=${INTEGRAM_DEFAULT_DB:-my}
-      - INTEGRAM_SYSTEM_USERNAME=${INTEGRAM_SYSTEM_USERNAME:-d}
-      - INTEGRAM_SYSTEM_PASSWORD=${INTEGRAM_SYSTEM_PASSWORD:-d}
-      - SESSION_SECRET=${SESSION_SECRET:-change-this-secret-in-production}
+      - INTEGRAM_SYSTEM_USERNAME=${INTEGRAM_SYSTEM_USERNAME}
+      - INTEGRAM_SYSTEM_PASSWORD=${INTEGRAM_SYSTEM_PASSWORD}
+      - SESSION_SECRET=${SESSION_SECRET}
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:5173}
     volumes:
       - ./backend/monolith/data:/app/backend/monolith/data
