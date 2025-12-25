@@ -325,7 +325,7 @@ const openTelegramLogin = () => {
             rgba(33, 150, 243, 0) 30%
           );
         ">
-                <div class="w-full bg-surface-0 dark:bg-surface-900" style="border-radius: 53px; max-width: 450px; padding: 2rem 2.5rem;">
+                <div class="w-full bg-surface-0 dark:bg-surface-900" style="border-radius: 53px; width: 450px; padding: 2rem 2.5rem;">
                     <div style="text-align: center; margin-bottom: 1.5rem;">
                         <div class="text-2xl font-bold text-surface-900 dark:text-surface-0 mb-1">Создать аккаунт</div>
                         <span class="text-muted-color text-sm">Начните работу с платформой</span>
