@@ -153,8 +153,6 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
-import Menubar from 'primevue/menubar'
-import Menu from 'primevue/menu'
 import Dropdown from 'primevue/dropdown'
 import Tag from 'primevue/tag'
 import ProgressSpinner from 'primevue/progressspinner'

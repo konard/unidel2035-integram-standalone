@@ -1,12 +1,23 @@
 <template>
   <div class="integram-landing-container">
-    <!-- Hero Section using new IntegramHero component -->
-    <IntegramHero
-      :title="t('welcome') + ' Integram'"
-      :subtitle="t('subtitle')"
-      :database="database"
-      :userName="userName"
-    />
+    <!-- Hero Card -->
+    <Card class="mb-4">
+      <template #title>
+        <div class="flex align-items-center gap-2">
+          <i class="pi pi-database text-primary" style="font-size: 1.5rem"></i>
+          <span>{{ t('welcome') }} Integram</span>
+        </div>
+      </template>
+      <template #subtitle>
+        {{ t('subtitle') }}
+      </template>
+      <template #content>
+        <div class="flex gap-2 flex-wrap">
+          <Tag v-if="database" :value="database" icon="pi pi-database" severity="info" />
+          <Tag v-if="userName" :value="userName" icon="pi pi-user" severity="success" />
+        </div>
+      </template>
+    </Card>
 
     <!-- Quick Access Section -->
     <Card class="mb-4">
@@ -40,12 +51,34 @@
       </template>
     </Card>
 
-    <!-- Features Section using new IntegramFeatures component -->
-    <IntegramFeatures
-      :title="t('features')"
-      :subtitle="t('featuresDesc')"
-      :features="features"
-    />
+    <!-- Features Section -->
+    <Card class="mb-4">
+      <template #title>
+        <div class="flex align-items-center gap-2">
+          <span>{{ t('features') }}</span>
+        </div>
+      </template>
+      <template #subtitle>{{ t('featuresDesc') }}</template>
+      <template #content>
+        <div class="grid">
+          <div
+            v-for="(feature, index) in features"
+            :key="index"
+            class="col-12 md:col-6"
+          >
+            <div class="flex gap-3 align-items-start p-2">
+              <div class="icon-box flex-shrink-0">
+                <i :class="feature.icon"></i>
+              </div>
+              <div>
+                <div class="font-semibold text-900 mb-1">{{ feature.title }}</div>
+                <p class="text-600 text-sm m-0 line-height-3">{{ feature.description }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </Card>
 
     <!-- Statistics Section -->
     <Card v-if="stats">
@@ -64,13 +97,6 @@
         </div>
       </template>
     </Card>
-
-    <!-- Footer using new IntegramFooter component -->
-    <IntegramFooter
-      :copyright-text="t('copyright')"
-      :links="footerLinks"
-      @link-click="handleFooterLinkClick"
-    />
   </div>
 </template>
 
@@ -78,8 +104,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import Card from 'primevue/card'
+import Tag from 'primevue/tag'
 import integramApiClient from '@/services/integramApiClient'
-import { IntegramHero, IntegramFeatures, IntegramFooter } from '@/components/integram-landing'
 
 const router = useRouter()
 const route = useRoute()
@@ -131,11 +157,7 @@ function t(key) {
       visualQueries: 'Визуальные запросы',
       visualQueriesDesc: 'Умные интерактивные таблицы с inline-редактированием',
       security: 'Безопасность',
-      securityDesc: 'Система прав доступа и ролей пользователей',
-      copyright: 'Integram. Все права защищены.',
-      documentation: 'Документация',
-      api: 'API',
-      support: 'Поддержка'
+      securityDesc: 'Система прав доступа и ролей пользователей'
     },
     en: {
       welcome: 'Welcome to',
@@ -173,11 +195,7 @@ function t(key) {
       visualQueries: 'Visual Queries',
       visualQueriesDesc: 'SmartQ - interactive tables with inline editing',
       security: 'Security',
-      securityDesc: 'Access rights and user roles system',
-      copyright: 'Integram. All rights reserved.',
-      documentation: 'Documentation',
-      api: 'API',
-      support: 'Support'
+      securityDesc: 'Access rights and user roles system'
     }
   }
 
@@ -236,7 +254,7 @@ const quickAccessItems = computed(() => [
   }
 ])
 
-// Features for IntegramFeatures component
+// Features
 const features = computed(() => [
   {
     title: t('flexibleStructure'),
@@ -270,36 +288,9 @@ const features = computed(() => [
   }
 ])
 
-// Footer links
-const footerLinks = computed(() => [
-  {
-    label: t('documentation'),
-    url: '#',
-    icon: 'pi pi-book',
-    external: false
-  },
-  {
-    label: t('api'),
-    url: '#',
-    icon: 'pi pi-code',
-    external: false
-  },
-  {
-    label: t('support'),
-    url: '#',
-    icon: 'pi pi-question-circle',
-    external: false
-  }
-])
-
 // Methods
 function navigate(path) {
   router.push(path)
-}
-
-function handleFooterLinkClick(link) {
-  console.log('Footer link clicked:', link)
-  // Handle footer link clicks (e.g., navigate to documentation, API docs, support)
 }
 
 // Lifecycle

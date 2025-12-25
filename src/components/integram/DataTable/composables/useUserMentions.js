@@ -176,10 +176,10 @@ export function useUserMentions(database) {
                     userPhoto = extractedUrl
                   } else if (extractedUrl.startsWith('/')) {
                     // Relative path, add domain
-                    userPhoto = `${import.meta.env.VITE_INTEGRAM_URL}${extractedUrl}`
+                    userPhoto = `https://dronedoc.ru${extractedUrl}`
                   } else {
                     // Just a path without leading slash, assume it needs one
-                    userPhoto = `${import.meta.env.VITE_INTEGRAM_URL}/${extractedUrl}`
+                    userPhoto = `https://dronedoc.ru/${extractedUrl}`
                   }
 
                   if (shouldLog) console.log(`[useUserMentions] User ${userId}: photo URL = "${userPhoto}"`)

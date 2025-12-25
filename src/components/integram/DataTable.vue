@@ -872,7 +872,7 @@ const props = defineProps({
   isAddingColumn: { type: Boolean, default: false },
   allDataLoaded: { type: Boolean, default: true }, // Все данные загружены (для клиентских операций)
   dateStyle: { type: String, default: 'relative' }, // classic, relative, chip, smart
-  serverUrl: { type: String, default: '' }, // API server URL for file downloads (e.g., ${import.meta.env.VITE_INTEGRAM_URL})
+  serverUrl: { type: String, default: '' }, // API server URL for file downloads (e.g., https://dronedoc.ru)
   typeId: { type: [Number, String], default: null }, // Table type ID for localStorage keys
   autoLoadDirs: { type: Boolean, default: true }, // Whether to auto-load directory metadata
   database: { type: String, default: 'my' } // Database name for mentions and other features

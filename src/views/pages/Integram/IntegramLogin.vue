@@ -392,21 +392,21 @@ const showServerInput = ref(false)
 
 // Server options
 const serverOptions = ref([
-  { label: 'dronedoc.ru', value: '${import.meta.env.VITE_INTEGRAM_URL}' },
+  { label: 'dronedoc.ru', value: 'https://dronedoc.ru' },
   { label: 'integram.io', value: 'https://integram.io' },
   { label: 'app.integram.io', value: 'https://app.integram.io' }
 ])
 
 // Database to server mapping
 const databaseServerMap = {
-  'my': '${import.meta.env.VITE_INTEGRAM_URL}',
-  'a2025': '${import.meta.env.VITE_INTEGRAM_URL}',
+  'my': 'https://dronedoc.ru',
+  'a2025': 'https://dronedoc.ru',
   'andy': 'https://app.integram.io'
 }
 
 // Forms
 const loginForm = ref({
-  server: '${import.meta.env.VITE_INTEGRAM_URL}',
+  server: 'https://dronedoc.ru',
   database: 'my',
   login: '',
   password: ''
@@ -589,7 +589,7 @@ async function handleLogout() {
 
     // Reset form
     loginForm.value = {
-      server: '${import.meta.env.VITE_INTEGRAM_URL}',
+      server: 'https://dronedoc.ru',
       database: 'my',
       login: '',
       password: ''
@@ -638,7 +638,7 @@ async function handleLogin() {
 
     if (!loginForm.value.database) loginForm.value.database = 'my'
 
-    const serverURL = loginForm.value.server || '${import.meta.env.VITE_INTEGRAM_URL}'
+    const serverURL = loginForm.value.server || 'https://dronedoc.ru'
     integramApiClient.setServer(serverURL)
 
     const result = await integramApiClient.authenticate(
@@ -695,7 +695,7 @@ async function handleRegister() {
     loading.value = true
     error.value = null
 
-    const serverURL = loginForm.value.server || '${import.meta.env.VITE_INTEGRAM_URL}'
+    const serverURL = loginForm.value.server || 'https://dronedoc.ru'
     integramApiClient.setServer(serverURL)
 
     const result = await integramApiClient.register({
@@ -726,7 +726,7 @@ async function handleReset() {
     loading.value = true
     error.value = null
 
-    const serverURL = loginForm.value.server || '${import.meta.env.VITE_INTEGRAM_URL}'
+    const serverURL = loginForm.value.server || 'https://dronedoc.ru'
     integramApiClient.setServer(serverURL)
 
     const result = await integramApiClient.resetPassword({
@@ -772,7 +772,7 @@ onMounted(() => {
   }
 
   const savedServer = localStorage.getItem('integram_server') || integramApiClient.getServer()
-  if (savedServer && savedServer !== '${import.meta.env.VITE_INTEGRAM_URL}') {
+  if (savedServer && savedServer !== 'https://dronedoc.ru') {
     showServerInput.value = true
     loginForm.value.server = savedServer
   }
