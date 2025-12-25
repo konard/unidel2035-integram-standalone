@@ -52,22 +52,22 @@ const router = createRouter({
       children: [
         {
           path: '',
-          name: 'IntegramHome',
+          name: 'Integram Home',
           component: () => import('@/views/pages/Integram/IntegramLanding.vue')
         },
         {
-          path: 'dictionary',
-          name: 'IntegramDictionary',
+          path: 'dict',
+          name: 'Объекты',
           component: () => import('@/views/pages/Integram/IntegramDictionary.vue')
         },
         {
-          path: 'objects/:typeId',
-          name: 'IntegramObjects',
+          path: 'object/:typeId',
+          name: 'Integram Objects',
           component: () => import('@/views/pages/Integram/IntegramObjectView.vue')
         },
         {
-          path: 'tables',
-          name: 'IntegramTables',
+          path: 'table',
+          name: 'Таблицы',
           component: () => import('@/views/pages/Integram/IntegramTableList.vue')
         }
       ]
