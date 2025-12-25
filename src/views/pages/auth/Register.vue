@@ -334,13 +334,17 @@ const openTelegramLogin = () => {
                     <div>
                         <form @submit.prevent="handleSubmit">
                             <InputText id="login" type="text" placeholder="Логин"
-                                class="w-full" style="margin-bottom: 1rem;" v-model="login" />
+                                class="w-full" style="margin-bottom: 1.5rem;" v-model="login" />
 
-                            <Password id="password" v-model="password" placeholder="Пароль" :toggleMask="true"
-                                style="margin-bottom: 1rem;" :feedback="false" inputClass="w-full" fluid></Password>
+                            <div style="margin-bottom: 1.5rem;">
+                                <Password id="password" v-model="password" placeholder="Пароль" :toggleMask="true"
+                                    :feedback="false" inputClass="w-full" fluid></Password>
+                            </div>
 
-                            <Password id="confirmPassword" v-model="confirmPassword" placeholder="Повторите пароль" :toggleMask="true"
-                                style="margin-bottom: 1rem;" :feedback="false" inputClass="w-full" fluid></Password>
+                            <div style="margin-bottom: 1.5rem;">
+                                <Password id="confirmPassword" v-model="confirmPassword" placeholder="Повторите пароль" :toggleMask="true"
+                                    :feedback="false" inputClass="w-full" fluid></Password>
+                            </div>
 
                             <div class="flex items-start gap-2 mb-3">
                                 <Checkbox v-model="agreeToTerms" :binary="true" inputId="agreeToTerms" />
