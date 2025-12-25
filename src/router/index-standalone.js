@@ -69,6 +69,91 @@ const router = createRouter({
           path: 'table',
           name: 'Таблицы',
           component: () => import('@/views/pages/Integram/IntegramTableList.vue')
+        },
+        {
+          path: 'table/:typeId',
+          name: 'Integram DataTable',
+          component: () => import('@/components/integram/IntegramDataTableWrapper.vue')
+        },
+        {
+          path: 'edit_obj/:objectId',
+          name: 'Integram Edit Object',
+          component: () => import('@/views/pages/Integram/IntegramObjectEdit.vue')
+        },
+        {
+          path: 'edit_types',
+          name: 'Integram Type Editor',
+          component: () => import('@/views/pages/Integram/IntegramTypeEditor.vue')
+        },
+        {
+          path: 'form/:formId?',
+          name: 'Integram Form',
+          component: () => import('@/components/integram/IntegramForm.vue')
+        },
+        {
+          path: 'myform',
+          name: 'Integram Form Builder',
+          component: () => import('@/components/integram/IntegramFormBuilder.vue')
+        },
+        {
+          path: 'report/:reportId?',
+          name: 'Integram Report',
+          component: () => import('@/views/pages/Integram/IntegrationReportPage.vue')
+        },
+        {
+          path: 'sql',
+          name: 'Integram SQL',
+          component: () => import('@/components/integram/IntegramSQL.vue')
+        },
+        {
+          path: 'sql/:reportId',
+          name: 'Integram SQL Report',
+          component: () => import('@/components/integram/IntegramSQL.vue')
+        },
+        {
+          path: 'smartq',
+          name: 'Integram Smart Query',
+          component: () => import('@/views/pages/SmartQ.vue')
+        },
+        {
+          path: 'mention-test',
+          name: 'Integram Mention Test',
+          component: () => import('@/views/pages/Integram/MentionTestPage.vue')
+        },
+        {
+          path: 'query-builder',
+          name: 'Integram Query Builder',
+          component: () => import('@/components/integram/IntegramQueryBuilder.vue')
+        },
+        {
+          path: 'quiz/:quizId?',
+          name: 'Integram Quiz',
+          component: () => import('@/components/integram/IntegramQuiz.vue')
+        },
+        {
+          path: 'upload',
+          name: 'Integram Upload',
+          component: () => import('@/components/integram/IntegramUpload.vue')
+        },
+        {
+          path: 'dir_admin',
+          name: 'Integram Dir Admin',
+          component: () => import('@/components/integram/IntegramDirAdmin.vue')
+        },
+        {
+          path: 'info',
+          name: 'Integram Info',
+          component: () => import('@/components/integram/IntegramInfo.vue')
+        },
+        {
+          path: 'api-docs',
+          name: 'Integram API Docs',
+          component: () => import('@/views/pages/Integram/IntegramApiDocs.vue')
+        },
+        {
+          path: 'user/:id',
+          name: 'User Profile',
+          component: () => import('@/views/pages/Integram/UserProfile.vue')
         }
       ]
     }
