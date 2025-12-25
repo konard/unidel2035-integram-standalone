@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import router from './router'
+import i18n from './i18n'
 import PrimeVue from 'primevue/config'
 import Aura from '@primevue/themes/aura'
 import ToastService from 'primevue/toastservice'
@@ -18,12 +19,26 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import TabView from 'primevue/tabview'
 import TabPanel from 'primevue/tabpanel'
+import Select from 'primevue/select'
+import SelectButton from 'primevue/selectbutton'
+import Avatar from 'primevue/avatar'
+import Badge from 'primevue/badge'
+import OverlayPanel from 'primevue/overlaypanel'
+import Popover from 'primevue/popover'
+import Sidebar from 'primevue/sidebar'
+import Divider from 'primevue/divider'
+import Checkbox from 'primevue/checkbox'
+import Message from 'primevue/message'
+import Tooltip from 'primevue/tooltip'
+import StyleClass from 'primevue/styleclass'
 
 // Import styles
 // PrimeVue 4+ uses built-in theme system via @primevue/themes/aura (imported above)
 // No need to import theme CSS manually
 import 'primeicons/primeicons.css'
 import '@fortawesome/fontawesome-free/css/all.css'
+import '@/assets/layout/layout.scss'
+import '@/assets/layout/_topbar_override.scss'
 
 // Import App component
 import App from './App.vue'
@@ -34,6 +49,7 @@ const pinia = createPinia()
 // Use plugins
 app.use(pinia)
 app.use(router)
+app.use(i18n)
 app.use(PrimeVue, {
   theme: {
     preset: Aura,
@@ -57,5 +73,18 @@ app.component('DataTable', DataTable)
 app.component('Column', Column)
 app.component('TabView', TabView)
 app.component('TabPanel', TabPanel)
+app.component('Select', Select)
+app.component('Dropdown', Select)
+app.component('SelectButton', SelectButton)
+app.component('Avatar', Avatar)
+app.component('Badge', Badge)
+app.component('OverlayPanel', OverlayPanel)
+app.component('Popover', Popover)
+app.component('Sidebar', Sidebar)
+app.component('Divider', Divider)
+app.component('Checkbox', Checkbox)
+app.component('Message', Message)
+app.directive('tooltip', Tooltip)
+app.directive('styleclass', StyleClass)
 
 app.mount('#app')

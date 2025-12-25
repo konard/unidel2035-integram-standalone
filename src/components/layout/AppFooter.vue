@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import packageJson from '../../package.json'
+import packageJson from '../../../package.json'
 import { getDeploymentInfo } from '@/services/deploymentInfoService'
 
 const version = ref(packageJson.version)

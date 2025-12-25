@@ -1,5 +1,5 @@
 <script setup>
-import { useLayout } from '@/layout/composables/layout';
+import { useLayout } from '@/components/layout/composables/layout';
 import { onBeforeMount, ref, watch, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { isGroupCollapsed, toggleGroupCollapsed } from '@/services/menuStateService';

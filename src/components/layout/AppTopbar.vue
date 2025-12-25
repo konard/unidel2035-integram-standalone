@@ -1,6 +1,6 @@
 <script setup>
 import { logger } from '@/utils/logger'
-import { useLayout } from '@/layout/composables/layout'
+import { useLayout } from '@/components/layout/composables/layout'
 import Badge from 'primevue/badge'
 import Avatar from 'primevue/avatar'
 // Lazy load AppConfigurator - only shown when theme settings are opened
@@ -33,11 +33,10 @@ try {
   workspaceAgentStore = null
 }
 
-const profileOverlay = ref() // Template ref for ProfileMenu component
+const profileOverlay = ref() // Template ref for ProfileMenu component (Popover)
 const notificationVisible = ref(false)
 const agentPanelVisible = ref(false)
-const pendingProfileToggle = ref(null) // Сохраняет событие клика, если компонент ещё не загружен
-const profileMenuReady = ref(false) // Флаг готовности компонента
+const configuratorVisible = ref(false)
 const userPhoto = ref(localStorage.getItem('currentUserPhoto') || '')
 
 const emit = defineEmits(['chat-toggle'])
@@ -52,6 +51,10 @@ const toggleNotifications = () => {
 
 const toggleAgentPanel = () => {
   agentPanelVisible.value = !agentPanelVisible.value
+}
+
+const toggleConfigurator = () => {
+  configuratorVisible.value = !configuratorVisible.value
 }
 
 const isChatOpen = ref(localStorage.getItem('chat') === 'true')
@@ -72,49 +75,10 @@ window.addEventListener('storage', (e) => {
   }
 })
 
-// Проверяем готовность ProfileMenu компонента
-const checkProfileMenuReady = () => {
+// Profile toggle handler for Popover
+const handleToggle = (event) => {
   if (profileOverlay.value && typeof profileOverlay.value.toggle === 'function') {
-    profileMenuReady.value = true
-    // Если был отложенный клик - выполняем его
-    if (pendingProfileToggle.value) {
-      profileOverlay.value.toggle(pendingProfileToggle.value)
-      pendingProfileToggle.value = null
-    }
-    return true
-  }
-  return false
-}
-
-// Наблюдаем за ref компонента для определения момента загрузки
-watch(profileOverlay, () => {
-  nextTick(() => {
-    checkProfileMenuReady()
-  })
-}, { immediate: true })
-
-const handleToggle = event => {
-  // Если компонент готов - сразу вызываем toggle
-  if (profileMenuReady.value && profileOverlay.value && typeof profileOverlay.value.toggle === 'function') {
     profileOverlay.value.toggle(event)
-  } else {
-    // Сохраняем событие клика для выполнения после загрузки
-    pendingProfileToggle.value = event
-    logger.debug('ProfileMenu загружается, ожидание...')
-
-    // Попытка проверить готовность через короткий интервал
-    let attempts = 0
-    const maxAttempts = 10
-    const checkInterval = setInterval(() => {
-      attempts++
-      if (checkProfileMenuReady() || attempts >= maxAttempts) {
-        clearInterval(checkInterval)
-        if (attempts >= maxAttempts && !profileMenuReady.value) {
-          logger.warn('ProfileMenu не загрузился после нескольких попыток')
-          pendingProfileToggle.value = null
-        }
-      }
-    }, 100)
   }
 }
 
@@ -252,19 +216,14 @@ onMounted(() => {
           ></i>
         </button>
 
-        <div class="relative">
-          <button
-            v-styleclass="{ selector: '@next', enterFromClass: 'hidden', enterActiveClass: 'animate-scalein', leaveToClass: 'hidden', leaveActiveClass: 'animate-fadeout', hideOnOutsideClick: true }"
-            type="button"
-            class="layout-topbar-action layout-topbar-action-highlight"
-            :title="themeSettingsTooltip"
-          >
-            <i class="pi pi-palette"></i>
-          </button>
-          <div class="hidden">
-            <AppConfigurator />
-          </div>
-        </div>
+        <button
+          type="button"
+          class="layout-topbar-action layout-topbar-action-highlight"
+          @click="toggleConfigurator"
+          :title="themeSettingsTooltip"
+        >
+          <i class="pi pi-palette"></i>
+        </button>
       </div>
 
       <button
@@ -310,7 +269,7 @@ onMounted(() => {
             <span>{{ $t('nav.chat', 'Чат') }}</span>
           </button>
           <button
-            @click="handleToggle"
+            @click="handleToggle($event)"
             type="button"
             class="layout-topbar-action"
             :title="profileTooltip"
@@ -335,6 +294,10 @@ onMounted(() => {
     <AgentStatusPanel
       v-model:visible="agentPanelVisible"
       @close="agentPanelVisible = false"
+    />
+    <AppConfigurator
+      v-model:visible="configuratorVisible"
+      @close="configuratorVisible = false"
     />
   </div>
 </template>

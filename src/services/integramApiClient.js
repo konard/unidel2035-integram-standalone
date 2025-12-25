@@ -140,24 +140,44 @@ class IntegramApiClient {
   // ============================================
 
   async get(endpoint, params = {}) {
-    const url = `${this.serverURL}${endpoint}`;
-    return axios.get(url, {
+    // Ensure proper URL formatting with slash between serverURL and endpoint
+    const baseURL = this.serverURL?.endsWith('/') ? this.serverURL.slice(0, -1) : this.serverURL;
+    const path = endpoint?.startsWith('/') ? endpoint : `/${endpoint}`;
+    const url = `${baseURL}${path}`;
+    const response = await axios.get(url, {
       params,
       headers: this._getHeaders()
     });
+    return response.data;
   }
 
   async post(endpoint, data) {
-    const url = `${this.serverURL}${endpoint}`;
-    return axios.post(url, data, {
-      headers: this._getHeaders()
-    });
+    // Ensure proper URL formatting with slash between serverURL and endpoint
+    const baseURL = this.serverURL?.endsWith('/') ? this.serverURL.slice(0, -1) : this.serverURL;
+    const path = endpoint?.startsWith('/') ? endpoint : `/${endpoint}`;
+    const url = `${baseURL}${path}`;
+
+    // Build form data with _xsrf token (matching MCP server implementation)
+    const parts = [`_xsrf=${encodeURIComponent(this.xsrfToken || '')}`];
+    for (const [key, value] of Object.entries(data || {})) {
+      if (value !== null && value !== undefined) {
+        parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+      }
+    }
+    const postData = parts.join('&');
+
+    const headers = {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...this._getHeaders()
+    };
+
+    const response = await axios.post(url, postData, { headers });
+    return response.data;
   }
 
   _getHeaders() {
     const headers = {};
-    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
-    if (this.xsrfToken) headers['X-XSRF-Token'] = this.xsrfToken;
+    if (this.token) headers['X-Authorization'] = this.token;
     return headers;
   }
 

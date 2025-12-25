@@ -1,5 +1,5 @@
 <script setup>
-import { useLayout } from '@/layout/composables/layout';
+import { useLayout } from '@/components/layout/composables/layout';
 import { $t, updatePreset, updateSurfacePalette } from '@primeuix/themes';
 import Aura from '@primeuix/themes/aura';
 import Lara from '@primeuix/themes/lara';
@@ -8,6 +8,16 @@ import Material from '@primeuix/themes/material';
 import { ref, watch } from 'vue';
 import { useLogo } from '@/composables/useLogo';
 import { useToast } from 'primevue/usetoast';
+import Sidebar from 'primevue/sidebar';
+
+const props = defineProps({
+  visible: {
+    type: Boolean,
+    default: false
+  }
+});
+
+const emit = defineEmits(['close', 'update:visible']);
 
 const { layoutConfig, isDarkTheme } = useLayout()
 const {
@@ -303,8 +313,18 @@ applyTheme();
 </script>
 
 <template>
-  <div class="config-panel">
-    <div class="config-panel-content">
+  <Sidebar
+    :visible="visible"
+    @update:visible="emit('update:visible', $event)"
+    position="right"
+    :showCloseIcon="true"
+    class="configurator-sidebar"
+  >
+    <template #header>
+      <h3>Настройки темы</h3>
+    </template>
+    <div class="config-panel">
+      <div class="config-panel-content">
       <div class="config-panel-colors">
         <span class="config-panel-label">Primary</span>
         <div>
@@ -401,8 +421,9 @@ applyTheme();
           style="display: none;"
         />
       </div>
+      </div>
     </div>
-  </div>
+  </Sidebar>
 </template>
 
 <style scoped>

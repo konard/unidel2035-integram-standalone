@@ -1,17 +1,10 @@
-/**
- * Deployment Info Service - Stub
- * TODO: Implement actual service logic
- */
-
-export function getDeploymentInfo() {
-  console.warn('deploymentInfoService: Using stub implementation');
+// Stub deployment info service
+export async function getDeploymentInfo() {
   return {
-    environment: 'development',
     version: '1.0.0',
-    buildDate: new Date().toISOString()
-  };
+    environment: 'development',
+    deployedAt: new Date().toISOString(),
+    branch: 'main',
+    commit: 'unknown'
+  }
 }
-
-export default {
-  getDeploymentInfo
-};

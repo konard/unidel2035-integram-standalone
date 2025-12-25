@@ -29,21 +29,15 @@ const router = createRouter({
     },
     {
       path: '/welcome',
-      name: 'Welcome',
-      component: () => import('@/views/pages/Welcome.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/integram',
-      name: 'Integram',
-      component: () => import('@/views/pages/Landing.vue'),
-      meta: { requiresAuth: false }
-    },
-    {
-      path: '/integram/login',
-      name: 'IntegramLogin',
-      component: () => import('@/views/pages/Integram/IntegramLogin.vue'),
-      meta: { requiresAuth: false }
+      component: () => import('@/components/layout/AppLayout.vue'),
+      meta: { requiresAuth: true },
+      children: [
+        {
+          path: '',
+          name: 'Welcome',
+          component: () => import('@/views/pages/Welcome.vue')
+        }
+      ]
     },
     {
       path: '/integram/:database',
@@ -77,11 +71,11 @@ const router = createRouter({
 
 // Navigation guard for authentication
 router.beforeEach((to, from, next) => {
-  const isAuthenticated = localStorage.getItem('authToken')
-  
+  const isAuthenticated = localStorage.getItem('token')
+
   if (to.meta.requiresAuth && !isAuthenticated) {
     next({ path: '/login', query: { redirect: to.fullPath } })
-  } else if (to.path === '/login' && isAuthenticated) {
+  } else if ((to.path === '/login' || to.path === '/register') && isAuthenticated) {
     next('/welcome')
   } else {
     next()

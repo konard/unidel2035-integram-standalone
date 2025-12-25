@@ -91,7 +91,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-// Issue #3790: Removed apiClient import - no longer making API calls for user data
+import Popover from 'primevue/popover'
 import ComponentLoader from '@/components/ComponentLoader.vue'
 
 const router = useRouter()
@@ -131,7 +131,7 @@ const fieldIcons = {
   'Задача игрока': 'pi pi-check-circle',
   'Субъект РФ': 'pi pi-map',
   Должность: 'pi pi-id-card',
-  'API Base': 'pi pi-server', // Добавлена иконка для apiBase
+  'API Base': 'pi pi-server',
 }
 
 const getIconForField = fieldName => {
@@ -178,9 +178,7 @@ const formatDate = dateValue => {
   }
 }
 
-// Issue #3848: Fetch user data from /{db}/xsrf endpoint
-// This provides correct user ID and name for the current database
-// User can have different ID/name depending on database (my vs a2025, etc.)
+// Fetch user data from /{db}/xsrf endpoint
 const fetchUserData = async () => {
   try {
     const authDb = localStorage.getItem('db') || 'a2025'
@@ -197,10 +195,6 @@ const fetchUserData = async () => {
     const protocol = apiBase === 'localhost' ? 'http' : 'https'
     const url = `${protocol}://${baseHost}/${authDb}/xsrf?JSON_KV=true`
 
-    // Issue #3848: Simplified header selection
-    // Since we're requesting data from the SAME database we logged into (authDb),
-    // we always use X-Authorization header (not 'my' header)
-    // The 'my' header is only for kernel routing to OTHER databases
     const headers = {
       'X-Authorization': token
     }
@@ -210,7 +204,6 @@ const fetchUserData = async () => {
     if (response.ok) {
       const data = await response.json()
 
-      // Response format: { "_xsrf": "...", "token": "...", "user": "d", "role": "admin", "id": "195006", "msg": "" }
       user.value = {
         name: data.user || 'Не указан',
         role: data.role || '',
@@ -221,7 +214,7 @@ const fetchUserData = async () => {
       localStorage.setItem('user', data.user || '')
       localStorage.setItem('id', data.id || '')
 
-      // Populate userInfo with additional fields (Issue #4007: Don't show XSRF)
+      // Populate userInfo with additional fields
       userInfo.value = {
         'ID': data.id,
         'Роль': data.role,
@@ -294,7 +287,7 @@ const logout = () => {
     localStorage.removeItem(key),
   )
 
-  // Clear 'my' database credentials (Issue #3730)
+  // Clear 'my' database credentials
   ;['my_token', 'my_user', 'my_id', 'my_xsrf'].forEach(key =>
     localStorage.removeItem(key),
   )
@@ -308,7 +301,7 @@ const logout = () => {
   localStorage.removeItem('integram_session')
   localStorage.removeItem('unified_auth_session_id')
 
-  // Clear user photo cache (Issue #5139)
+  // Clear user photo cache
   const userId = localStorage.getItem('id')
   if (userId) {
     localStorage.removeItem(`userPhoto_${userId}`)
@@ -317,7 +310,7 @@ const logout = () => {
 
   op.value.hide()
 
-  // Issue #3730: Redirect to main page instead of login page
+  // Redirect to main page instead of login page
   router.push('/')
 }
 
@@ -386,6 +379,4 @@ defineExpose({
   color: var(--text-color); /* Основной цвет текста для значения */
   word-break: break-all; /* Перенос длинных значений (как apiBase) */
 }
-
-/* Можно добавить отдельный стиль для apiBase, если нужно */
 </style>

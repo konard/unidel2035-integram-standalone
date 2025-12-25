@@ -2,9 +2,9 @@ import { computed, reactive } from 'vue';
 
 // Инициализация темы из localStorage
 const getInitialDarkTheme = () => {
-  if (typeof window === 'undefined') return true; // Для SSR - темная тема по умолчанию
+  if (typeof window === 'undefined') return false; // Для SSR - светлая тема по умолчанию
   const savedTheme = localStorage.getItem('darkTheme');
-  return savedTheme ? JSON.parse(savedTheme) : true; // Темная тема по умолчанию
+  return savedTheme ? JSON.parse(savedTheme) : false; // Светлая тема по умолчанию
 };
 
 const layoutConfig = reactive({
@@ -26,7 +26,7 @@ const layoutState = reactive({
     staticMenuDesktopInactive: false,
     overlayMenuActive: false,
     profileSidebarVisible: false,
-    configSidebarVisible: false,
+    configSidebarVisible: false, // Панель настроек палитры свернута по умолчанию
     staticMenuMobileActive: false,
     menuHoverActive: false,
     activeMenuItem: null,

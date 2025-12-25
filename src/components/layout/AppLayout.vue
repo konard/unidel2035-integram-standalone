@@ -1,5 +1,5 @@
 <script setup>
-import { useLayout } from '@/layout/composables/layout'
+import { useLayout } from '@/components/layout/composables/layout'
 import { computed, ref, watch, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
 import AppFooter from './AppFooter.vue'
@@ -11,7 +11,7 @@ const Chat = defineAsyncComponent(() => import('./Chat.vue'))
 const ReleaseNotesModal = defineAsyncComponent(() => import('@/components/ReleaseNotesModal.vue'))
 // Import CookieConsentBanner normally to avoid dynamic import issues
 import CookieConsentBanner from '@/components/legal/CookieConsentBanner.vue'
-import packageJson from '../../package.json'
+import packageJson from '../../../package.json'
 
 import SafeRouterView from '@/components/SafeRouterView.vue'
 

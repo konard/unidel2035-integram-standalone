@@ -1,46 +1,24 @@
-/**
- * Menu State Service - Stub
- * TODO: Implement actual service logic
- */
-
-const menuState = {};
-const collapsedGroups = new Set();
-
-export function createMenuItem(id, data) {
-  console.warn('menuStateService: Using stub implementation');
-  menuState[id] = data;
-  return data;
+// Stub menu state service
+export function createMenuItem(item) {
+  return item
 }
 
-export function updateMenuItem(id, data) {
-  console.warn('menuStateService: Using stub implementation');
-  if (menuState[id]) {
-    menuState[id] = { ...menuState[id], ...data };
-  }
-  return menuState[id];
+export function updateMenuItem(id, updates) {
+  return { id, ...updates }
 }
 
 export function deleteMenuItem(id) {
-  console.warn('menuStateService: Using stub implementation');
-  delete menuState[id];
+  return true
+}
+
+export function getMenuState() {
+  return []
 }
 
 export function isGroupCollapsed(groupId) {
-  return collapsedGroups.has(groupId);
+  return false
 }
 
 export function toggleGroupCollapsed(groupId) {
-  if (collapsedGroups.has(groupId)) {
-    collapsedGroups.delete(groupId);
-  } else {
-    collapsedGroups.add(groupId);
-  }
+  return true
 }
-
-export default {
-  createMenuItem,
-  updateMenuItem,
-  deleteMenuItem,
-  isGroupCollapsed,
-  toggleGroupCollapsed
-};
