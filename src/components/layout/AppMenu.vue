@@ -630,52 +630,6 @@ const fetchMenuItems = async () => {
     logger.debug('Created Pages section with default fallback link')
   }
 
-
-  // Загрузка бокового меню из отчёта app_menu (база my)
-  // Секции из отчёта добавляются напрямую в меню (без обёртки)
-  try {
-    logger.debug('Загрузка бокового меню из отчёта app_menu...')
-    const sidebarMenuSections = await loadSidebarMenuFromIntegram()
-
-    if (sidebarMenuSections && sidebarMenuSections.length > 0) {
-      // Помечаем секции из app_menu для идентификации
-      const markedSections = sidebarMenuSections.map(section => ({
-        ...section,
-        fromAppMenu: true
-      }))
-
-      // Удаляем старые секции из app_menu (если были)
-      model.value = model.value.filter(section => !section.fromAppMenu)
-
-      // Находим секцию "Документы" (она идёт после Workspaces)
-      const documentsIndex = model.value.findIndex(section => section.label === 'Документы')
-
-      if (documentsIndex >= 0) {
-        // Вставляем секции из app_menu после "Документы"
-        // Порядок: Workspaces -> Документы -> секции из app_menu
-        model.value.splice(documentsIndex + 1, 0, ...markedSections)
-      } else {
-        // Если секции "Документы" нет, вставляем после Workspaces
-        const workspacesIndex = model.value.findIndex(section => section.label === 'Workspaces')
-        if (workspacesIndex >= 0) {
-          model.value.splice(workspacesIndex + 1, 0, ...markedSections)
-        } else {
-          model.value.push(...markedSections)
-        }
-      }
-
-      logger.debug('Боковое меню из отчёта app_menu успешно загружено:', {
-        sectionsCount: sidebarMenuSections.length,
-        totalItems: sidebarMenuSections.reduce((sum, s) => sum + (s.items?.length || 0), 0)
-      })
-    } else {
-      logger.debug('Отчёт app_menu пуст или не содержит данных')
-    }
-  } catch (error) {
-    logger.error('Ошибка при загрузке бокового меню из отчёта app_menu:', error)
-  } finally {
-    loading.value = false
-  }
 }
 
 // Drag and drop handlers
