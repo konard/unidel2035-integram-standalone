@@ -185,7 +185,7 @@
           />
           <Button
             v-else
-            label="Начать"
+            label="Войти"
             icon="pi pi-check"
             :disabled="!selectedRoleId || !selectedUseCaseId"
             @click="completeWelcome"
@@ -302,7 +302,7 @@ const completeWelcome = () => {
     showDialog.value = false
 
     // Start the product tour
-    router.push('/dashboard?startTour=true')
+    router.push('/login')
   }
 }
 
