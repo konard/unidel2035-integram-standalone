@@ -157,8 +157,10 @@ const fetchUserPhotoOnMount = async () => {
 
 onMounted(() => {
   updateFavicon()
-  // Fetch user photo immediately on mount
-  fetchUserPhotoOnMount()
+  // NOTE: fetchUserPhotoOnMount() disabled - /api/profile endpoint doesn't exist in Integram
+  // User photo is managed through Profile.vue and localStorage
+  // fetchUserPhotoOnMount()
+
   // Listen for storage changes (when Profile.vue updates the photo)
   window.addEventListener('storage', (e) => {
     if (e.key === 'currentUserPhoto') {
