@@ -220,9 +220,9 @@
               Замените аутстафф на цифровую команду. Первичная поддержка, сбор требований, управление проектами.
             </p>
             <div class="solution-features">
-              <div class="feature-item">✓ Агент поддержки клиентов</div>
+              <div class="feature-item">✓ Первичная поддержка клиентов</div>
               <div class="feature-item">✓ Сбор требований к проектам</div>
-              <div class="feature-item">✓ Менеджер проектов</div>
+              <div class="feature-item">✓ Управление проектами</div>
               <div class="feature-item">✓ Автоматизация тестирования</div>
             </div>
             <div class="solution-stats">
@@ -322,248 +322,6 @@
           </template>
         </Card>
       </div>
-
-      <div class="editor-divider"></div>
-
-      <!-- 3. Business Process Ensembles -->
-      <div class="editor-section">
-        <h2 class="section-heading">
-          <span class="heading-icon">🤖</span>
-          Готовые ансамбли агентов
-        </h2>
-        <p class="section-subtitle">Комплексные решения из нескольких агентов для решения бизнес-задач</p>
-      </div>
-
-      <Accordion :multiple="true" class="ensembles-accordion">
-        <!-- IT & Development Ensemble -->
-        <AccordionTab header="💻 IT и разработка — Замена аутстаффа">
-          <div class="ensemble-description">
-            <p><strong>Сценарий использования:</strong> Автоматизация поддержки, сбора требований и управления проектами в IT-компании</p>
-            <p><strong>Экономия:</strong> До 7.9 млрд руб. на аутстаффинге (по данным рынка)</p>
-          </div>
-          <div class="agents-ensemble">
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=support')">
-              <template #content>
-                <div class="agent-icon">💬</div>
-                <h4>Агент поддержки</h4>
-                <p>Первая линия поддержки клиентов</p>
-                <div class="agent-tags">
-                  <span class="tag">24/7</span>
-                  <span class="tag">Чат</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=requirements')">
-              <template #content>
-                <div class="agent-icon">📋</div>
-                <h4>Сбор требований</h4>
-                <p>Первичный брифинг и структурирование</p>
-                <div class="agent-tags">
-                  <span class="tag">Анкеты</span>
-                  <span class="tag">Интеграция</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=project-manager')">
-              <template #content>
-                <div class="agent-icon">📊</div>
-                <h4>Менеджер проектов</h4>
-                <p>Отслеживание задач и дедлайнов</p>
-                <div class="agent-tags">
-                  <span class="tag">Напоминания</span>
-                  <span class="tag">Отчеты</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=qa-tester')">
-              <template #content>
-                <div class="agent-icon">🧪</div>
-                <h4>QA-тестер</h4>
-                <p>Автоматизация рутинных проверок</p>
-                <div class="agent-tags">
-                  <span class="tag">Тестирование</span>
-                  <span class="tag">Регрессия</span>
-                </div>
-              </template>
-            </Card>
-          </div>
-          <Button
-            label="Подключить весь ансамбль"
-            icon="pi pi-check"
-            class="p-button-lg w-full mt-3"
-            @click="activateEnsemble('it-development')"
-          />
-        </AccordionTab>
-
-        <!-- E-commerce & Services Ensemble -->
-        <AccordionTab header="🏪 E-commerce и услуги — Первый сотрудник">
-          <div class="ensemble-description">
-            <p><strong>Сценарий использования:</strong> Интернет-магазины, локальные сервисы, частные специалисты</p>
-            <p><strong>Экономия:</strong> 150 000₽/мес на одного сотрудника</p>
-          </div>
-          <div class="agents-ensemble">
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=order-processor')">
-              <template #content>
-                <div class="agent-icon">🛒</div>
-                <h4>Прием заказов</h4>
-                <p>Обработка заказов 24/7</p>
-                <div class="agent-tags">
-                  <span class="tag">Корзина</span>
-                  <span class="tag">Оплата</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=appointment-booking')">
-              <template #content>
-                <div class="agent-icon">📅</div>
-                <h4>Запись на услуги</h4>
-                <p>Календарь и напоминания</p>
-                <div class="agent-tags">
-                  <span class="tag">Календарь</span>
-                  <span class="tag">SMS</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=returns')">
-              <template #content>
-                <div class="agent-icon">↩️</div>
-                <h4>Обработка возвратов</h4>
-                <p>Оформление возврата товаров</p>
-                <div class="agent-tags">
-                  <span class="tag">Возвраты</span>
-                  <span class="tag">Компенсации</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=price-calculator')">
-              <template #content>
-                <div class="agent-icon">💰</div>
-                <h4>Расчет стоимости</h4>
-                <p>Калькулятор для сложных услуг</p>
-                <div class="agent-tags">
-                  <span class="tag">Калькулятор</span>
-                  <span class="tag">Прайс</span>
-                </div>
-              </template>
-            </Card>
-          </div>
-          <Button
-            label="Подключить весь ансамбль"
-            icon="pi pi-check"
-            class="p-button-lg w-full mt-3"
-            @click="activateEnsemble('ecommerce')"
-          />
-        </AccordionTab>
-
-        <!-- Telecom Ensemble -->
-        <AccordionTab header="📞 Телеком — Разгрузка колл-центра">
-          <div class="ensemble-description">
-            <p><strong>Сценарий использования:</strong> Консультации по тарифам, обработка заявок, техподдержка</p>
-            <p><strong>Результат:</strong> -60% звонков в колл-центр, +25% конверсия</p>
-          </div>
-          <div class="agents-ensemble">
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=tariff-consultant')">
-              <template #content>
-                <div class="agent-icon">📊</div>
-                <h4>Консультант по тарифам</h4>
-                <p>Подбор оптимального тарифа</p>
-                <div class="agent-tags">
-                  <span class="tag">Тарифы</span>
-                  <span class="tag">Подбор</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=connection-handler')">
-              <template #content>
-                <div class="agent-icon">📡</div>
-                <h4>Обработка заявок</h4>
-                <p>Прием заявок на подключение</p>
-                <div class="agent-tags">
-                  <span class="tag">Заявки</span>
-                  <span class="tag">Статусы</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=tech-support')">
-              <template #content>
-                <div class="agent-icon">🛠️</div>
-                <h4>Техподдержка</h4>
-                <p>Решение типовых проблем</p>
-                <div class="agent-tags">
-                  <span class="tag">Диагностика</span>
-                  <span class="tag">Инструкции</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=upsell-agent')">
-              <template #content>
-                <div class="agent-icon">📈</div>
-                <h4>Upsell-агент</h4>
-                <p>Допродажи и апгрейды</p>
-                <div class="agent-tags">
-                  <span class="tag">Продажи</span>
-                  <span class="tag">Апгрейд</span>
-                </div>
-              </template>
-            </Card>
-          </div>
-          <Button
-            label="Подключить весь ансамбль"
-            icon="pi pi-check"
-            class="p-button-lg w-full mt-3"
-            @click="activateEnsemble('telecom')"
-          />
-        </AccordionTab>
-
-        <!-- HR & Recruitment Ensemble -->
-        <AccordionTab header="👥 HR и рекрутинг — Автоматизация найма">
-          <div class="ensemble-description">
-            <p><strong>Сценарий использования:</strong> Скрининг резюме, планирование собеседований, онбординг</p>
-            <p><strong>Результат:</strong> -80% времени на обработку резюме</p>
-          </div>
-          <div class="agents-ensemble">
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=resume-screener')">
-              <template #content>
-                <div class="agent-icon">📄</div>
-                <h4>Скрининг резюме</h4>
-                <p>Первичная оценка кандидатов</p>
-                <div class="agent-tags">
-                  <span class="tag">AI-оценка</span>
-                  <span class="tag">Скоринг</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=interview-scheduler')">
-              <template #content>
-                <div class="agent-icon">📅</div>
-                <h4>Планирование собеседований</h4>
-                <p>Координация встреч с кандидатами</p>
-                <div class="agent-tags">
-                  <span class="tag">Календарь</span>
-                  <span class="tag">Напоминания</span>
-                </div>
-              </template>
-            </Card>
-            <Card class="agent-card" @click="navigateToAgent('/agents/constructor?template=onboarding-assistant')">
-              <template #content>
-                <div class="agent-icon">👋</div>
-                <h4>Онбординг-ассистент</h4>
-                <p>Введение новых сотрудников</p>
-                <div class="agent-tags">
-                  <span class="tag">Документы</span>
-                  <span class="tag">Обучение</span>
-                </div>
-              </template>
-            </Card>
-          </div>
-          <Button
-            label="Подключить весь ансамбль"
-            icon="pi pi-check"
-            class="p-button-lg w-full mt-3"
-            @click="activateEnsemble('hr')"
-          />
-        </AccordionTab>
-      </Accordion>
 
       <div class="editor-divider"></div>
 
@@ -732,7 +490,7 @@
             </div>
             <p class="recommendation-text">{{ getPersonalizedMessage() }}</p>
             <div class="recommended-templates">
-              <h4>Рекомендуемые агенты для вас:</h4>
+              <h4>Рекомендуемые модули для вас:</h4>
               <div class="modules-grid mt-3">
                 <div
                   v-for="module in getRecommendedModules()"
@@ -766,7 +524,7 @@
           <template #content>
             <div class="action-icon">💼</div>
             <h3>Готовые решения</h3>
-            <p>Выберите готовый пакет агентов под вашу отрасль</p>
+            <p>Выберите готовый пакет инструментов под вашу отрасль</p>
             <Button
               label="Просмотреть решения"
               icon="pi pi-arrow-right"
@@ -790,7 +548,7 @@
           <template #content>
             <div class="action-icon">🛠️</div>
             <h3>Собрать с нуля</h3>
-            <p>Создайте агента под специфичную задачу</p>
+            <p>Создайте модуль под специфичную задачу</p>
             <Button
               label="Открыть конструктор"
               icon="pi pi-plus"
@@ -876,7 +634,7 @@ const progressSteps = computed(() => [
   },
   {
     id: 'create_agent',
-    title: 'Создание агента',
+    title: 'Создание модуля',
     description: 'Выберите шаблон или создайте с нуля',
     completed: hasCreatedAgent.value,
     current: !hasCreatedAgent.value
@@ -884,7 +642,7 @@ const progressSteps = computed(() => [
   {
     id: 'test_agent',
     title: 'Тестирование',
-    description: 'Проверьте работу агента',
+    description: 'Проверьте работу модуля',
     completed: hasTestedAgent.value,
     current: hasCreatedAgent.value && !hasTestedAgent.value
   },
@@ -898,7 +656,7 @@ const progressSteps = computed(() => [
   {
     id: 'production',
     title: 'Запуск в продакшн',
-    description: 'Переведите агента в рабочий режим',
+    description: 'Переведите модуль в рабочий режим',
     completed: false,
     current: false
   }
@@ -908,7 +666,7 @@ const progressSteps = computed(() => [
 const supportTemplates = ref([
   {
     id: 'first-line-support',
-    name: 'Агент первой линии',
+    name: 'Модуль первой линии',
     description: 'Отвечает на типовые вопросы клиентов 24/7',
     icon: '💬',
     path: '/agents/constructor',
@@ -951,7 +709,7 @@ const salesTemplates = ref([
   },
   {
     id: 'upsell-agent',
-    name: 'Upsell-агент',
+    name: 'Upsell-модуль',
     description: 'Предложение дополнительных услуг и продуктов',
     icon: '💰',
     path: '/agents/constructor',
@@ -1017,7 +775,7 @@ const hrTemplates = ref([
 const videos = ref([
   {
     id: 'create-agent-5min',
-    title: 'Как создать агента за 5 минут',
+    title: 'Как создать модуль за 5 минут',
     duration: '5:00',
     thumbnail: '/placeholder-video-1.jpg',
     url: 'https://youtube.com/watch?v=example1'
@@ -1219,12 +977,12 @@ function getRoleLabel(role) {
 function getPersonalizedMessage() {
   const role = selectedRole.value
   const messages = {
-    developer: 'Для разработчиков мы рекомендуем начать с API-интеграций и конструктора агентов',
+    developer: 'Для разработчиков мы рекомендуем начать с API-интеграций и конструктора модулей',
     manager: 'Для менеджеров проектов мы подготовили инструменты управления воркфлоу и аналитику',
     analyst: 'Для аналитиков у нас есть мощные инструменты сбора и визуализации данных',
     operator: 'Для операторов дронов доступны инструменты управления полетами и телеметрией'
   }
-  return messages[role] || 'Мы подобрали для вас релевантные агенты и инструменты'
+  return messages[role] || 'Мы подобрали для вас релевантные модули и инструменты'
 }
 
 function getRecommendedModules() {
@@ -1232,8 +990,8 @@ function getRecommendedModules() {
   const allModules = [
     {
       id: 'agent-constructor',
-      name: 'Конструктор агентов (3 в 1)',
-      description: 'No-Code конструктор, Workflow Builder и AI-создание агентов',
+      name: 'Конструктор модулей (3 в 1)',
+      description: 'No-Code конструктор, Workflow Builder и AI-создание модулей',
       icon: '🤖',
       path: '/agents/constructor',
       roles: ['developer', 'manager']
