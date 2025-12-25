@@ -36,7 +36,8 @@ const router = createRouter({
     {
       path: '/integram',
       name: 'Integram',
-      redirect: '/integram/login'
+      component: () => import('@/views/pages/Landing.vue'),
+      meta: { requiresAuth: false }
     },
     {
       path: '/integram/login',

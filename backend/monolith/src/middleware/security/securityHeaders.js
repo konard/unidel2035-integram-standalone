@@ -174,8 +174,10 @@ export const corsOptions = {
       'https://www.drondoc.ru',
       'https://dev.example.integram.io',
       'https://proxy.drondoc.ru', // Production proxy (Issue #5170)
-      'http://dev.example.integram.io:5173', // Dev server via SSH tunnel
-      'http://localhost:5173', // Vite dev server
+      'http://dev.example.integram.io:5174', // Dev server via SSH tunnel
+      'http://173.249.2.184:5174', // Production server (Issue #34)
+      'http://localhost:5174', // Vite dev server
+      'http://localhost:5173', // Legacy dev server
       'http://localhost:3000',
       'http://localhost:8081',
     ];
@@ -221,8 +223,10 @@ export const ensureCorsHeaders = (req, res, next) => {
     'https://www.drondoc.ru',
     'https://dev.example.integram.io',
     'https://proxy.drondoc.ru', // Production proxy (Issue #5170)
-    'http://dev.example.integram.io:5173', // Dev server via SSH tunnel
-    'http://localhost:5173',
+    'http://dev.example.integram.io:5174', // Dev server via SSH tunnel
+    'http://173.249.2.184:5174', // Production server (Issue #34)
+    'http://localhost:5174', // Vite dev server
+    'http://localhost:5173', // Legacy dev server
     'http://localhost:3000',
     'http://localhost:8081',
   ];

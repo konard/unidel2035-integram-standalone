@@ -67,7 +67,7 @@ npm run dev
 npm run dev
 ```
 
-Откройте http://localhost:5173
+Откройте http://localhost:5174
 
 ## Установка
 
