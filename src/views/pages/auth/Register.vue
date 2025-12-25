@@ -333,20 +333,14 @@ const openTelegramLogin = () => {
 
                     <div>
                         <form @submit.prevent="handleSubmit">
-                            <InputText id="login" type="text" placeholder="Придумайте логин"
+                            <InputText id="login" type="text" placeholder="Логин"
                                 class="w-full mb-3" v-model="login" />
 
-                            <InputText id="email" type="email" placeholder="Например: info@drondoc.ru"
-                                class="w-full mb-1" v-model="email" />
-                            <small class="block text-muted-color mb-3 text-xs">
-                                Доступные адреса: info@, admin@, support@, sales@, contact@, help@ drondoc.ru
-                            </small>
-
-                            <Password id="password" v-model="password" placeholder="Создайте пароль" :toggleMask="true"
-                                class="mb-3" :feedback="false" inputClass="w-full"></Password>
+                            <Password id="password" v-model="password" placeholder="Пароль" :toggleMask="true"
+                                class="mb-3" :feedback="false" inputClass="w-full" fluid></Password>
 
                             <Password id="confirmPassword" v-model="confirmPassword" placeholder="Повторите пароль" :toggleMask="true"
-                                class="mb-3" :feedback="false" inputClass="w-full"></Password>
+                                class="mb-3" :feedback="false" inputClass="w-full" fluid></Password>
 
                             <div class="flex items-start gap-2 mb-3">
                                 <Checkbox v-model="agreeToTerms" :binary="true" inputId="agreeToTerms" />
