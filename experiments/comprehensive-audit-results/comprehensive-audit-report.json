@@ -1,0 +1,67 @@
+{
+  "timestamp": "2025-12-25T22:54:33.763Z",
+  "baseUrl": "https://185.128.105.78",
+  "totalIssues": 2,
+  "issuesBySeverity": {
+    "critical": 0,
+    "high": 1,
+    "medium": 0,
+    "low": 1
+  },
+  "issuesByCategory": {
+    "Login": 1,
+    "Accessibility": 1
+  },
+  "pages": [
+    {
+      "name": "main-page",
+      "url": "https://185.128.105.78/",
+      "timestamp": "2025-12-25T22:54:32.839Z",
+      "elements": {
+        "buttons": 4,
+        "links": 7,
+        "inputs": 16,
+        "menus": 0,
+        "modals": 0
+      },
+      "issues": [],
+      "title": "Интеграм",
+      "visibleButtons": [
+        {
+          "index": 0,
+          "text": "Sign in",
+          "class": "btn btn-primary btn-login",
+          "id": ""
+        }
+      ],
+      "navigationLinks": []
+    }
+  ],
+  "issues": [
+    {
+      "category": "Login",
+      "severity": "high",
+      "title": "Login failed - still on login page",
+      "description": "After submitting credentials, still on login page. Error message: none visible",
+      "url": "https://185.128.105.78/",
+      "screenshot": "experiments/comprehensive-audit-results/screenshots/03-after-login.png",
+      "details": {
+        "errorMessage": ""
+      },
+      "timestamp": "2025-12-25T22:54:32.837Z"
+    },
+    {
+      "category": "Accessibility",
+      "severity": "low",
+      "title": "1 img-no-alt issue(s)",
+      "description": "Found 1 elements with img-no-alt",
+      "url": "https://185.128.105.78/",
+      "screenshot": "experiments/comprehensive-audit-results/screenshots/page-main-page.png",
+      "details": {
+        "count": 1,
+        "type": "img-no-alt"
+      },
+      "timestamp": "2025-12-25T22:54:33.739Z"
+    }
+  ]
+}

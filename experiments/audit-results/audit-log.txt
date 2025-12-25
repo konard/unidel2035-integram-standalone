@@ -1,0 +1,36 @@
+Starting Integram Standalone Interface Audit...
+Base URL: https://185.128.105.78
+
+=== Testing Login ===
+Login attempt completed. Current URL: https://185.128.105.78/
+Login failed or could not be verified. Continuing audit anyway...
+
+=== Auditing: / ===
+Screenshot saved: experiments/audit-results/screenshots/--initial.png
+Page title: Интеграм
+Found 4 buttons, 7 links, 16 inputs
+Found 0 navigation items
+
+=== Auditing: /welcome ===
+[Console Error] Failed to load resource: the server responded with a status of 404 (Not found)
+Screenshot saved: experiments/audit-results/screenshots/-welcome-initial.png
+Page title: 
+Found 0 buttons, 0 links, 0 inputs
+Found 0 navigation items
+
+=== Auditing: /integram/my ===
+[Console Error] Failed to load resource: the server responded with a status of 404 (Not found)
+Screenshot saved: experiments/audit-results/screenshots/-integram-my-initial.png
+Page title: 
+Found 0 buttons, 0 links, 0 inputs
+Found 0 navigation items
+
+Report saved to: experiments/audit-results/audit-report.json
+Markdown report saved to: experiments/audit-results/audit-report.md
+
+=== Audit Complete ===
+Total issues found: 4
+Critical: 0
+High: 3
+Medium: 0
+Low: 1

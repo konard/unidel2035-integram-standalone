@@ -1,0 +1,85 @@
+{
+  "timestamp": "2025-12-25T22:51:47.933Z",
+  "baseUrl": "https://185.128.105.78",
+  "pagesAudited": 3,
+  "totalIssues": 4,
+  "issuesBySeverity": {
+    "critical": 0,
+    "high": 3,
+    "medium": 0,
+    "low": 1
+  },
+  "results": [
+    {
+      "url": "https://185.128.105.78/",
+      "title": "Интеграм",
+      "buttons": 4,
+      "links": 7,
+      "inputs": 16,
+      "errors": 0,
+      "screenshots": [
+        "experiments/audit-results/screenshots/--initial.png"
+      ]
+    },
+    {
+      "url": "https://185.128.105.78/welcome",
+      "title": "",
+      "buttons": 0,
+      "links": 0,
+      "inputs": 0,
+      "errors": 0,
+      "screenshots": [
+        "experiments/audit-results/screenshots/-welcome-initial.png"
+      ]
+    },
+    {
+      "url": "https://185.128.105.78/integram/my",
+      "title": "",
+      "buttons": 0,
+      "links": 0,
+      "inputs": 0,
+      "errors": 0,
+      "screenshots": [
+        "experiments/audit-results/screenshots/-integram-my-initial.png"
+      ]
+    }
+  ],
+  "issues": [
+    {
+      "category": "Login",
+      "severity": "high",
+      "title": "Login may have failed",
+      "description": "Still on login page after submitting credentials. Current URL: https://185.128.105.78/",
+      "url": "https://185.128.105.78/",
+      "screenshot": null,
+      "timestamp": "2025-12-25T22:51:36.008Z"
+    },
+    {
+      "category": "Accessibility",
+      "severity": "low",
+      "title": "missing-alt in img",
+      "description": "Element https://185.128.105.78/i/ru.png is missing required accessibility attribute",
+      "url": "https://185.128.105.78/",
+      "screenshot": null,
+      "timestamp": "2025-12-25T22:51:39.785Z"
+    },
+    {
+      "category": "Navigation",
+      "severity": "high",
+      "title": "Page returns 404",
+      "description": "URL https://185.128.105.78/welcome returned status code 404",
+      "url": "https://185.128.105.78/welcome",
+      "screenshot": null,
+      "timestamp": "2025-12-25T22:51:40.921Z"
+    },
+    {
+      "category": "Navigation",
+      "severity": "high",
+      "title": "Page returns 404",
+      "description": "URL https://185.128.105.78/integram/my returned status code 404",
+      "url": "https://185.128.105.78/integram/my",
+      "screenshot": null,
+      "timestamp": "2025-12-25T22:51:44.473Z"
+    }
+  ]
+}
