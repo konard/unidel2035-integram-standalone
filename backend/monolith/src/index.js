@@ -76,7 +76,6 @@ import leadsRoutes from './api/routes/leads.js';
 import crmIntegrationRoutes from './api/routes/crm-integration.js';
 import { createMCPRoutes } from './api/routes/mcp.js';
 import chatRoutes from './api/routes/chat.js'; // UNIFIED CHAT ENDPOINT
-import generalChatRoutes from './api/routes/general-chat.js'; // GENERAL CHAT (NOT AI)
 // DEPRECATED: Direct provider endpoints removed - use /api/chat instead
 // import { createClaudeChatRoutes } from './api/routes/claude-chat.js';
 import { createWorkspaceChatRoutes } from './api/routes/workspace-chat.js';
