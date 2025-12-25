@@ -25,6 +25,11 @@
         <p class="landing-hero-note">
           100% ваши данные. Ваши серверы. Ваш контроль.
         </p>
+        <div class="landing-hero-badge">
+          <i class="pi pi-verified"></i>
+          В реестре российского софта
+          <span class="badge-details">Реестровая запись №30872 от 26.11.2025</span>
+        </div>
       </div>
     </div>
   </section>
@@ -161,6 +166,54 @@
 @media (min-width: 768px) {
   .landing-hero-note {
     font-size: 1.25rem;
+  }
+}
+
+.landing-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  padding: 0.75rem 1.5rem;
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 2rem;
+  color: white;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.landing-hero-badge:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.landing-hero-badge i {
+  font-size: 1.2rem;
+  color: #22c55e;
+}
+
+.badge-details {
+  display: block;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.9);
+  margin-left: 0.25rem;
+  font-weight: 400;
+}
+
+@media (max-width: 640px) {
+  .landing-hero-badge {
+    flex-direction: column;
+    gap: 0.25rem;
+    text-align: center;
+    padding: 1rem;
+  }
+
+  .badge-details {
+    margin-left: 0;
   }
 }
 </style>
