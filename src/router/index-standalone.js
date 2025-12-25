@@ -40,6 +40,12 @@ const router = createRouter({
       ]
     },
     {
+      path: '/integram',
+      name: 'Integram Database Selector',
+      component: () => import('@/views/pages/Integram/IntegramDatabaseSelector.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
       path: '/integram/:database',
       component: () => import('@/views/pages/Integram/IntegramMain.vue'),
       meta: { requiresAuth: false },
