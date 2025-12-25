@@ -1,0 +1,29 @@
+[Unit]
+Description=Integram Standalone Application
+Documentation=https://github.com/unidel2035/integram-standalone
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/integram-standalone/backend/monolith
+Environment=NODE_ENV=production
+Environment=PORT=3000
+EnvironmentFile=/var/www/integram-standalone/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=integram-standalone
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/integram-standalone
+
+[Install]
+WantedBy=multi-user.target

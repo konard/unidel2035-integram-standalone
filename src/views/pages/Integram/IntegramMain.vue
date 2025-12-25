@@ -499,15 +499,51 @@ onMounted(async () => {
   // Issue #4168: Check Integram authentication (independent from main site auth)
   const authInfo = integramApiClient.getAuthInfo()
   if (!authInfo.token || !authInfo.xsrf) {
-    // Not authenticated with Integram - redirect to Integram login
-    // Save the current path to redirect back after login
-    const currentPath = route.fullPath
-    if (currentPath !== '/integram' && currentPath !== '/integram/') {
-      router.push(`/integram/login?redirect=${encodeURIComponent(currentPath)}`)
-    } else {
-      router.push('/integram/login')
+    // Issue #34: Auto-authenticate with default credentials (without requiring manual login)
+    const serverURL = import.meta.env.VITE_INTEGRAM_URL || 'https://dronedoc.ru'
+    const defaultDatabase = database.value || 'my'
+    const defaultUsername = 'd'
+    const defaultPassword = 'd'
+
+    try {
+      console.log('[IntegramMain] Auto-authenticating with database:', defaultDatabase)
+      await integramApiClient.authenticate(serverURL, defaultDatabase, defaultUsername, defaultPassword)
+
+      // Get user info after authentication
+      const response = await integramApiClient.get(`/${defaultDatabase}/auth?JSON`)
+      if (response.data) {
+        const dbSession = integramApiClient.databases[defaultDatabase]
+        if (dbSession) {
+          dbSession.userName = response.data.login || defaultUsername
+          dbSession.userRole = response.data.role || 'user'
+          dbSession.authInfo = {
+            userName: response.data.login || defaultUsername,
+            userRole: response.data.role || 'user',
+            token: dbSession.token,
+            xsrf: dbSession.xsrfToken
+          }
+
+          // Get owned databases list
+          if (response.data.bases && Array.isArray(response.data.bases)) {
+            dbSession.ownedDatabases = response.data.bases
+          }
+        }
+      }
+
+      // Save session to localStorage
+      integramApiClient.saveSession()
+
+      console.log('[IntegramMain] Auto-authentication successful')
+    } catch (error) {
+      console.error('[IntegramMain] Auto-authentication failed:', error)
+      toast.add({
+        severity: 'error',
+        summary: 'Ошибка автоматической авторизации',
+        detail: error.message || 'Не удалось войти в систему',
+        life: 5000
+      })
+      return
     }
-    return
   }
 
   // Issue #5100: Validate session to refresh tokens and prevent quick expiration

@@ -1,0 +1,92 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build frontend
+      run: npm run build
+      env:
+        VITE_API_URL: ${{ secrets.VITE_API_URL || 'http://185.128.105.78:3000' }}
+        VITE_WS_URL: ${{ secrets.VITE_WS_URL || 'ws://185.128.105.78:3000' }}
+        VITE_INTEGRAM_URL: ${{ secrets.VITE_INTEGRAM_URL || 'https://dronedoc.ru' }}
+
+    - name: Install backend dependencies
+      run: cd backend/monolith && npm ci
+
+    - name: Deploy to server
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_SSH_KEY }}
+        port: ${{ secrets.DEPLOY_PORT || 22 }}
+        script: |
+          set -e
+
+          # Переменные
+          DEPLOY_DIR="/var/www/integram-standalone"
+          REPO_URL="https://github.com/unidel2035/integram-standalone.git"
+          BRANCH="master"
+
+          # Создать директорию если не существует
+          mkdir -p $DEPLOY_DIR
+
+          # Клонировать или обновить репозиторий
+          if [ -d "$DEPLOY_DIR/.git" ]; then
+            echo "Updating existing repository..."
+            cd $DEPLOY_DIR
+            git fetch origin
+            git reset --hard origin/$BRANCH
+          else
+            echo "Cloning repository..."
+            git clone -b $BRANCH $REPO_URL $DEPLOY_DIR
+            cd $DEPLOY_DIR
+          fi
+
+          # Установить зависимости frontend
+          echo "Installing frontend dependencies..."
+          npm ci
+
+          # Собрать frontend
+          echo "Building frontend..."
+          npm run build
+
+          # Установить зависимости backend
+          echo "Installing backend dependencies..."
+          cd backend/monolith
+          npm ci
+
+          # Перезапустить сервис (если используется systemd)
+          if systemctl is-active --quiet integram-standalone; then
+            echo "Restarting integram-standalone service..."
+            sudo systemctl restart integram-standalone
+          fi
+
+          echo "Deployment completed successfully!"
+
+    - name: Notify deployment success
+      if: success()
+      run: echo "✅ Deployment to production successful!"
+
+    - name: Notify deployment failure
+      if: failure()
+      run: echo "❌ Deployment failed!"
