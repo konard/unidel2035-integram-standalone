@@ -85,4 +85,13 @@ router.beforeEach((to, from, next) => {
   }
 })
 
+/**
+ * Clear user cache (stub implementation for compatibility)
+ * This function is called when user logs out or session expires
+ */
+export function clearUserCache() {
+  // Clear any cached user data
+  // This is a stub implementation - extend as needed
+}
+
 export default router
