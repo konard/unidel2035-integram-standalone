@@ -83,7 +83,7 @@ async function fetchEndpoint(endpoint, params) {
       params: { ...params, key: API_KEY },
       timeout: 20000,
       headers: {
-        'User-Agent': 'DronDoc/1.0',
+        'User-Agent': 'Integram/1.0',
         'Accept': 'application/json'
       }
     })

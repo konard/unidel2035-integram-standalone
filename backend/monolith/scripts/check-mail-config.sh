@@ -1,10 +1,10 @@
 #!/bin/bash
-# Скрипт автоматической проверки конфигурации mail.drondoc.ru
+# Скрипт автоматической проверки конфигурации mail.example.integram.io
 # Версия: 1.0
 # Дата: 2025-12-15
 
-DOMAIN="drondoc.ru"
-MAIL_SERVER="mail.drondoc.ru"
+DOMAIN="example.integram.io"
+MAIL_SERVER="mail.example.integram.io"
 MAIL_IP="185.204.3.24"
 
 echo "╔════════════════════════════════════════════════════════╗"
@@ -45,7 +45,7 @@ print_result() {
 # 1. Проверка MX записей
 echo "1️⃣  Проверка MX записей..."
 mx_record=$(dig MX $DOMAIN +short 2>/dev/null | head -1)
-if echo "$mx_record" | grep -q "mail.drondoc.ru"; then
+if echo "$mx_record" | grep -q "mail.example.integram.io"; then
     print_result "MX запись" "pass" "Найдено: $mx_record"
 else
     print_result "MX запись" "fail" "Не найдено корректной MX записи"
@@ -64,10 +64,10 @@ fi
 echo "3️⃣  Проверка SPF записи..."
 spf_record=$(dig TXT $DOMAIN +short 2>/dev/null | grep -i "v=spf1")
 if [ -n "$spf_record" ]; then
-    if echo "$spf_record" | grep -q "mail.drondoc.ru"; then
+    if echo "$spf_record" | grep -q "mail.example.integram.io"; then
         print_result "SPF запись" "pass" "$spf_record"
     else
-        print_result "SPF запись" "warn" "Найдена, но без mail.drondoc.ru: $spf_record"
+        print_result "SPF запись" "warn" "Найдена, но без mail.example.integram.io: $spf_record"
     fi
 else
     print_result "SPF запись" "fail" "SPF запись не найдена"
@@ -98,10 +98,10 @@ fi
 # 6. Проверка Reverse DNS
 echo "6️⃣  Проверка Reverse DNS (PTR)..."
 ptr_record=$(dig -x $MAIL_IP +short 2>/dev/null)
-if echo "$ptr_record" | grep -q "mail.drondoc.ru"; then
+if echo "$ptr_record" | grep -q "mail.example.integram.io"; then
     print_result "Reverse DNS" "pass" "PTR: $ptr_record"
 else
-    print_result "Reverse DNS" "fail" "PTR указывает на: $ptr_record (должен быть mail.drondoc.ru)"
+    print_result "Reverse DNS" "fail" "PTR указывает на: $ptr_record (должен быть mail.example.integram.io)"
 fi
 
 # 7. Проверка SMTP соединения

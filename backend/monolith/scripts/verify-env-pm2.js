@@ -46,7 +46,7 @@ if (existsSync(envPath)) {
 }
 
 // console.log('\n╔═══════════════════════════════════════════════════════════════════╗')
-// console.log('║ DronDoc Backend - PM2 Environment Verification (Issue #1917)      ║')
+// console.log('║ Integram Backend - PM2 Environment Verification (Issue #1917)      ║')
 // console.log('╚═══════════════════════════════════════════════════════════════════╝\n')
 
 // console.log('Current Working Directory:', process.cwd())

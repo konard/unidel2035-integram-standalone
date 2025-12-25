@@ -31,7 +31,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Configuration
-const SERVER_URL = 'https://dronedoc.ru';
+const SERVER_URL = process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io';
 const DATABASE = 'ddadmin';
 const LOGIN = process.env.INTEGRAM_LOGIN || 'd';
 const PASSWORD = process.env.INTEGRAM_PASSWORD || 'd';

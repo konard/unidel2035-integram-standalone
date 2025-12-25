@@ -1,23 +1,14 @@
 <template>
-  <RouterView v-slot="{ Component, route }">
-    <Transition name="fade" mode="out-in">
-      <component :is="Component" :key="route.path" />
-    </Transition>
-  </RouterView>
+  <router-view v-slot="{ Component }">
+    <component :is="Component" v-if="Component" />
+  </router-view>
 </template>
 
 <script setup>
-import { RouterView } from 'vue-router'
+/**
+ * SafeRouterView
+ *
+ * A wrapper around router-view that safely handles component rendering
+ * Prevents errors when components are not properly loaded
+ */
 </script>
-
-<style scoped>
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>

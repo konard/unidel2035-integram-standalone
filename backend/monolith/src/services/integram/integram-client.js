@@ -36,7 +36,7 @@ export const REQUISITE_TYPES = {
 export class IntegramClient {
   /**
    * Create new Integram client
-   * @param {string} serverURL - Integram server URL (e.g., https://dronedoc.ru)
+   * @param {string} serverURL - Integram server URL (e.g., https://example.integram.io)
    * @param {string} database - Database name (e.g., torgi, my, a2025)
    */
   constructor(serverURL, database) {
@@ -1277,7 +1277,7 @@ export class IntegramClient {
    * Create new database (_new_db)
    *
    * ⚠️ IMPORTANT: This method can ONLY be called when connected to the 'my' database!
-   * Example: new IntegramClient("https://dronedoc.ru", "my")
+   * Example: new IntegramClient("https://example.integram.io", "my")
    *
    * Calling from any other database will return: "Создайте базу в Личном кабинете!"
    *

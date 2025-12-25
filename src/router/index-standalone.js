@@ -85,4 +85,8 @@ router.beforeEach((to, from, next) => {
   }
 })
 
+export function clearUserCache() {
+  // Clear user-related cache
+}
+
 export default router

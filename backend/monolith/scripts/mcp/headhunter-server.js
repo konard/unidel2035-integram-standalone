@@ -23,7 +23,7 @@ class HeadHunterClient {
   constructor() {
     this.baseURL = 'https://api.hh.ru';
     this.accessToken = null;
-    this.userAgent = 'DronDoc/1.0 (https://dronedoc.ru)';
+    this.userAgent = 'Integram/1.0 (https://dronedoc.ru)';
   }
 
   /**

@@ -172,9 +172,9 @@ export const corsOptions = {
     const allowedOrigins = [
       'https://drondoc.ru',
       'https://www.drondoc.ru',
-      'https://dev.drondoc.ru',
+      'https://dev.example.integram.io',
       'https://proxy.drondoc.ru', // Production proxy (Issue #5170)
-      'http://dev.drondoc.ru:5173', // Dev server via SSH tunnel
+      'http://dev.example.integram.io:5173', // Dev server via SSH tunnel
       'http://localhost:5173', // Vite dev server
       'http://localhost:3000',
       'http://localhost:8081',
@@ -219,9 +219,9 @@ export const ensureCorsHeaders = (req, res, next) => {
   const allowedOrigins = [
     'https://drondoc.ru',
     'https://www.drondoc.ru',
-    'https://dev.drondoc.ru',
+    'https://dev.example.integram.io',
     'https://proxy.drondoc.ru', // Production proxy (Issue #5170)
-    'http://dev.drondoc.ru:5173', // Dev server via SSH tunnel
+    'http://dev.example.integram.io:5173', // Dev server via SSH tunnel
     'http://localhost:5173',
     'http://localhost:3000',
     'http://localhost:8081',

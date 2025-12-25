@@ -6,7 +6,7 @@
 import { IntegramClient, REQUISITE_TYPES } from '../src/services/integram/integram-client.js'
 
 const INTEGRAM_CONFIG = {
-  serverURL: 'https://dronedoc.ru',
+  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io',
   database: 'my',
   login: 'd',
   password: 'd'

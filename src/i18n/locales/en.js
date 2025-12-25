@@ -1140,7 +1140,7 @@ export default {
       aiPromptPlaceholder: 'For example: Create an agent for collecting and analyzing sentiment of texts from social networks with automatic report generation',
       generateWithAI: 'Generate with AI'
     },
-    creator: 'DronDoc Team',
+    creator: 'Integram Team',
     statusRunning: 'Running',
     statusDraft: 'Draft',
     statusBeta: 'Beta'
@@ -1247,7 +1247,7 @@ export default {
 
     // Monolith Backend
     monolith: {
-      info: 'Configure the connection settings for the DronDoc monolith backend (Node.js/Express)',
+      info: 'Configure the connection settings for the Integram monolith backend (Node.js/Express)',
       backendSettings: 'Backend Server Settings',
       backendUrl: 'Backend URL',
       backendUrlPlaceholder: 'http://localhost:8081',
@@ -1287,7 +1287,7 @@ export default {
       info: 'Configure the connection settings for Integram database (ddadmin)',
       apiSettings: 'Integram API Settings',
       apiUrl: 'Integram API URL',
-      apiUrlPlaceholder: 'https://dronedoc.ru',
+      apiUrlPlaceholder: '${import.meta.env.VITE_INTEGRAM_URL}',
       apiUrlHelp: 'Base URL for Integram API',
       database: 'Database Name',
       databasePlaceholder: 'ddadmin',
@@ -1397,7 +1397,7 @@ export default {
     },
 
     solution: {
-      title: 'DronDoc — Your Digital Organization',
+      title: 'Integram — Your Digital Organization',
       speed: 'Setup in Hours',
       speedDesc: 'Speed',
       savings: '10x Cheaper',
@@ -1419,7 +1419,7 @@ export default {
     },
 
     useCases: {
-      title: 'Who We Built DronDoc For',
+      title: 'Who We Built Integram For',
       it: {
         title: 'IT Companies',
         feature1: 'Customer Support Automation',
@@ -1509,7 +1509,7 @@ export default {
       q3: 'How quickly can I launch my first agent?',
       a3: 'On average, the first agent launches in 2-4 hours. For simple tasks, it may take only 30-60 minutes.',
       q4: 'Can I integrate with my existing systems?',
-      a4: 'Yes, DronDoc supports over 50 ready integrations with popular services: CRM, messengers, payment systems, databases, and more.',
+      a4: 'Yes, Integram supports over 50 ready integrations with popular services: CRM, messengers, payment systems, databases, and more.',
       q5: 'What support is provided?',
       a5: 'On the free tier — email support. On paid tiers — priority support with guaranteed response time. On Enterprise — a personal manager.',
       q6: 'What happens to customer data?',
@@ -1657,7 +1657,7 @@ export default {
           'Message sentiment analysis',
           'Request categorization (pricing, technical, features)',
           'Conversation history for each customer',
-          'Knowledge about DronDoc platform (features, pricing, support)',
+          'Knowledge about Integram platform (features, pricing, support)',
           'Local token storage for all users'
         ]
       }

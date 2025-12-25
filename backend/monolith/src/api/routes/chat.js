@@ -14,7 +14,7 @@ const router = express.Router();
 const llmCoordinator = new TokenBasedLLMCoordinator({});
 
 // MCP server configuration
-const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'https://dev.drondoc.ru';
+const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'https://dev.example.integram.io';
 const MCP_API_PATH = '/api/mcp/integram';
 
 /**
@@ -32,7 +32,7 @@ function getIntegramTools() {
         parameters: {
           type: 'object',
           properties: {
-            serverURL: { type: 'string', description: 'Server URL (e.g., https://dronedoc.ru)' },
+            serverURL: { type: 'string', description: 'Server URL (e.g., https://example.integram.io)' },
             database: { type: 'string', description: 'Database name (e.g., a2025, my, ddadmin)' },
             login: { type: 'string', description: 'Login username' },
             password: { type: 'string', description: 'Login password' }

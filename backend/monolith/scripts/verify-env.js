@@ -31,7 +31,7 @@ const OPTIONAL_VARS = [
 ]
 
 // console.log('\n╔═══════════════════════════════════════════════════════════════════╗')
-// console.log('║ DronDoc Backend - Environment Variables Verification              ║')
+// console.log('║ Integram Backend - Environment Variables Verification              ║')
 // console.log('╚═══════════════════════════════════════════════════════════════════╝\n')
 
 // console.log('Current Working Directory:', process.cwd())

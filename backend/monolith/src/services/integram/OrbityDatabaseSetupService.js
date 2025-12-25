@@ -48,7 +48,7 @@ class OrbityDatabaseSetupService {
     try {
       this.client = new IntegramClient({
         database: this.database,
-        baseURL: process.env.INTEGRAM_API_URL || 'https://dev.drondoc.ru:5443/integram'
+        baseURL: process.env.INTEGRAM_API_URL || 'https://dev.example.integram.io:5443/integram'
       })
 
       // Authenticate

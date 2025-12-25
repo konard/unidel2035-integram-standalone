@@ -1,10 +1,10 @@
 # Logger Usage Guide
 
-This guide explains how to use and configure the logging utilities in the DronDoc application.
+This guide explains how to use and configure the logging utilities in the Integram application.
 
 ## Overview
 
-DronDoc has two separate logger implementations:
+Integram has two separate logger implementations:
 
 1. **Backend Logger** (`backend/monolith/src/utils/logger.js`) - Uses [pino](https://getpino.io/) for Node.js backend services
 2. **Frontend Logger** (`src/utils/logger.js`) - Custom logger for Vue.js frontend
@@ -414,4 +414,4 @@ process.env.DISABLE_LOGGING = 'true'
 
 - [Pino Documentation](https://getpino.io/)
 - [Vue.js Best Practices](https://vuejs.org/guide/best-practices/)
-- [DronDoc Contributing Guidelines](../../CONTRIBUTING.md)
+- [Integram Contributing Guidelines](../../CONTRIBUTING.md)

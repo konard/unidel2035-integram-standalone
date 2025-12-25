@@ -1,20 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSEO } from '@/composables/useSEO'
-import NewHero from '@/components/landing/NewHero.vue'
-import ProblemsSection from '@/components/landing/ProblemsSection.vue'
-import SolutionSection from '@/components/landing/SolutionSection.vue'
-import HowItWorksSection from '@/components/landing/HowItWorksSection.vue'
-import UseCasesSection from '@/components/landing/UseCasesSection.vue'
-import NewFeaturesSection from '@/components/landing/NewFeaturesSection.vue'
-import NewPricingSection from '@/components/landing/NewPricingSection.vue'
-import FAQSection from '@/components/landing/FAQSection.vue'
-import FinalCTASection from '@/components/landing/FinalCTASection.vue'
-import Footer from '@/components/landing/Footer.vue'
+import IntegramHero from '@/components/integram-landing/IntegramHero.vue'
+import IntegramFeatures from '@/components/integram-landing/IntegramFeatures.vue'
+import IntegramFooter from '@/components/integram-landing/IntegramFooter.vue'
 import AppConfigurator from '@/layout/AppConfigurator.vue'
 import LogoDisplay from '@/components/LogoDisplay.vue'
 import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import Avatar from 'primevue/avatar'
+
+const router = useRouter()
 
 const isMounted = ref(false)
 const user = ref(localStorage.getItem('user'))
@@ -23,6 +19,14 @@ const userPhoto = ref(localStorage.getItem('currentUserPhoto') || '')
 const logout = () => {
   ;['_xsrf', 'token', 'user', 'id'].forEach(key => localStorage.removeItem(key))
   user.value = null
+}
+
+const handleCtaClick = () => {
+  if (user.value) {
+    router.push('/dashboard')
+  } else {
+    router.push('/login')
+  }
 }
 
 // SEO Meta Tags using our custom composable
@@ -145,56 +149,37 @@ onMounted(() => {
       <!-- Add padding to account for fixed header -->
       <div class="pt-16"></div>
 
-      <!-- Main Content Sections (10 sections) -->
-      <main class="space-y-0">
-        <!-- 1. Hero Section -->
+      <!-- Main Content - Minimalist Design -->
+      <main class="container mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Hero Section -->
         <section :class="{ 'animate-fade-in-up delay-100': isMounted }">
-          <NewHero />
+          <IntegramHero
+            title="ИНТЕГРАМ - безопасная и удобная платформа для управления данными"
+            subtitle="Платформа для управления данными с удобным интерфейсом и высоким уровнем безопасности"
+            :show-cta="true"
+            :cta-label="user ? 'Перейти в приложение' : 'Начать работу'"
+            @cta-click="handleCtaClick"
+          />
         </section>
 
-        <!-- 2. Problems Section -->
+        <!-- Features Section -->
         <section :class="{ 'animate-fade-in-up delay-200': isMounted }">
-          <ProblemsSection />
+          <IntegramFeatures
+            title="Ключевые возможности"
+            subtitle="Всё необходимое для эффективной работы с данными"
+          />
         </section>
 
-        <!-- 3. Solution Section -->
+        <!-- Footer -->
         <section :class="{ 'animate-fade-in-up delay-300': isMounted }">
-          <SolutionSection />
-        </section>
-
-        <!-- 4. How It Works Section -->
-        <section :class="{ 'animate-fade-in-up delay-400': isMounted }">
-          <HowItWorksSection />
-        </section>
-
-        <!-- 5. Use Cases Section -->
-        <section :class="{ 'animate-fade-in-up delay-500': isMounted }">
-          <UseCasesSection />
-        </section>
-
-        <!-- 6. Features Section -->
-        <section :class="{ 'animate-fade-in-up delay-600': isMounted }">
-          <NewFeaturesSection />
-        </section>
-
-        <!-- 7. Pricing Section -->
-        <section :class="{ 'animate-fade-in-up delay-700': isMounted }">
-          <NewPricingSection />
-        </section>
-
-        <!-- 8. FAQ Section -->
-        <section :class="{ 'animate-fade-in-up delay-800': isMounted }">
-          <FAQSection />
-        </section>
-
-        <!-- 9. Final CTA Section -->
-        <section :class="{ 'animate-fade-in-up delay-900': isMounted }">
-          <FinalCTASection />
-        </section>
-
-        <!-- 10. Footer -->
-        <section :class="{ 'animate-fade-in-up delay-1000': isMounted }">
-          <Footer />
+          <IntegramFooter
+            copyright-text="ИНТЕГРАМ. Все права защищены."
+            :links="[
+              { label: 'Документация', url: '/docs', icon: 'pi pi-book', external: false },
+              { label: 'API', url: '/api', icon: 'pi pi-code', external: false },
+              { label: 'Поддержка', url: '/support', icon: 'pi pi-question-circle', external: false }
+            ]"
+          />
         </section>
       </main>
     </div>

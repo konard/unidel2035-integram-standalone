@@ -8,7 +8,7 @@ import fs from 'fs/promises'
 import path from 'path'
 
 const INTEGRAM_CONFIG = {
-  serverURL: 'https://dronedoc.ru',
+  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io',
   database: 'my',
   login: 'd',
   password: 'd',

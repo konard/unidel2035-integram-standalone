@@ -1,11 +1,11 @@
 #!/bin/bash
-# Скрипт автоматической настройки TLS/SSL для mail.drondoc.ru
-# Запускать с правами root на сервере mail.drondoc.ru
+# Скрипт автоматической настройки TLS/SSL для mail.example.integram.io
+# Запускать с правами root на сервере mail.example.integram.io
 # Версия: 1.0
 # Дата: 2025-12-15
 
-DOMAIN="mail.drondoc.ru"
-EMAIL="admin@drondoc.ru"
+DOMAIN="mail.example.integram.io"
+EMAIL="admin@example.integram.io"
 
 echo "╔════════════════════════════════════════════════════════╗"
 echo "║        Настройка TLS/SSL для ${DOMAIN}                ║"
@@ -220,7 +220,7 @@ echo "📝 Следующие шаги:"
 echo "════════════════════════════════════════════════════════"
 echo ""
 echo "1. Обновите backend конфигурацию (.env):"
-echo "   SMTP_HOST=mail.drondoc.ru"
+echo "   SMTP_HOST=mail.example.integram.io"
 echo "   SMTP_PORT=587"
 echo "   SMTP_SECURE=false  # false = STARTTLS, true = SSL/TLS"
 echo ""

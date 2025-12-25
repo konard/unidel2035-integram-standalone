@@ -1,98 +1,80 @@
 /**
  * useIntegramSession Composable
- * Provides reactive access to Integram session state and authentication
+ *
+ * Provides reactive access to Integram session state
+ * Manages authentication, database selection, and user information
  */
 
-import { ref, computed } from 'vue'
-import integramService from '@/services/integramService'
+import { ref, computed } from 'vue';
+import integramApiClient from '@/services/integramApiClient';
 
-// Reactive session state
-const sessionId = ref(null)
-const database = ref('')
-const serverURL = ref('')
-const userName = ref('')
-const userRole = ref('')
-const userId = ref(null)
-
-// Initialize from service
-function initSession() {
-  integramService.loadSession()
-  database.value = integramService.database
-  serverURL.value = integramService.serverURL
-  userName.value = integramService.userName
-  userRole.value = integramService.userRole
-  userId.value = integramService.userId
-  sessionId.value = integramService.authToken ? Date.now() : null
-}
-
-// Call init on module load
-initSession()
+const isAuthenticated = ref(false);
+const currentDatabase = ref(null);
+const userInfo = ref(null);
 
 export function useIntegramSession() {
-  const isAuthenticated = computed(() => {
-    return integramService.isAuthenticated()
-  })
-
-  const authenticate = (credentials) => {
-    // Set session data
-    if (credentials.token) {
-      integramService.authToken = credentials.token
+  /**
+   * Initialize session from stored credentials
+   */
+  function initializeSession() {
+    const restored = integramApiClient.tryRestoreSession();
+    if (restored) {
+      isAuthenticated.value = integramApiClient.isAuthenticated();
+      currentDatabase.value = integramApiClient.getDatabase();
+      userInfo.value = integramApiClient.getAuthInfo();
     }
-    if (credentials.xsrf) {
-      integramService.xsrfToken = credentials.xsrf
-    }
-    if (credentials.database) {
-      integramService.database = credentials.database
-      database.value = credentials.database
-    }
-    if (credentials.serverURL) {
-      integramService.setServer(credentials.serverURL)
-      serverURL.value = credentials.serverURL
-    }
-    if (credentials.userName) {
-      integramService.userName = credentials.userName
-      userName.value = credentials.userName
-    }
-    if (credentials.userRole) {
-      integramService.userRole = credentials.userRole
-      userRole.value = credentials.userRole
-    }
-    if (credentials.userId) {
-      integramService.userId = credentials.userId
-      userId.value = credentials.userId
-    }
-
-    integramService.saveSession()
-    sessionId.value = Date.now()
   }
 
-  const logout = () => {
-    integramService.clearSession()
-    database.value = ''
-    serverURL.value = ''
-    userName.value = ''
-    userRole.value = ''
-    userId.value = null
-    sessionId.value = null
+  /**
+   * Login with credentials
+   */
+  async function login(serverURL, database, username, password) {
+    try {
+      await integramApiClient.authenticate(serverURL, database, username, password);
+      isAuthenticated.value = true;
+      currentDatabase.value = database;
+      userInfo.value = integramApiClient.getAuthInfo();
+      integramApiClient.saveSession();
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   }
 
-  const refreshSession = () => {
-    initSession()
+  /**
+   * Logout and clear session
+   */
+  async function logout() {
+    await integramApiClient.logout();
+    isAuthenticated.value = false;
+    currentDatabase.value = null;
+    userInfo.value = null;
+    localStorage.removeItem('integram_session');
+  }
+
+  /**
+   * Switch to a different database
+   */
+  function switchDatabase(databaseName) {
+    integramApiClient.switchDatabase(databaseName);
+    currentDatabase.value = databaseName;
+    userInfo.value = integramApiClient.getAuthInfo();
+  }
+
+  // Initialize on first use
+  if (!isAuthenticated.value) {
+    initializeSession();
   }
 
   return {
-    // State
-    isAuthenticated,
-    database: computed(() => database.value),
-    serverURL: computed(() => serverURL.value),
-    userName: computed(() => userName.value),
-    userRole: computed(() => userRole.value),
-    userId: computed(() => userId.value),
-    sessionId: computed(() => sessionId.value),
-
-    // Methods
-    authenticate,
+    isAuthenticated: computed(() => isAuthenticated.value),
+    currentDatabase: computed(() => currentDatabase.value),
+    userInfo: computed(() => userInfo.value),
+    login,
     logout,
-    refreshSession
-  }
+    switchDatabase,
+    initializeSession
+  };
 }
+
+export default useIntegramSession;

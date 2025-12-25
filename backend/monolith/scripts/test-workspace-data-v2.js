@@ -15,7 +15,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SERVER_URL = 'https://dronedoc.ru';
+const SERVER_URL = process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io';
 const DATABASE = 'my';
 const LOGIN = 'd';
 const PASSWORD = 'd';

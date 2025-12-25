@@ -1,10 +1,10 @@
-// drondoc-agents-integram.js - Integram integration for DronDoc Agents
+// integram-agents.js - Integram integration for Integram Agents
 // Provides persistent storage for agent instances using Integram database
 
 import express from 'express'
 import logger from '../../utils/logger.js'
 
-export function createDronDocAgentsIntegramRoutes() {
+export function createIntegramAgentsIntegramRoutes() {
   const router = express.Router()
 
   // Import integraMCPClient dynamically to avoid circular dependencies
@@ -33,7 +33,7 @@ export function createDronDocAgentsIntegramRoutes() {
         })
       }
 
-      logger.info('[DronDoc Agents Integram] Saving agent to Integram', {
+      logger.info('[Integram Agents Integram] Saving agent to Integram', {
         instanceName: instance.instanceName,
         agentId: instance.agentId,
         database
@@ -43,7 +43,7 @@ export function createDronDocAgentsIntegramRoutes() {
 
       // Authenticate with Integram
       const authResult = await integram.authenticate({
-        serverUrl: serverUrl || 'https://dronedoc.ru',
+        serverUrl: serverUrl || 'https://example.integram.io',
         database: database || 'my',
         login: 'd',  // System user
         password: 'd'
@@ -53,8 +53,8 @@ export function createDronDocAgentsIntegramRoutes() {
         throw new Error(`Integram authentication failed: ${authResult.error}`)
       }
 
-      // DronDoc Agents table created via Integram MCP
-      const TYPE_ID = 217788 // DronDoc Agents table
+      // Integram Agents table created via Integram MCP
+      const TYPE_ID = 217788 // Integram Agents table
 
       // Requisite IDs for the table fields
       const REQUISITES = {
@@ -107,7 +107,7 @@ export function createDronDocAgentsIntegramRoutes() {
         throw new Error(`Failed to create object in Integram: ${createResult.error}`)
       }
 
-      logger.info('[DronDoc Agents Integram] Successfully saved agent', {
+      logger.info('[Integram Agents Integram] Successfully saved agent', {
         integramId: createResult.id,
         instanceName: agentData.instanceName
       })
@@ -122,7 +122,7 @@ export function createDronDocAgentsIntegramRoutes() {
         }
       })
     } catch (error) {
-      logger.error('[DronDoc Agents Integram] Save failed:', error)
+      logger.error('[Integram Agents Integram] Save failed:', error)
       res.status(500).json({
         success: false,
         error: error.message
@@ -138,7 +138,7 @@ export function createDronDocAgentsIntegramRoutes() {
     try {
       const { serverUrl, database, userId, organizationId, status } = req.query
 
-      logger.info('[DronDoc Agents Integram] Loading agents from Integram', {
+      logger.info('[Integram Agents Integram] Loading agents from Integram', {
         database,
         userId,
         organizationId
@@ -148,7 +148,7 @@ export function createDronDocAgentsIntegramRoutes() {
 
       // Authenticate
       const authResult = await integram.authenticate({
-        serverUrl: serverUrl || 'https://dronedoc.ru',
+        serverUrl: serverUrl || 'https://example.integram.io',
         database: database || 'my',
         login: 'd',
         password: 'd'
@@ -158,7 +158,7 @@ export function createDronDocAgentsIntegramRoutes() {
         throw new Error(`Integram authentication failed: ${authResult.error}`)
       }
 
-      const TYPE_ID = 217788 // DronDoc Agents table
+      const TYPE_ID = 217788 // Integram Agents table
 
       // Requisite IDs
       const REQUISITES = {
@@ -218,7 +218,7 @@ export function createDronDocAgentsIntegramRoutes() {
         filteredAgents = filteredAgents.filter(a => a.status === status)
       }
 
-      logger.info('[DronDoc Agents Integram] Loaded agents', {
+      logger.info('[Integram Agents Integram] Loaded agents', {
         total: agents.length,
         filtered: filteredAgents.length
       })
@@ -228,7 +228,7 @@ export function createDronDocAgentsIntegramRoutes() {
         data: filteredAgents
       })
     } catch (error) {
-      logger.error('[DronDoc Agents Integram] Load failed:', error)
+      logger.error('[Integram Agents Integram] Load failed:', error)
       res.status(500).json({
         success: false,
         error: error.message
@@ -245,7 +245,7 @@ export function createDronDocAgentsIntegramRoutes() {
       const { id } = req.params
       const { updates, serverUrl, database } = req.body
 
-      logger.info('[DronDoc Agents Integram] Updating agent', {
+      logger.info('[Integram Agents Integram] Updating agent', {
         integramId: id,
         updates: Object.keys(updates)
       })
@@ -254,7 +254,7 @@ export function createDronDocAgentsIntegramRoutes() {
 
       // Authenticate
       const authResult = await integram.authenticate({
-        serverUrl: serverUrl || 'https://dronedoc.ru',
+        serverUrl: serverUrl || 'https://example.integram.io',
         database: database || 'my',
         login: 'd',
         password: 'd'
@@ -292,7 +292,7 @@ export function createDronDocAgentsIntegramRoutes() {
         throw new Error(`Failed to update object in Integram: ${updateResult.error}`)
       }
 
-      logger.info('[DronDoc Agents Integram] Successfully updated agent', {
+      logger.info('[Integram Agents Integram] Successfully updated agent', {
         integramId: id
       })
 
@@ -304,7 +304,7 @@ export function createDronDocAgentsIntegramRoutes() {
         }
       })
     } catch (error) {
-      logger.error('[DronDoc Agents Integram] Update failed:', error)
+      logger.error('[Integram Agents Integram] Update failed:', error)
       res.status(500).json({
         success: false,
         error: error.message
@@ -321,7 +321,7 @@ export function createDronDocAgentsIntegramRoutes() {
       const { id } = req.params
       const { serverUrl, database } = req.query
 
-      logger.info('[DronDoc Agents Integram] Deleting agent', {
+      logger.info('[Integram Agents Integram] Deleting agent', {
         integramId: id
       })
 
@@ -329,7 +329,7 @@ export function createDronDocAgentsIntegramRoutes() {
 
       // Authenticate
       const authResult = await integram.authenticate({
-        serverUrl: serverUrl || 'https://dronedoc.ru',
+        serverUrl: serverUrl || 'https://example.integram.io',
         database: database || 'my',
         login: 'd',
         password: 'd'
@@ -348,7 +348,7 @@ export function createDronDocAgentsIntegramRoutes() {
         throw new Error(`Failed to delete object from Integram: ${deleteResult.error}`)
       }
 
-      logger.info('[DronDoc Agents Integram] Successfully deleted agent', {
+      logger.info('[Integram Agents Integram] Successfully deleted agent', {
         integramId: id
       })
 
@@ -360,7 +360,7 @@ export function createDronDocAgentsIntegramRoutes() {
         }
       })
     } catch (error) {
-      logger.error('[DronDoc Agents Integram] Delete failed:', error)
+      logger.error('[Integram Agents Integram] Delete failed:', error)
       res.status(500).json({
         success: false,
         error: error.message
@@ -371,4 +371,4 @@ export function createDronDocAgentsIntegramRoutes() {
   return router
 }
 
-export default createDronDocAgentsIntegramRoutes
+export default createIntegramAgentsIntegramRoutes

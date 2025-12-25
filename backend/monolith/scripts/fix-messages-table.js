@@ -8,7 +8,7 @@ import { IntegramClient } from '../src/services/integram/integram-client.js'
 async function fixMessagesTable() {
   console.log('[Fix Messages] Starting...')
 
-  const client = new IntegramClient('https://dronedoc.ru', 'my')
+  const client = new IntegramClient(process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io', 'my')
 
   // Authenticate
   await client.authenticate('d', 'd')

@@ -140,7 +140,7 @@ const photoUrl = computed(() => {
   const photoField = userRequisites.value.find(r => r.id === '38' || r.val === 'Photo')
   if (photoField && photoField.value) {
     // Integram photo URL format
-    const baseUrl = `https://dronedoc.ru/${database.value}/api`
+    const baseUrl = `${import.meta.env.VITE_INTEGRAM_URL}/${database.value}/api`
     return `${baseUrl}/file/${photoField.value}`
   }
   return null

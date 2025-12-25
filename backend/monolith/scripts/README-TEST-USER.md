@@ -162,7 +162,7 @@ Expected structure:
 Test the login endpoint directly:
 
 ```bash
-curl -X POST https://dev.drondoc.ru/api/user-sync/login \
+curl -X POST https://dev.example.integram.io/api/user-sync/login \
   -H "Content-Type: application/json" \
   -d '{
     "login": "d",
@@ -188,7 +188,7 @@ Expected response:
 #### Option C: Using Postman/Thunder Client
 
 - **Method**: POST
-- **URL**: `https://dev.drondoc.ru/api/user-sync/login`
+- **URL**: `https://dev.example.integram.io/api/user-sync/login`
 - **Headers**: `Content-Type: application/json`
 - **Body**:
   ```json
@@ -225,7 +225,7 @@ node backend/monolith/scripts/create-test-user.js
 **Solution**: Check that `VITE_ORCHESTRATOR_URL` is set correctly in `.env` files:
 ```env
 # .env.dev or .env.development
-VITE_ORCHESTRATOR_URL=https://dev.drondoc.ru
+VITE_ORCHESTRATOR_URL=https://dev.example.integram.io
 ```
 
 The authService will automatically append `/api` prefix.

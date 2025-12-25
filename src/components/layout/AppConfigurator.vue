@@ -360,7 +360,7 @@ applyTheme();
       </div>
 
       <div class="config-panel-colors">
-        <span class="config-panel-label">Цветной логотип DronDoc</span>
+        <span class="config-panel-label">Цветной логотип Integram</span>
         <div class="logo-color-grid">
           <button
             v-for="color of dynamicLogoColors"
