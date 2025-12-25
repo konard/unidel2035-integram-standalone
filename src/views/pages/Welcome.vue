@@ -17,16 +17,185 @@
 
       <div class="editor-subtitle">
         <p contenteditable="false" class="value-proposition">
-          Цифровые бизнес-процессы "под ключ". Автоматизируйте рутину без найма и аутстаффа.
+          ИНТЕГРАМ — это безопасное и удобное управление данными.
         </p>
         <p contenteditable="false" class="value-subtext">
-          Не месяцы на разработку, а часы на настройку. Дешевле, чем один junior-специалист в штате.
+          Платформа устанавливается внутри вашей компании: автоматизируйте учёт, планирование и отчётность, не доверяя данные сторонним сервисам.
+        </p>
+        <p contenteditable="false" class="value-tagline">
+          100% ваши данные. Ваши серверы. Ваш контроль.
         </p>
       </div>
 
       <div class="editor-divider"></div>
 
-      <!-- 2. Ready Solutions Section -->
+      <!-- 2. Learning & Tutorials Section -->
+      <div class="editor-section">
+        <h2 class="section-heading">
+          <span class="heading-icon">🎓</span>
+          Обучение и быстрый старт
+        </h2>
+        <p class="section-subtitle">Освойте Integram за 7 дней с нашими интерактивными уроками</p>
+      </div>
+
+      <div class="lessons-container">
+        <Card class="lesson-card featured-lesson">
+          <template #content>
+            <div class="lesson-badge">Новичкам</div>
+            <div class="lesson-icon">🚀</div>
+            <h3 class="lesson-title">Быстрый старт - 15 минут</h3>
+            <p class="lesson-description">
+              Создайте свою первую базу данных и научитесь основам работы с Integram
+            </p>
+            <div class="lesson-steps">
+              <div class="lesson-step">✓ Создание базы данных</div>
+              <div class="lesson-step">✓ Первая таблица и данные</div>
+              <div class="lesson-step">✓ Простой запрос</div>
+            </div>
+            <Button
+              label="Начать быстрый старт"
+              icon="pi pi-play"
+              class="p-button-lg w-full mt-3"
+              @click="startQuickTutorial"
+            />
+          </template>
+        </Card>
+
+        <Card class="lesson-card">
+          <template #content>
+            <div class="lesson-badge">7 дней</div>
+            <div class="lesson-icon">📚</div>
+            <h3 class="lesson-title">Полный курс обучения</h3>
+            <p class="lesson-description">
+              Пройдите 7-дневный курс и станьте профессионалом в работе с Integram
+            </p>
+            <div class="lesson-progress">
+              <div class="progress-info">
+                <span>День 1: Основы</span>
+                <span class="progress-badge">Доступно</span>
+              </div>
+              <div class="progress-info">
+                <span>День 2: Структура данных</span>
+                <span class="progress-badge locked">Заблокировано</span>
+              </div>
+              <div class="progress-info">
+                <span>День 3: Запросы и отчёты</span>
+                <span class="progress-badge locked">Заблокировано</span>
+              </div>
+            </div>
+            <Button
+              label="Начать курс"
+              icon="pi pi-book"
+              class="p-button-lg p-button-outlined w-full mt-3"
+              @click="startFullCourse"
+            />
+          </template>
+        </Card>
+
+        <Card class="lesson-card">
+          <template #content>
+            <div class="lesson-badge">Интерактивно</div>
+            <div class="lesson-icon">🎯</div>
+            <h3 class="lesson-title">Видео-уроки</h3>
+            <p class="lesson-description">
+              Смотрите короткие видео-уроки по работе с ключевыми функциями платформы
+            </p>
+            <div class="video-list">
+              <div class="video-item">
+                <i class="pi pi-play-circle"></i>
+                <span>Создание таблиц (5:30)</span>
+              </div>
+              <div class="video-item">
+                <i class="pi pi-play-circle"></i>
+                <span>Работа с SQL (7:15)</span>
+              </div>
+              <div class="video-item">
+                <i class="pi pi-play-circle"></i>
+                <span>Отчёты и формы (6:45)</span>
+              </div>
+            </div>
+            <Button
+              label="Смотреть уроки"
+              icon="pi pi-video"
+              class="p-button-lg p-button-outlined w-full mt-3"
+              @click="openVideoLessons"
+            />
+          </template>
+        </Card>
+      </div>
+
+      <div class="editor-divider"></div>
+
+      <!-- 3. Invite Friends & Create Databases Section -->
+      <div class="editor-section">
+        <h2 class="section-heading">
+          <span class="heading-icon">🤝</span>
+          Растите вместе с друзьями
+        </h2>
+        <p class="section-subtitle">Пригласите коллег и создавайте новые базы данных для разных проектов</p>
+      </div>
+
+      <div class="collaboration-grid">
+        <Card class="collaboration-card invite-card">
+          <template #content>
+            <div class="collab-icon">👥</div>
+            <h3>Пригласить друзей</h3>
+            <p class="collab-description">
+              Работайте над проектами вместе с командой. Приглашайте коллег и делитесь базами данных.
+            </p>
+            <div class="invite-benefits">
+              <div class="benefit-item">
+                <i class="pi pi-check-circle"></i>
+                <span>Совместная работа над проектами</span>
+              </div>
+              <div class="benefit-item">
+                <i class="pi pi-check-circle"></i>
+                <span>Распределение ролей и прав доступа</span>
+              </div>
+              <div class="benefit-item">
+                <i class="pi pi-check-circle"></i>
+                <span>Общие базы знаний</span>
+              </div>
+            </div>
+            <Button
+              label="Пригласить друзей"
+              icon="pi pi-users"
+              class="p-button-lg p-button-success w-full mt-3"
+              @click="inviteFriends"
+            />
+          </template>
+        </Card>
+
+        <Card class="collaboration-card database-card">
+          <template #content>
+            <div class="collab-icon">🗄️</div>
+            <h3>Создать новую базу данных</h3>
+            <p class="collab-description">
+              Бесплатный тариф позволяет создать до 3 баз данных. Каждая для своего проекта или команды.
+            </p>
+            <div class="database-stats">
+              <div class="stat-box">
+                <div class="stat-number">0/3</div>
+                <div class="stat-label">Созданных БД</div>
+              </div>
+              <div class="stat-box">
+                <div class="stat-number">500M</div>
+                <div class="stat-label">Записей на БД</div>
+              </div>
+            </div>
+            <Button
+              label="Создать базу данных"
+              icon="pi pi-database"
+              class="p-button-lg p-button-primary w-full mt-3"
+              @click="createNewDatabase"
+            />
+          </template>
+        </Card>
+      </div>
+
+      <div class="editor-divider"></div>
+
+      <!-- 4. Ready Solutions Section -->
       <div class="editor-section">
         <h2 class="section-heading">
           <span class="heading-icon">💼</span>
@@ -1107,6 +1276,38 @@ function getRecommendedModules() {
     !role || module.roles.includes(role)
   ).slice(0, 3)
 }
+
+// New functions for Learning section
+function startQuickTutorial() {
+  onboardingStore.trackFeatureInteraction('quick_tutorial_started')
+  // TODO: Navigate to quick tutorial or show interactive guide
+  router.push('/tutorials/quick-start')
+}
+
+function startFullCourse() {
+  onboardingStore.trackFeatureInteraction('full_course_started')
+  // TODO: Navigate to 7-day course
+  router.push('/tutorials/7-day-course')
+}
+
+function openVideoLessons() {
+  onboardingStore.trackFeatureInteraction('video_lessons_opened')
+  // TODO: Navigate to video lessons page
+  router.push('/tutorials/videos')
+}
+
+// New functions for Invite Friends & Create Databases
+function inviteFriends() {
+  onboardingStore.trackFeatureInteraction('invite_friends_clicked')
+  // TODO: Show invite dialog with email/link sharing options
+  alert('Функция приглашения друзей в разработке. Вы можете поделиться ссылкой на регистрацию с коллегами через настройки профиля.')
+}
+
+function createNewDatabase() {
+  onboardingStore.trackFeatureInteraction('create_database_clicked')
+  // TODO: Navigate to database creation page or show dialog
+  router.push('/databases/create')
+}
 </script>
 
 <style scoped>
@@ -1994,6 +2195,233 @@ function getRecommendedModules() {
   margin-bottom: 1rem;
 }
 
+/* Value Tagline */
+.value-tagline {
+  font-size: 1.15rem !important;
+  font-weight: 600;
+  color: var(--primary-color) !important;
+  margin-top: 0.75rem !important;
+}
+
+/* Lessons Section */
+.lessons-container {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.lesson-card {
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid var(--surface-border);
+  position: relative;
+}
+
+.lesson-card:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  transform: translateY(-4px);
+}
+
+.lesson-card.featured-lesson {
+  border-color: var(--primary-color);
+  background: linear-gradient(135deg, var(--primary-50) 0%, var(--surface-0) 100%);
+}
+
+.lesson-badge {
+  position: absolute;
+  top: -12px;
+  right: 16px;
+  background: var(--primary-color);
+  color: white;
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.lesson-icon {
+  font-size: 3.5rem;
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.lesson-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-color);
+  margin: 0 0 0.75rem 0;
+  text-align: center;
+}
+
+.lesson-description {
+  font-size: 1rem;
+  color: var(--text-color-secondary);
+  line-height: 1.6;
+  margin-bottom: 1rem;
+  text-align: center;
+}
+
+.lesson-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: var(--surface-50);
+  border-radius: 8px;
+}
+
+.lesson-step {
+  font-size: 0.9rem;
+  color: var(--text-color);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lesson-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background: var(--surface-50);
+  border-radius: 6px;
+}
+
+.progress-badge {
+  font-size: 0.7rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 600;
+  background: var(--green-100);
+  color: var(--green-700);
+}
+
+.progress-badge.locked {
+  background: var(--surface-200);
+  color: var(--surface-600);
+}
+
+.video-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.video-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: var(--surface-50);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: var(--text-color);
+}
+
+.video-item i {
+  color: var(--primary-color);
+  font-size: 1.25rem;
+}
+
+/* Collaboration Section */
+.collaboration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.5rem;
+  margin: 1.5rem 0;
+}
+
+.collaboration-card {
+  cursor: pointer;
+  transition: all 0.3s ease;
+  border: 2px solid var(--surface-border);
+  text-align: center;
+}
+
+.collaboration-card:hover {
+  border-color: var(--primary-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  transform: translateY(-4px);
+}
+
+.collab-icon {
+  font-size: 4rem;
+  margin-bottom: 1rem;
+}
+
+.collaboration-card h3 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text-color);
+  margin: 0 0 0.75rem 0;
+}
+
+.collab-description {
+  font-size: 1rem;
+  color: var(--text-color-secondary);
+  line-height: 1.6;
+  margin-bottom: 1rem;
+}
+
+.invite-benefits {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  text-align: left;
+}
+
+.benefit-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.95rem;
+  color: var(--text-color);
+}
+
+.benefit-item i {
+  color: var(--green-500);
+  font-size: 1.25rem;
+}
+
+.database-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.stat-box {
+  padding: 1rem;
+  background: var(--surface-50);
+  border-radius: 8px;
+  border: 1px solid var(--surface-border);
+}
+
+.stat-number {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--primary-color);
+  margin-bottom: 0.25rem;
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--text-color-secondary);
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .editor-container {
@@ -2039,6 +2467,14 @@ function getRecommendedModules() {
 
   .progress-step {
     flex-direction: row;
+  }
+
+  .lessons-container {
+    grid-template-columns: 1fr;
+  }
+
+  .collaboration-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
