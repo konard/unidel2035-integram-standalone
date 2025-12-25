@@ -33,7 +33,7 @@ export const useAuthStore = defineStore('auth', () => {
   const primaryXsrf = ref(null)
   const primaryDatabase = ref('my') // Default database - unified auth entry point (issue #3691)
   // Issue #3924: Changed default from sim.sakhwings.ru to dronedoc.ru to avoid CORS errors
-  const primaryApiBase = ref('dronedoc.ru') // Default API base
+  const primaryApiBase = ref(window.location.hostname) // Default API base
 
   // ddadmin database authentication (for backward compatibility)
   const ddadminToken = ref(null)
@@ -67,7 +67,7 @@ export const useAuthStore = defineStore('auth', () => {
     primaryXsrf.value = localStorage.getItem('_xsrf')
     primaryDatabase.value = localStorage.getItem('db') || 'a2025'
     // Issue #3924: Changed default from sim.sakhwings.ru to dronedoc.ru to avoid CORS errors
-    primaryApiBase.value = localStorage.getItem('apiBase') || 'dronedoc.ru'
+    primaryApiBase.value = localStorage.getItem('apiBase') || window.location.hostname
 
     // Load ddadmin auth data from legacy localStorage
     ddadminToken.value = localStorage.getItem('ddadmin_token')
@@ -258,7 +258,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function login(
     loginName,
     password,
-    apiBase = 'dronedoc.ru',
+    apiBase = window.location.hostname,
     database = 'my',
   ) {
     isLoading.value = true

@@ -111,7 +111,7 @@ const userMenu = [
 const shouldShowBaseMenu = () => {
   try {
     const apiBase = localStorage.getItem('apiBase')
-    return !apiBase || apiBase === '' || apiBase === 'dronedoc.ru' || apiBase === 'localhost' || apiBase === 'app.integram.io'
+    return !apiBase || apiBase === '' || apiBase === window.location.hostname || apiBase === 'localhost' || apiBase === 'app.integram.io'
   } catch (error) {
     logger.error('Ошибка при чтении apiBase из localStorage:', error)
     return true // По умолчанию показываем baseMenu при ошибке
@@ -423,7 +423,7 @@ const handleAddChild = async (item) => {
 const loadSidebarMenuFromIntegram = async () => {
   try {
     // Получаем домен из localStorage (выбран при регистрации)
-    const apiBase = localStorage.getItem('apiBase') || 'dronedoc.ru'
+    const apiBase = localStorage.getItem('apiBase') || window.location.hostname
     const serverUrl = `https://${apiBase}`
 
     // Issue #3801: Use 'my' token for API access (works as master token for all databases)
@@ -671,7 +671,7 @@ const fetchMenuItems = async () => {
 
     // Issue #3793: Use my database token for a2025 access via API kernel
     // Issue #3811: Pass 'my' as authDatabase parameter to ensure 'my' header is used
-    const apiBase = localStorage.getItem('apiBase') || 'dronedoc.ru'
+    const apiBase = localStorage.getItem('apiBase') || window.location.hostname
 
     integramApiClient.setServer(`https://${apiBase}`)
     // Target database: a2025, but authenticated to: my

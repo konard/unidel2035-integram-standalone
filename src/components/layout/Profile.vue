@@ -182,7 +182,7 @@ const formatDate = dateValue => {
 const fetchUserData = async () => {
   try {
     const authDb = localStorage.getItem('db') || 'a2025'
-    const apiBase = localStorage.getItem('apiBase') || 'dronedoc.ru'
+    const apiBase = localStorage.getItem('apiBase') || window.location.hostname
     const token = localStorage.getItem('token')
 
     if (!token) {

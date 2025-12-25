@@ -21,7 +21,7 @@ try {
 const route = useRoute()
 const email = ref('')
 const password = ref('')
-const apiBase = ref('dronedoc.ru') // Значение по умолчанию
+const apiBase = ref(window.location.hostname) // Значение по умолчанию
 const showApiBaseInput = ref(false) // Флаг для отображения/скрытия поля API Base
 const database = ref('my') // Для хранения выбранной базы данных (DEFAULT: my)
 const isLoading = ref(false)
@@ -151,7 +151,7 @@ const handleSubmit = async () => {
     // Определяем apiBase и database
     // Issue #3806: Use apiBase.value which is loaded from localStorage or URL param,
     // not hardcoded 'dronedoc.ru' when input is hidden
-    const finalApiBase = apiBase.value || 'dronedoc.ru'
+    const finalApiBase = apiBase.value || window.location.hostname
     const finalDatabase = database.value || 'my' // DEFAULT: my
 
     // Use auth store for multi-database authentication
