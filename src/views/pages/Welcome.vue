@@ -827,7 +827,7 @@ const communityLinks = ref([
     description: 'Общайтесь с другими пользователями',
     icon: 'pi pi-send',
     members: '2,500+ участников',
-    url: 'https://t.me/drondoc'
+    url: 'https://t.me/integram'
   },
   {
     id: 'forum',

@@ -2,7 +2,7 @@
   "name": "dronedoc-monolith",
   "version": "1.0.0",
   "type": "module",
-  "description": "Monolithic backend for DronDoc - consolidates orchestrator, YouTube analytics, MCP server, and accounting services",
+  "description": "Monolithic backend for Integram - consolidates orchestrator, YouTube analytics, MCP server, and accounting services",
   "main": "src/index.js",
   "scripts": {
     "start": "node --max-old-space-size=2048 src/index.js",
@@ -122,6 +122,6 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "author": "DronDoc Team",
+  "author": "Integram Team",
   "license": "MIT"
 }

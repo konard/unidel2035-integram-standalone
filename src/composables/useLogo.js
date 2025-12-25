@@ -11,7 +11,7 @@ const presetLogos = [
   { name: 'gray', file: '/demo/images/dd8.svg', color: '#6b7280', label: 'Серый' }
 ]
 
-// Dynamic DronDoc logo colors (generated with SVG color)
+// Dynamic Integram logo colors (generated with SVG color)
 const dynamicLogoColors = [
   { name: 'cyan', color: '#06b6d4', label: 'Голубой' },
   { name: 'blue', color: '#3b82f6', label: 'Синий' },

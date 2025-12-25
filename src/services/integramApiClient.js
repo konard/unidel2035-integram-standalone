@@ -4,7 +4,7 @@
  * Issue #3554: Updated to use Unified Authentication Service
  *
  * This client communicates directly with the Integram API without using the backend/monolith proxy.
- * Based on the API documentation in backend/drondoc_integram/api.csv
+ * Based on the API documentation in backend/integram/api.csv
  *
  * API Structure:
  * - Base URL: {INTEGRAM_API_URL}/api/{database}/

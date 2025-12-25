@@ -32,7 +32,7 @@ const logoColor = computed(() => getCurrentColor.value || 'var(--primary-color)'
     class="preset-logo"
   />
 
-  <!-- Dynamic DronDoc Logo with color -->
+  <!-- Dynamic Integram Logo with color -->
   <svg
     v-else
     :width="width"
