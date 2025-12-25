@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  integram-app:
+    build: .
+    container_name: integram-standalone
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - INTEGRAM_URL=${INTEGRAM_URL:-https://dronedoc.ru}
+      - INTEGRAM_DEFAULT_DB=${INTEGRAM_DEFAULT_DB:-my}
+      - INTEGRAM_SYSTEM_USERNAME=${INTEGRAM_SYSTEM_USERNAME:-d}
+      - INTEGRAM_SYSTEM_PASSWORD=${INTEGRAM_SYSTEM_PASSWORD:-d}
+      - SESSION_SECRET=${SESSION_SECRET:-change-this-secret-in-production}
+      - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:5173}
+    volumes:
+      - ./backend/monolith/data:/app/backend/monolith/data
+      - ./backend/monolith/logs:/app/backend/monolith/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - integram-network
+
+networks:
+  integram-network:
+    driver: bridge
