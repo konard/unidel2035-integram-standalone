@@ -27,13 +27,13 @@ const logout = () => {
 
 // SEO Meta Tags using our custom composable
 const { setStructuredData } = useSEO({
-  title: 'ДронДок - Наймите ИИ агента вместо сотрудника за 10% стоимости',
-  description: 'Малый и средний бизнес (50-700 сотрудников) заменяет работников на ИИ агентов. Служба поддержки, отдел продаж, back-office - все функции автоматизированы. Экономия до 90% на зарплатах без найма, обучения и текучки кадров.',
-  keywords: 'замена сотрудников на ИИ, наем ИИ агентов, автоматизация персонала, ИИ для МСБ, экономия на зарплате, виртуальные сотрудники, автоматизация back-office, ИИ служба поддержки, ИИ отдел продаж, замена персонала',
-  url: 'https://drondoc.ru',
-  image: 'https://drondoc.ru/demo/images/prew.png',
+  title: 'ИНТЕГРАМ - безопасная и удобная платформа для управления данными',
+  description: 'Платформа для управления данными с удобным интерфейсом и высоким уровнем безопасности. Эффективное хранение, обработка и анализ данных для вашего бизнеса.',
+  keywords: 'управление данными, база данных, integram, интеграм, хранение данных, обработка данных, безопасность данных, платформа данных',
+  url: 'https://integram.ru',
+  image: 'https://integram.ru/demo/images/prew.png',
   type: 'website',
-  siteName: 'ДронДок',
+  siteName: 'ИНТЕГРАМ',
   locale: 'ru_RU',
   twitterCard: 'summary_large_image'
 })
@@ -45,8 +45,8 @@ onMounted(() => {
   setStructuredData({
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
-    'name': 'ДронДок',
-    'description': 'Платформа для найма ИИ агентов вместо сотрудников. Малый и средний бизнес (50-700 человек) заменяет персонал на автоматизированные функции: служба поддержки, отдел продаж, back-office. Экономия до 90% на зарплатах.',
+    'name': 'ИНТЕГРАМ',
+    'description': 'Безопасная и удобная платформа для управления данными с интуитивным интерфейсом. Эффективное хранение, обработка и анализ данных для вашего бизнеса.',
     'applicationCategory': 'BusinessApplication',
     'operatingSystem': 'Web',
     'offers': {
@@ -78,7 +78,7 @@ onMounted(() => {
               >
                 <LogoDisplay width="120" height="32" class="hidden sm:block" />
               </RouterLink>
-              <span class="text-xl font-bold text-surface-900 dark:text-surface-100 sm:hidden">ДронДок</span>
+              <span class="text-xl font-bold text-surface-900 dark:text-surface-100 sm:hidden">ИНТЕГРАМ</span>
             </div>
 
             <!-- Navigation Actions -->
