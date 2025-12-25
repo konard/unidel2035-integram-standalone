@@ -475,7 +475,7 @@ const loadSidebarMenuFromIntegram = async () => {
     integramApiClient.setCredentials('my', token, xsrf, 'my')
 
     // Загружаем данные из отчёта app_menu с параметром JSON_KV для получения данных по названиям полей
-    const response = await integramApiClient.get('my/report/app_menu', { JSON_KV: true })
+    const response = await integramApiClient.get('report/app_menu', { JSON_KV: true })
 
     logger.debug('Ответ от отчёта app_menu:', {
       hasResponse: !!response,
@@ -681,7 +681,7 @@ const fetchMenuItems = async () => {
     logger.debug('Using my token for a2025 database access (will use "my" header)')
 
     // Fetch report app_menu_doc from my database using integramApiClient
-    const response = await integramApiClient.get('my/report/app_menu_doc', { JSON_KV: true })
+    const response = await integramApiClient.get('report/app_menu_doc', { JSON_KV: true })
 
     logger.debug('Report app_menu_doc raw response:', {
       hasResponse: !!response,
