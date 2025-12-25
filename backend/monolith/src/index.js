@@ -464,10 +464,6 @@ class IntegramBackend {
     this.app.use('/api/chat', chatRoutes);
     console.log('✅ [MONOLITH] Unified Chat API registered at /api/chat (routes to all providers via coordinator)');
 
-    // General Chat API (Real-time messaging, NOT AI chat)
-    this.app.use('/api/general-chat', generalChatRoutes);
-    console.log('✅ [MONOLITH] General Chat API registered at /api/general-chat');
-
     // DEPRECATED: Direct provider endpoints - use /api/chat instead
     // this.app.use('/api/polza', createPolzaRoutes());
     // console.log('✅ [MONOLITH] Polza.ai integration routes registered at /api/polza');
