@@ -4,6 +4,7 @@
   "description": "Integram Standalone Application with Login, Welcome, and Chat",
   "type": "module",
   "scripts": {
+    "setup": "./setup.sh",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
