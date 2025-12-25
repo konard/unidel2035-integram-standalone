@@ -1,0 +1,35 @@
+:root[class*='app-dark'] {
+    --surface-ground: var(--p-surface-950);
+    --code-background: var(--p-surface-800);
+    --code-color: var(--p-surface-100);
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+    --card-hover-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+:root[class*='app-dark']{
+    --dima-body-background-color: #000;          /* инверсия #fff (белый → чёрный) */
+    --dima-font-color: #d6d4cf;                 /* инверсия яркости #292b30 (тёмно-серый → светло-серый) */
+    --dima-primary-color: #0a5f9e;              /* более тёмный синий (вместо #1283da) */
+    --dima-primary-light-color: #3a5a7e;        /* приглушённый голубой (вместо #93c5fd) */
+    --dima-selected-color: rgba(8, 58, 114, 0.5);   /* Исходный: rgba(147, 197, 253, 0.5) */
+    --dima-selected2-color: rgba(8, 58, 114, 0.5);  /* Исходный: rgba(147, 197, 253, 0.5) */
+    
+    --dima-secondary-color: #0a9e5f;            /* более тёмный зелёный (вместо #12da83) */
+    --dima-border-color: #111;                  /* инверсия #eee (светло-серый → тёмно-серый) */
+    --dima-border-color2: #222;                 /* инверсия #ddd (серый → тёмно-серый) */
+    --dima-background-color: #0f0f0f;           /* инверсия #f0f0f0 (светлый фон → тёмный) */
+    --dima-hover-background-color: #252525;      /* инверсия #dadada (серый → тёмный) */
+    --dima-counter-color: #aaa;                 /* инверсия #555 (тёмно-серый → светло-серый) */
+    --dima-even-row-bg: #060606;                /* инверсия #f9f9f9 (почти белый → почти чёрный) */
+    --dima-modal-bg: #000;                      /* инверсия white (белый → чёрный) */
+    --dima-modal-border: #333;                  /* инверсия #ccc (светло-серый → тёмно-серый) */
+    --dima-dropdown-text: #ccc;                 /* инверсия #333 (тёмно-серый → светло-серый) */
+    --dima-dropdown-item-text: #d6d4cf;         /* инверсия яркости #212529 (почти чёрный → светло-серый) */
+    --dima-dropdown-border: rgba(255, 255, 255, 0.15); /* инверсия rgba(0,0,0,0.15) (чёрный → белый с прозрачностью) */
+    --dima-delete-btn-bg: #a82c3a;              /* более тёмный красный (вместо #dc3545) */
+    --dima-delete-btn-hover: #8c1a27;           /* ещё темнее (вместо #c82333) */
+    --dima-active-column-bg: #1a1f24;           /* тёмный вместо #e0f0ff (голубоватый фон) */
+    --dima-active-cell-bg: #0f1318;             /* тёмный вместо #f0f8ff (голубоватый фон) */
+    --dima-context-menu-bg: #070608;            /* инверсия #f8f9fa (светлый → тёмный) */
+    --dima-highlight-color: #0038b4;            /* инверсия яркости #ffeb3b (жёлтый → тёмно-синий) */
+  }
+  

@@ -1,0 +1,36 @@
+:root {
+    --surface-ground: var(--p-surface-100);
+    --code-background: var(--p-surface-900);
+    --code-color: var(--p-surface-200);
+    --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    --card-hover-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+:root {
+	--dima-fixed-container-height: 0px;
+    --dima-body-background-color: #fff;
+    --dima-font-color: #292b30;
+    --dima-primary-color: #1283da;
+    --dima-primary-light-color: #93c5fd;
+    --dima-selected-color: rgba(147, 197, 253, 0.5);
+    --dima-selected2-color: rgba(147, 197, 253, 0.5);
+    --dima-secondary-color: #12da83;
+    --dima-border-color: #eee;
+    --dima-border-color2: #ddd;
+    --dima-background-color: #f0f0f0;
+    --dima-hover-background-color: #dadada;
+    --dima-table-padding: 12px 15px; /* будет игнорироваться, так как в CSS с переменными нельзя использовать отступы. Рассмотрите возможность использования переменных только для конкретных значений, если необходимо. */
+    --dima-counter-color: #555;
+    --dima-even-row-bg: #f9f9f9;
+    --dima-modal-bg: white;
+    --dima-modal-border: #ccc;
+    --dima-dropdown-text: #333;
+    --dima-dropdown-item-text: #212529;
+    --dima-dropdown-border: rgba(0, 0, 0, 0.15);
+    --dima-delete-btn-bg: #dc3545;
+    --dima-delete-btn-hover: #c82333;
+    --dima-active-column-bg: #e0f0ff;
+    --dima-active-cell-bg: #f0f8ff;
+    --dima-context-menu-bg: #f8f9fa;
+    --dima-highlight-color: #ffeb3b;
+    --dima-anim-speed: 0.2s; /* так же игнорируется, но можно задать как значение для анимации */
+  }

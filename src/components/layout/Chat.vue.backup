@@ -1,0 +1,3646 @@
+<template>
+  <div class="card layout-chat layout-menu chat-component" :style="{ width: chatWidth + 'px' }">
+    <div class="resize-handle" @mousedown="startResize"></div>
+    <div class="tabview-container">
+      <div class="expand-button-container">
+        <Button icon="pi pi-times" @click="closeChat" class="close-button p-button-text p-button-secondary"
+                title="Свернуть чат" data-testid="close-chat-button" data-action="close-chat" aria-label="Свернуть чат" />
+        <Button icon="pi pi-plus-circle" @click="createNewChatSession" class="p-button-text p-button-success"
+                title="Новый чат" data-testid="new-chat-button" data-action="new-chat" aria-label="Создать новый чат" />
+        <Button icon="pi pi-history" @click="showHistory = true" class="p-button-text" title="История чатов"
+                data-testid="history-button" data-action="open-history" aria-label="Открыть историю чатов" />
+        <Button icon="pi pi-window-maximize" @click="showModal" class="expand-button p-button-text"
+                title="Развернуть чат" data-testid="expand-chat-button" data-action="expand-chat" aria-label="Развернуть чат" />
+      </div>
+
+      <TabView v-model:activeIndex="activeTabIndex">
+        <TabPanel>
+          <template #header>
+            <span title="ИИ-ассистент">
+              <i class="pi pi-prime" />
+            </span>
+          </template>
+
+          <div class="chat-container" data-testid="ai-chat-container">
+            <div class="messages" ref="aiMessagesContainer" data-testid="messages-container">
+              <div v-for="(msg, index) in aiChat.messages" :key="index" class="message"
+                :class="{ 'user-message': msg.isUser }" data-testid="message-item" :data-message-id="index">
+                <div class="message-content" v-if="!isSystemMessage(msg)">
+                  <div v-if="msg.attachments && msg.attachments.length > 0" class="attachment-info">
+                    <div v-for="(attachment, attIndex) in msg.attachments" :key="attIndex" class="attachment-item">
+                      <img v-if="isImage(attachment)" :src="attachment.url" class="image-preview" 
+                           @click="showImagePreview(attachment.url)" />
+                      <i v-else :class="getAttachmentIcon(attachment)" class="attachment-icon" />
+                      <span class="attachment-name">{{ getAttachmentDisplayName(attachment) }}</span>
+                      <span v-if="attachment.source === 'file'" class="file-size">({{ formatFileSize(attachment.size) }})</span>
+                      <Button v-if="attachment.source === 'file'" icon="pi pi-download" class="p-button-text p-button-sm download-btn"
+                        @click="downloadAttachment(attachment)" />
+                    </div>
+                  </div>
+                  
+                  <div class="message-text">
+                    <MarkdownRender :content="msg.text" />
+                    <span v-if="aiLoading && msg === assistantMessage" class="streaming-cursor"></span>
+                  </div>
+                  <div class="message-actions">
+                    <div class="message-time">{{ msg.time }}</div>
+                    <div class="action-buttons">
+                      <Button v-if="!msg.isUser && isEditorPage" icon="pi pi-arrow-left" title="Перенести в редактор"
+                        class="transfer-button p-button-text p-button-sm" @click="transferToEditor(msg.text)"
+                        data-testid="transfer-to-editor-button" aria-label="Перенести в редактор" />
+                      <Button v-if="!msg.isUser" icon="pi pi-copy" title="Скопировать"
+                        class="copy-button p-button-text p-button-sm" @click="copyToClipboard(msg.text)"
+                        data-testid="copy-message-button" aria-label="Скопировать сообщение" />
+                      <Button icon="pi pi-refresh" title="Отправить снова"
+                        class="resend-button p-button-text p-button-sm" @click="resendMessage(index)"
+                        data-testid="resend-message-button" aria-label="Отправить сообщение снова" />
+                      <Button icon="pi pi-pencil" title="Редактировать"
+                        class="edit-button p-button-text p-button-sm" @click="editMessage(index)"
+                        data-testid="edit-message-button" aria-label="Редактировать сообщение" />
+                      <Button icon="pi pi-trash" title="Удалить"
+                        class="delete-button p-button-text p-button-sm p-button-danger" @click="deleteMessage(index)"
+                        data-testid="delete-message-button" aria-label="Удалить сообщение" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="aiLoading && !assistantMessage" class="loading-indicator">
+                <ProgressSpinner style="width: 30px; height: 30px" />
+              </div>
+
+              <div v-if="aiError" class="error-message">
+                {{ aiError }}
+              </div>
+            </div>
+
+            <div class="input-container">
+              <InputText v-model="aiMessage" placeholder="Задайте вопрос ИИ..." @keyup.enter="sendAiMessage"
+                class="input-field" :disabled="aiLoading" data-testid="message-input" aria-label="Поле ввода сообщения" />
+
+            </div>
+            <div><Button icon="pi pi-microphone" @click="toggleVoiceInput"
+                      :class="['p-button-text', 'voice-btn', { 'recording': isRecording }]"
+                      title="Голосовой ввод" data-testid="voice-input-button" aria-label="Голосовой ввод" />              <input type="file" ref="fileInput" style="display: none" @change="handleFileUpload"
+                     accept=".txt,.pdf,.doc,.docx,.xls,.xlsx,.json,.csv,image/*" multiple data-testid="file-input" />
+
+              <span style="float: right;">
+                              <Button icon="pi pi-paperclip" @click="attachmentMenu.toggle($event)" class="p-button-text attachment-btn" title="Прикрепить файл"
+                              data-testid="attach-file-button" aria-label="Прикрепить файл" />
+              <Popover ref="attachmentMenu">
+                <div class="attachment-menu">
+                  <Button label="С устройства" icon="pi pi-upload" @click="triggerFileUpload(); attachmentMenu.hide()" class="p-button-text w-full justify-start"
+                          data-testid="upload-from-device-button" />
+                  <Button label="Таблицы/отчёты" icon="pi pi-database" @click="showDataSelector = true; attachmentMenu.hide()" class="p-button-text w-full justify-start"
+                          data-testid="attach-data-button" />
+                </div>
+              </Popover><Button icon="pi pi-send" @click="sendAiMessage" severity="help" :disabled="aiLoading" class="send-btn" title="Отправить сообщение"
+                                data-testid="send-message-button" aria-label="Отправить сообщение"/></span></div>
+            <div v-if="uploadProgress > 0" class="upload-progress">
+              <ProgressBar :value="uploadProgress" :showValue="false" />
+              <span>Загрузка: {{ uploadProgress }}%</span>
+            </div>
+            
+            <div v-if="currentAttachments.length > 0" class="current-attachments">
+              <div v-for="(attachment, index) in currentAttachments" :key="index" class="current-attachment">
+                <div class="attachment-info current">
+                  <img v-if="isImage(attachment)" :src="attachment.url" class="image-preview-small" />
+                  <i v-else :class="getAttachmentIcon(attachment)" class="attachment-icon" />
+                  <span class="attachment-name">{{ getAttachmentDisplayName(attachment) }}</span>
+                  <span v-if="attachment.source === 'file'" class="file-size">({{ formatFileSize(attachment.size) }})</span>
+                  <Button icon="pi pi-times" class="p-button-text p-button-sm p-button-danger remove-btn"
+                    @click="removeCurrentAttachment(index)" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </TabPanel>
+
+        <TabPanel title="Общий чат">
+          <template #header>
+            <span title="Общий чат">
+              <i class="pi pi-users" />
+            </span>
+          </template>
+          <div class="chat-container">
+            <div class="messages" ref="messagesContainer">
+              <div v-for="(msg, index) in activeChat.messages" :key="index" class="message"
+                :class="{ 'user-message': msg.isUser }">
+                <Avatar v-if="!msg.isUser" icon="pi pi-user" shape="circle" />
+                <div class="message-content">
+                  <div v-if="msg.attachment || (msg.attachments && msg.attachments.length > 0)" class="attachment-info">
+                    <template v-if="msg.attachment">
+                      <img v-if="isImage(msg.attachment)" :src="msg.attachment.url" class="image-preview" 
+                           @click="showImagePreview(msg.attachment.url)" />
+                      <i v-else :class="getAttachmentIcon(msg.attachment)" class="attachment-icon" />
+                      <span class="attachment-name">{{ getAttachmentDisplayName(msg.attachment) }}</span>
+                      <span v-if="msg.attachment.source === 'file'" class="file-size">({{ formatFileSize(msg.attachment.size) }})</span>
+                      <Button v-if="msg.attachment.source === 'file'" icon="pi pi-download" class="p-button-text p-button-sm download-btn"
+                        @click="downloadAttachment(msg.attachment)" />
+                    </template>
+                    <template v-else-if="msg.attachments && msg.attachments.length > 0">
+                      <div v-for="(attachment, attIndex) in msg.attachments" :key="attIndex" class="attachment-item">
+                        <img v-if="isImage(attachment)" :src="attachment.url" class="image-preview" 
+                             @click="showImagePreview(attachment.url)" />
+                        <i v-else :class="getAttachmentIcon(attachment)" class="attachment-icon" />
+                        <span class="attachment-name">{{ getAttachmentDisplayName(attachment) }}</span>
+                        <span v-if="attachment.source === 'file'" class="file-size">({{ formatFileSize(attachment.size) }})</span>
+                        <Button v-if="attachment.source === 'file'" icon="pi pi-download" class="p-button-text p-button-sm download-btn"
+                          @click="downloadAttachment(attachment)" />
+                      </div>
+                    </template>
+                  </div>
+                  
+                  <div class="message-text">{{ msg.text }}</div>
+                  <div class="message-time">{{ msg.time }}</div>
+                </div>
+                <Avatar v-if="msg.isUser" icon="pi pi-user" shape="circle" />
+              </div>
+            </div>
+            <div class="input-container">
+              <InputText v-model="newMessage" placeholder="Напишите ваше сообщение..." @keyup.enter="sendMessage"
+                class="input-field" />
+              <input type="file" ref="fileInputGeneral" style="display: none" @change="handleFileUploadGeneral" 
+                     accept="*" multiple />
+              <Button icon="pi pi-paperclip" @click="attachmentMenuGeneral.toggle($event)" class="p-button-text attachment-btn" title="Прикрепить файл" />
+              <Popover ref="attachmentMenuGeneral">
+                <div class="attachment-menu">
+                  <Button label="С устройства" icon="pi pi-upload" @click="triggerFileUploadGeneral(); attachmentMenuGeneral.hide()" class="p-button-text w-full justify-start" />
+                  <Button label="Таблицы/отчёты" icon="pi pi-database" @click="showDataSelector = true; attachmentMenuGeneral.hide()" class="p-button-text w-full justify-start" />
+                </div>
+              </Popover>
+              <Button icon="pi pi-send" @click="sendMessage" severity="info" class="send-btn" title="Отправить сообщение"/>
+            </div>
+          </div>
+        </TabPanel>
+
+        <TabPanel>
+          <template #header>
+            <span title="Polza.ai Агенты">
+              <i class="pi pi-robot" />
+            </span>
+          </template>
+          <div class="chat-container">
+            <div class="polza-agents-info">
+              <h3>🤖 Polza.ai Агенты</h3>
+              <p>Доступны следующие типы агентов:</p>
+              <ul>
+                <li><strong>Аналитик</strong> - анализ данных и паттернов</li>
+                <li><strong>Репортер</strong> - создание отчетов и документации</li>
+                <li><strong>Валидатор</strong> - проверка данных и контроль качества</li>
+                <li><strong>Интегратор</strong> - интеграция с внешними системами</li>
+                <li><strong>Универсальный</strong> - общие задачи и помощь</li>
+              </ul>
+              <p><em>Используйте основной чат для работы с агентами.</em></p>
+            </div>
+          </div>
+        </TabPanel>
+      </TabView>
+    </div>
+
+    <Dialog v-model:visible="isModalVisible" modal :closable="true"
+      :style="{ width: '100vw', height: '100vh', maxWidth: '100vw', maxHeight: '100vh' }" :contentStyle="{
+        padding: '0',
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+      }" :modal="true" @hide="hideModal" :dismissableMask="false">
+      <template #header>
+        <div class="flex align-items-center gap-2"><span class="font-bold white-space-nowrap">
+          <i :class="activeTabIndex === 0 ? 'pi pi-prime' : 'pi pi-users'" />
+            {{ activeTabIndex === 0 ? 'ИИ-ассистент' : 'Общий чат' }}
+          <Button icon="pi pi-trash" @click="clearCurrentChat" class="p-button-text p-button-danger ml-auto"
+                  title="Очистить чат" />
+          <Button icon="pi pi-times" @click="hideModal" class="p-button-text p-button-sm"
+                  title="Закрыть окно чата" style="margin-left: 0.5rem;" /></span>
+        </div>
+      </template>
+
+      <div class="modal-chat-container">
+        <div class="modal-messages" ref="modalMessagesContainer">
+          <div v-for="(msg, index) in activeTabIndex === 0
+            ? aiChat.messages
+            : activeChat.messages" :key="index" class="modal-message" :class="{ 'modal-user-message': msg.isUser }">
+            <Avatar v-if="!msg.isUser" :icon="activeTabIndex === 0 ? 'pi pi-prime' : 'pi pi-user'" shape="circle"
+              size="normal" class="mr-2" />
+            <div class="modal-message-content" v-if="!isSystemMessage(msg)">
+              <div v-if="msg.attachment || (msg.attachments && msg.attachments.length > 0)" class="modal-attachment-info">
+                <template v-if="msg.attachment">
+                  <img v-if="isImage(msg.attachment)" :src="msg.attachment.url" class="image-preview" 
+                       @click="showImagePreview(msg.attachment.url)" />
+                  <i v-else :class="getAttachmentIcon(msg.attachment)" class="attachment-icon" />
+                  <span class="attachment-name">{{ getAttachmentDisplayName(msg.attachment) }}</span>
+                  <span v-if="msg.attachment.source === 'file'" class="file-size">({{ formatFileSize(msg.attachment.size) }})</span>
+                  <Button v-if="msg.attachment.source === 'file'" icon="pi pi-download" class="p-button-text p-button-sm download-btn"
+                    @click="downloadAttachment(msg.attachment)" />
+                </template>
+                <template v-else-if="msg.attachments && msg.attachments.length > 0">
+                  <div v-for="(attachment, attIndex) in msg.attachments" :key="attIndex" class="attachment-item">
+                    <img v-if="isImage(attachment)" :src="attachment.url" class="image-preview" 
+                         @click="showImagePreview(attachment.url)" />
+                    <i v-else :class="getAttachmentIcon(attachment)" class="attachment-icon" />
+                    <span class="attachment-name">{{ getAttachmentDisplayName(attachment) }}</span>
+                    <span v-if="attachment.source === 'file'" class="file-size">({{ formatFileSize(attachment.size) }})</span>
+                    <Button v-if="attachment.source === 'file'" icon="pi pi-download" class="p-button-text p-button-sm download-btn"
+                      @click="downloadAttachment(attachment)" />
+                  </div>
+                </template>
+              </div>
+              
+              <div class="modal-message-text">
+                <MarkdownRender v-if="activeTabIndex === 0" :content="msg.text" />
+                <template v-else>{{ msg.text }}</template>
+                <span v-if="
+                  aiLoading &&
+                  msg === assistantMessage &&
+                  activeTabIndex === 0
+                " class="streaming-cursor"></span>
+              </div>
+              <div class="modal-message-actions">
+                <div class="modal-message-time">{{ msg.time }}</div>
+                <div class="modal-action-buttons">
+                  <Button v-if="activeTabIndex === 0 && !msg.isUser" icon="pi pi-copy" title="Скопировать"
+                    class="copy-button p-button-text p-button-sm" @click="copyToClipboard(msg.text)" />
+                  <Button v-if="activeTabIndex === 0" icon="pi pi-refresh" title="Отправить снова"
+                    class="resend-button p-button-text p-button-sm" @click="resendMessage(index)"
+                    data-testid="resend-message-button-modal" aria-label="Отправить сообщение снова" />
+                  <Button v-if="activeTabIndex === 0" icon="pi pi-pencil" title="Редактировать"
+                    class="edit-button p-button-text p-button-sm" @click="editMessage(index)"
+                    data-testid="edit-message-button-modal" aria-label="Редактировать сообщение" />
+                  <Button v-if="activeTabIndex === 0" icon="pi pi-trash" title="Удалить"
+                    class="delete-button p-button-text p-button-sm p-button-danger" @click="deleteMessage(index)"
+                    data-testid="delete-message-button-modal" aria-label="Удалить сообщение" />
+                </div>
+              </div>
+            </div>
+            <Avatar v-if="msg.isUser && !isSystemMessage(msg)" icon="pi pi-user" shape="circle" size="normal" class="ml-2" />
+          </div>
+
+          <div v-if="aiLoading && !assistantMessage && activeTabIndex === 0" class="modal-loading-indicator">
+            <ProgressSpinner style="width: 30px; height: 30px" />
+          </div>
+
+          <div v-if="aiError && activeTabIndex === 0" class="modal-error-message">
+            {{ aiError }}
+          </div>
+        </div>
+        <div class="modal-controls">
+          <div class="model-selector-row" v-if="activeTabIndex === 0">
+            <ModelSelector
+              application="Chat"
+              :access-token="userAccessToken"
+              :show-header="true"
+              :show-token-info="false"
+              :show-settings="false"
+              @model-change="handleModelChange"
+            />
+            <Button icon="pi pi-cog" @click="showSettings = true" class="p-button-text settings-btn"
+                    title="Настройки модели" />
+            <Button icon="pi pi-wrench" @click="showTools = true" class="p-button-text tools-btn"
+                    title="Инструменты" />
+          </div>
+
+          <div class="workspace-selector-row" v-if="activeTabIndex === 0 && agentMode">
+            <label>Workspace:</label>
+            <Dropdown v-model="selectedWorkspace" :options="workspaces" optionLabel="name" optionValue="id"
+              placeholder="Выберите workspace" class="workspace-dropdown" :filter="true" :loading="loadingWorkspaces">
+              <template #value="slotProps">
+                <div v-if="slotProps.value" class="workspace-option">
+                  <i class="pi pi-folder"></i>
+                  <span>{{ getWorkspaceName(slotProps.value) }}</span>
+                </div>
+                <span v-else>{{ slotProps.placeholder }}</span>
+              </template>
+              <template #option="slotProps">
+                <div class="workspace-option">
+                  <i class="pi pi-folder"></i>
+                  <span>{{ slotProps.option.name }}</span>
+                </div>
+              </template>
+            </Dropdown>
+            <Button icon="pi pi-plus" @click="showCreateWorkspaceDialog = true" class="p-button-text"
+                    title="Создать workspace" />
+            <Button icon="pi pi-refresh" @click="loadWorkspaces" :loading="loadingWorkspaces" class="p-button-text"
+                    title="Обновить список" />
+          </div>
+
+          <div class="modal-input-container">
+            <Button icon="pi pi-microphone" @click="toggleVoiceInput"
+                    :class="['p-button-text', 'voice-btn', { 'recording': isRecording }]"
+                    title="Голосовой ввод" />
+            <InputText v-if="activeTabIndex === 0" v-model="aiMessage" placeholder="Задайте вопрос ИИ..."
+              @keyup.enter="sendAiMessage" class="modal-input-field" :disabled="aiLoading" />
+            <InputText v-else v-model="newMessage" placeholder="Напишите ваше сообщение..." @keyup.enter="sendMessage"
+              class="modal-input-field" />
+            <input type="file" ref="modalFileInput" style="display: none" @change="handleModalFileUpload"
+                   accept=".txt,.pdf,.doc,.docx,.xls,.xlsx,.json,.csv,image/*" multiple />
+            <Button icon="pi pi-paperclip" @click="modalAttachmentMenu.toggle($event)" class="p-button-text attachment-btn" title="Прикрепить файл" />
+            <Popover ref="modalAttachmentMenu">
+              <div class="attachment-menu">
+                <Button label="С устройства" icon="pi pi-upload" @click="triggerModalFileUpload(); modalAttachmentMenu.hide()" class="p-button-text w-full justify-start" />
+                <Button label="Таблицы/отчёты" icon="pi pi-database" @click="showDataSelector = true; modalAttachmentMenu.hide()" class="p-button-text w-full justify-start" />
+              </div>
+            </Popover>
+            <Button icon="pi pi-send" @click="activeTabIndex === 0 ? sendAiMessage() : sendMessage()"
+              :severity="activeTabIndex === 0 ? 'help' : 'info'" :disabled="aiLoading && activeTabIndex === 0" class="send-btn" />
+          </div>
+        </div>
+        
+        <div v-if="currentAttachments.length > 0 && activeTabIndex === 0" class="current-attachments">
+          <div v-for="(attachment, index) in currentAttachments" :key="index" class="current-attachment">
+            <div class="modal-attachment-info current">
+              <img v-if="isImage(attachment)" :src="attachment.url" class="image-preview-small" />
+              <i v-else :class="getAttachmentIcon(attachment)" class="attachment-icon" />
+              <span class="attachment-name">{{ getAttachmentDisplayName(attachment) }}</span>
+              <span v-if="attachment.source === 'file'" class="file-size">({{ formatFileSize(attachment.size) }})</span>
+              <Button icon="pi pi-times" class="p-button-text p-button-sm p-button-danger remove-btn"
+                @click="removeCurrentAttachment(index)" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </Dialog>
+
+    <Dialog v-model:visible="showHistory" modal header="История чатов" :style="{ width: '600px' }" data-testid="history-dialog">
+      <div class="history-dialog">
+        <div v-if="loadingHistory" class="text-center py-3" data-testid="history-loading">
+          <ProgressSpinner style="width: 40px; height: 40px" />
+          <p class="mt-2">Загрузка истории...</p>
+        </div>
+
+        <div v-else-if="sessionHistory.length === 0" class="text-center py-3" data-testid="history-empty">
+          <i class="pi pi-inbox" style="font-size: 3rem; color: var(--surface-400)"></i>
+          <p class="mt-2">Нет сохранённых сессий</p>
+        </div>
+
+        <div v-else class="chat-list" data-testid="session-list">
+          <div v-for="session in sessionHistory" :key="session.id" class="chat-item" data-testid="session-item" :data-session-id="session.id">
+            <div class="chat-info">
+              <strong>{{ formatSessionName(session) }}</strong>
+              <small class="text-muted">{{ formatDateTime(session.lastActivity || session.created) }}</small>
+            </div>
+            <div class="chat-actions">
+              <Button icon="pi pi-folder-open" title="Загрузить" @click="loadSession(session)" class="p-button-text p-button-sm"
+                      data-testid="load-session-button" aria-label="Загрузить сессию" />
+              <Button icon="pi pi-trash" title="Удалить" @click="deleteSession(session.id)" class="p-button-text p-button-sm p-button-danger"
+                      data-testid="delete-session-button" aria-label="Удалить сессию" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </Dialog>
+
+    <Dialog v-model:visible="showEditMessageDialog" modal header="Редактировать сообщение" :style="{ width: '500px' }" data-testid="edit-message-dialog">
+      <div class="edit-message-dialog">
+        <Textarea v-model="editingMessageText" rows="10" class="w-full" autoResize data-testid="edit-message-textarea" aria-label="Текст сообщения" />
+      </div>
+      <template #footer>
+        <Button label="Отмена" icon="pi pi-times" @click="cancelEditMessage" class="p-button-text"
+                data-testid="cancel-edit-button" aria-label="Отменить редактирование" />
+        <Button label="Сохранить" icon="pi pi-check" @click="saveEditedMessage" severity="success"
+                data-testid="save-edit-button" aria-label="Сохранить изменения" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="showDataSelector" modal header="Прикрепить данные" :style="{ width: '500px' }">
+      <div class="data-selector-dialog">
+        <div class="field">
+          <label>Тип вложения</label>
+          <Dropdown v-model="selectedDataType" :options="dataTypes" optionLabel="label"
+            placeholder="Выберите тип вложения" class="w-full" />
+        </div>
+
+        <div class="field" v-if="selectedDataType">
+          <label>{{ selectedDataType.label }}</label>
+          <Dropdown v-model="selectedDataItem" :options="dataItems"
+            :optionLabel="item => item.name || item.value || item.id" placeholder="Выберите элемент" class="w-full"
+            :loading="loadingDataItems" />
+        </div>
+
+        <div class="field" v-if="selectedDataItem">
+          <label>Комментарий к данным</label>
+          <InputText v-model="dataComment" placeholder="Добавьте комментарий..." class="w-full" />
+        </div>
+      </div>
+
+      <template #footer>
+        <Button label="Отмена" icon="pi pi-times" @click="showDataSelector = false" class="p-button-text" />
+        <Button label="Прикрепить" icon="pi pi-paperclip" @click="attachData" :disabled="!selectedDataItem"
+          severity="success" />
+      </template>
+    </Dialog>
+
+    <Dialog v-model:visible="showImageDialog" modal header="Просмотр изображения" :style="{ width: 'auto' }">
+      <img :src="currentImage" class="preview-image" />
+    </Dialog>
+
+    <!-- Settings Dialog -->
+    <Dialog v-model:visible="showSettings" modal header="Настройки модели" :style="{ width: '600px', maxHeight: '80vh' }">
+      <div class="settings-dialog">
+        <div class="field">
+          <label>Context Size (Размер контекста)</label>
+          <InputNumber v-model="llmSettings.contextSize" :min="0" :max="32768" :step="512" class="w-full" />
+          <small>Размер контекста промпта (0 = загружается из модели). По умолчанию: 8192</small>
+        </div>
+
+        <div class="field">
+          <label>GPU Layers (Слои GPU)</label>
+          <InputNumber v-model="llmSettings.gpuLayers" :min="-1" :max="200" class="w-full" />
+          <small>Количество слоев модели для выгрузки на GPU (-1 для всех слоев, 0 для CPU). По умолчанию: 100</small>
+        </div>
+
+        <div class="field">
+          <label>Temperature (Температура): {{ llmSettings.temperature }}</label>
+          <Slider v-model="llmSettings.temperature" :min="0" :max="2" :step="0.1" class="w-full" />
+          <small>Температура для сэмплирования (выше = более случайно). По умолчанию: 0.6</small>
+        </div>
+
+        <div class="field">
+          <label>Top K: {{ llmSettings.topK }}</label>
+          <Slider v-model="llmSettings.topK" :min="0" :max="100" :step="1" class="w-full" />
+          <small>Top-K сэмплирование (0 = отключено). По умолчанию: 40</small>
+        </div>
+
+        <div class="field">
+          <label>Top P: {{ llmSettings.topP }}</label>
+          <Slider v-model="llmSettings.topP" :min="0" :max="1" :step="0.05" class="w-full" />
+          <small>Top-P сэмплирование (1.0 = отключено). По умолчанию: 0.9</small>
+        </div>
+
+        <div class="field">
+          <label>Min P: {{ llmSettings.minP }}</label>
+          <Slider v-model="llmSettings.minP" :min="0" :max="1" :step="0.05" class="w-full" />
+          <small>Min-P сэмплирование (0.0 = отключено). По умолчанию: 0.1</small>
+        </div>
+
+        <div class="field">
+          <label>Repeat Last N (Повтор последних N)</label>
+          <InputNumber v-model="llmSettings.repeatLastN" :min="-1" :max="256" class="w-full" />
+          <small>Количество токенов для штрафа за повторение (0 = отключено, -1 = ctx_size). По умолчанию: 64</small>
+        </div>
+
+        <div class="field">
+          <label>Repeat Penalty (Штраф за повтор): {{ llmSettings.repeatPenalty }}</label>
+          <Slider v-model="llmSettings.repeatPenalty" :min="1" :max="2" :step="0.05" class="w-full" />
+          <small>Штраф за повторяющиеся последовательности токенов (1.0 = отключено). По умолчанию: 1.0</small>
+        </div>
+
+        <div class="field">
+          <label>Presence Penalty (Штраф за присутствие): {{ llmSettings.presencePenalty }}</label>
+          <Slider v-model="llmSettings.presencePenalty" :min="0" :max="2" :step="0.1" class="w-full" />
+          <small>Штраф за присутствие (0.0 = отключено). По умолчанию: 0.0</small>
+        </div>
+
+        <div class="field">
+          <label>Frequency Penalty (Штраф за частоту): {{ llmSettings.frequencyPenalty }}</label>
+          <Slider v-model="llmSettings.frequencyPenalty" :min="0" :max="2" :step="0.1" class="w-full" />
+          <small>Штраф за частоту (0.0 = отключено). По умолчанию: 0.0</small>
+        </div>
+
+        <div class="field">
+          <label>Batch Size (Размер пакета)</label>
+          <InputNumber v-model="llmSettings.batchSize" :min="1" :max="2048" :step="128" class="w-full" />
+          <small>Логический максимальный размер пакета для обработки промптов. По умолчанию: 512</small>
+        </div>
+
+        <div class="field">
+          <label>Custom Jinja Chat template (Пользовательский шаблон)</label>
+          <Textarea v-model="llmSettings.customTemplate" rows="3" class="w-full"
+                    placeholder="{% for message in messages %}...{% endfor %}" />
+          <small>Пользовательский Jinja шаблон чата для модели</small>
+        </div>
+
+        <div class="field">
+          <label>Override Tensor Buffer Type (Переопределение типа буфера тензора)</label>
+          <InputText v-model="llmSettings.tensorBufferType" class="w-full"
+                     placeholder="layers\.\d+\.ffn_.*=CPU" />
+          <small>Переопределить тип буфера тензора для модели</small>
+        </div>
+
+        <div class="field">
+          <label>Custom System Prompt (Дополнительный системный промпт)</label>
+          <Textarea v-model="llmSettings.customSystemPrompt" rows="5" class="w-full"
+                    placeholder="Введите дополнительный системный промпт, который будет добавлен к стандартному..." />
+          <small>Дополнительные инструкции для ИИ, которые будут добавлены к стандартному системному промпту</small>
+        </div>
+
+        <div class="field flex align-items-center gap-2">
+          <Checkbox v-model="llmSettings.disableKVOffload" inputId="kvOffload" :binary="true" />
+          <label for="kvOffload">Disable KV Offload (Отключить выгрузку KV кэша на GPU)</label>
+        </div>
+      </div>
+
+      <template #footer>
+        <Button label="Закрыть" icon="pi pi-times" @click="showSettings = false" class="p-button-text" />
+        <Button label="Сбросить по умолчанию" icon="pi pi-refresh" @click="resetSettings" severity="secondary" />
+      </template>
+    </Dialog>
+
+    <!-- Tools Dialog -->
+    <Dialog v-model:visible="showTools" modal header="Инструменты" :style="{ width: '500px' }">
+      <div class="tools-dialog">
+        <div class="field flex align-items-center gap-2 agent-mode-toggle">
+          <Checkbox v-model="agentMode" inputId="agentMode" :binary="true" />
+          <label for="agentMode" class="font-bold">
+            🤖 Режим агента (как Claude Code)
+          </label>
+        </div>
+
+        <Divider />
+
+        <div class="field flex align-items-center gap-2">
+          <Checkbox v-model="toolsConfig.mcpEnabled" inputId="mcp" :binary="true" />
+          <label for="mcp">MCP (Model Context Protocol)</label>
+        </div>
+
+        <div class="field flex align-items-center gap-2">
+          <Checkbox v-model="toolsConfig.agentsEnabled" inputId="agents" :binary="true" />
+          <label for="agents">Агенты (AI Agents)</label>
+        </div>
+
+        <div class="field flex align-items-center gap-2">
+          <Checkbox v-model="toolsConfig.searchEnabled" inputId="search" :binary="true" />
+          <label for="search">Поиск в интернете (Search)</label>
+        </div>
+
+        <div class="field flex align-items-center gap-2">
+          <Checkbox v-model="toolsConfig.webBrowsingEnabled" inputId="webBrowsing" :binary="true" />
+          <label for="webBrowsing">Веб-браузинг (Web Browsing)</label>
+        </div>
+
+        <div class="field flex align-items-center gap-2">
+          <Checkbox v-model="toolsConfig.codeInterpreterEnabled" inputId="codeInterpreter" :binary="true" />
+          <label for="codeInterpreter">Выполнение кода (Code Execution)</label>
+        </div>
+
+        <Divider />
+
+        <div class="field flex align-items-center gap-2">
+          <Checkbox v-model="toolsConfig.integramDatabaseEnabled" inputId="integramDatabase" :binary="true" />
+          <label for="integramDatabase">🗄️ Integram Database Access</label>
+        </div>
+
+        <div v-if="toolsConfig.integrามDatabaseEnabled" class="integram-mcp-status" style="margin-left: 30px; margin-top: 10px;">
+          <div v-if="integraMCPState.isAuthenticated" class="flex align-items-center gap-2">
+            <i class="pi pi-check-circle success-icon" />
+            <span class="status-text">
+              Подключено: {{ integraMCPState.username }}@{{ integrामMCPState.database }}
+            </span>
+            <Button label="Отключить" icon="pi pi-sign-out"
+                    @click="handleIntegrامMCPLogout"
+                    class="p-button-text p-button-sm p-button-danger" />
+          </div>
+          <div v-else class="flex align-items-center gap-2">
+            <i class="pi pi-times-circle warning-icon" />
+            <span class="status-text">Не подключено</span>
+            <Button label="Войти" icon="pi pi-sign-in"
+                    @click="showIntegrامMCPAuth = true; showTools = false"
+                    class="p-button-text p-button-sm" />
+          </div>
+        </div>
+
+        <div v-if="agentMode" class="agent-info">
+          <small>
+            <i class="pi pi-info-circle" />
+            В режиме агента чат может выполнять поиск, генерировать и запускать код,
+            устанавливать зависимости.
+          </small>
+        </div>
+      </div>
+
+      <template #footer>
+        <Button label="Закрыть" icon="pi pi-check" @click="showTools = false" severity="success" />
+      </template>
+    </Dialog>
+
+    <!-- Create Workspace Dialog -->
+    <Dialog v-model:visible="showCreateWorkspaceDialog" modal header="Создать Workspace" :style="{ width: '600px' }">
+      <div class="create-workspace-dialog">
+        <div class="field">
+          <label for="workspace-name">Название workspace</label>
+          <InputText id="workspace-name" v-model="newWorkspace.name"
+                     placeholder="Введите название..." class="w-full" />
+        </div>
+
+        <div class="field">
+          <label for="workspace-repo">Git Repository URL (опционально)</label>
+          <InputText id="workspace-repo" v-model="newWorkspace.repositoryUrl"
+                     placeholder="https://github.com/user/repo.git" class="w-full" />
+          <small>URL репозитория для клонирования в workspace</small>
+        </div>
+
+        <div class="field" v-if="newWorkspace.repositoryUrl">
+          <label for="workspace-branch">Ветка (опционально)</label>
+          <InputText id="workspace-branch" v-model="newWorkspace.branch"
+                     placeholder="main" class="w-full" />
+          <small>По умолчанию: main</small>
+        </div>
+
+        <div v-if="createWorkspaceError" class="error-message mt-3">
+          {{ createWorkspaceError }}
+        </div>
+      </div>
+
+      <template #footer>
+        <Button label="Отмена" icon="pi pi-times" @click="showCreateWorkspaceDialog = false" class="p-button-text" />
+        <Button label="Создать" icon="pi pi-plus" @click="createNewWorkspace"
+                :loading="creatingWorkspace" severity="success" />
+      </template>
+    </Dialog>
+
+    <!-- Integram MCP Authentication Dialog (Phase 1) -->
+    <Dialog v-model:visible="showIntegrامMCPAuth" modal header="🗄️ Integram Database - Вход" :style="{ width: '500px' }">
+      <div class="integram-auth-dialog">
+        <div class="field">
+          <label for="integram-server">Сервер</label>
+          <InputText id="integram-server" v-model="integramAuthForm.serverURL"
+                     placeholder="https://dronedoc.ru" class="w-full" />
+          <small>URL сервера Integram</small>
+        </div>
+
+        <div class="field">
+          <label for="integram-database">База данных</label>
+          <InputText id="integram-database" v-model="integramAuthForm.database"
+                     placeholder="my" class="w-full" />
+          <small>Название базы данных (например: my, a2025)</small>
+        </div>
+
+        <div class="field">
+          <label for="integram-login">Логин</label>
+          <InputText id="integram-login" v-model="integrामAuthForm.login"
+                     placeholder="Введите логин" class="w-full"
+                     @keyup.enter="handleIntegrامMCPAuth" />
+        </div>
+
+        <div class="field">
+          <label for="integram-password">Пароль</label>
+          <Password id="integram-password" v-model="integramAuthForm.password"
+                    placeholder="Введите пароль" class="w-full"
+                    :feedback="false" toggleMask
+                    @keyup.enter="handleIntegrامMCPAuth" />
+        </div>
+
+        <div v-if="integramAuthError" class="error-message mt-3">
+          <i class="pi pi-exclamation-triangle" />
+          {{ integramAuthError }}
+        </div>
+
+        <div class="info-message mt-3">
+          <small>
+            <i class="pi pi-info-circle" />
+            После входа AI-ассистент сможет работать с таблицами Integram напрямую,
+            без загрузки всех данных в память. Это значительно ускоряет работу с большими базами данных.
+          </small>
+        </div>
+      </div>
+
+      <template #footer>
+        <Button label="Отмена" icon="pi pi-times" @click="showIntegrامMCPAuth = false" class="p-button-text" />
+        <Button label="Войти" icon="pi pi-sign-in" @click="handleIntegrамMCPAuth"
+                :loading="integramAuthLoading" severity="success"
+                :disabled="!integramAuthForm.login || !integramAuthForm.password" />
+      </template>
+    </Dialog>
+
+    <!-- Code Execution Window -->
+    <CodeExecutionWindow
+      v-model="showCodeExecutionWindow"
+      :executions="codeExecutions"
+      @execution-complete="onExecutionComplete"
+      @execution-error="onExecutionError"
+    />
+  </div>
+</template>
+
+<script setup>
+import { logger } from '@/utils/logger'
+import { getApiUrl } from '@/utils/apiConfig'
+import { ref, reactive, watch, nextTick, computed, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
+
+import MarkdownRender from '@/components/MarkdownRender.vue'
+import CodeExecutionWindow from '@/components/chat/CodeExecutionWindow.vue'
+import ModelSelector from '@/components/ai/ModelSelector.vue'
+import apiClient from '@/axios2.js'
+import polzaService from '@/services/polzaService.js'
+import { integramChatSessionService } from '@/services/integramChatSessionService.js'
+import integramApiClient from '@/services/integramApiClient.js'
+import {
+  searchWeb,
+  executeCode as executeCodeAPI,
+  extractCodeBlocks,
+  hasExecutableCode,
+  formatSearchResults,
+  getAgentSystemPrompt
+} from '@/services/chatAgentService'
+import {
+  createWorkspace,
+  getUserWorkspaces,
+  deleteWorkspace,
+  chatWithWorkspace
+} from '@/services/workspaceService'
+import integraMCPService from '@/services/integraMCPService'
+import { useAuthStore } from '@/stores/authStore'
+
+const route = useRoute()
+
+// Safely access authStore - handle case where Pinia might not be ready yet (Issue #5216)
+// This can happen during HMR (Hot Module Replacement) or if Chat component loads before Pinia initialization
+let authStore
+try {
+  authStore = useAuthStore()
+} catch (error) {
+  console.warn('[Chat] Pinia not ready, deferring authStore access:', error.message)
+  authStore = null
+}
+
+// Get real userId for token consumption tracking
+const currentUserId = computed(() => {
+  if (authStore?.unifiedSession?.userId) {
+    return authStore.unifiedSession.userId
+  }
+  if (authStore?.primaryUserId) {
+    return authStore.primaryUserId
+  }
+  const storedId = localStorage.getItem('id')
+  if (storedId) {
+    return storedId
+  }
+  return 'd' // fallback
+})
+const isEditorPage = computed(() => route.path.startsWith('/editor'))
+const isModalVisible = ref(false)
+const showDataSelector = ref(false)
+const showHistory = ref(false)
+const showImageDialog = ref(false)
+const showSettings = ref(false)
+const showTools = ref(false)
+const showCreateWorkspaceDialog = ref(false)
+const showIntegrامMCPAuth = ref(false)
+const showEditMessageDialog = ref(false)
+const fileInput = ref(null)
+const fileInputGeneral = ref(null)
+const modalFileInput = ref(null)
+const attachmentMenu = ref()
+const attachmentMenuGeneral = ref()
+const modalAttachmentMenu = ref()
+const currentImage = ref('')
+
+// Session history management
+const sessionHistory = ref([])
+const loadingHistory = ref(false)
+
+// Message editing
+const editingMessageIndex = ref(null)
+const editingMessageText = ref('')
+
+const isRecording = ref(false)
+const recognition = ref(null)
+const uploadProgress = ref(0)
+
+// Model selection - now using ModelSelector component
+// Initialize from localStorage to preserve model choice across page reloads
+const selectedModel = ref(localStorage.getItem('selectedModel') || null)
+const userAccessToken = ref(localStorage.getItem('userAccessToken') || null)
+
+// LLM Settings
+const llmSettings = reactive({
+  contextSize: parseInt(localStorage.getItem('llm_contextSize')) || 8192,
+  gpuLayers: parseInt(localStorage.getItem('llm_gpuLayers')) || 100,
+  temperature: parseFloat(localStorage.getItem('llm_temperature')) || 0.6,
+  topK: parseInt(localStorage.getItem('llm_topK')) || 40,
+  topP: parseFloat(localStorage.getItem('llm_topP')) || 0.9,
+  minP: parseFloat(localStorage.getItem('llm_minP')) || 0.1,
+  repeatLastN: parseInt(localStorage.getItem('llm_repeatLastN')) || 64,
+  repeatPenalty: parseFloat(localStorage.getItem('llm_repeatPenalty')) || 1.0,
+  presencePenalty: parseFloat(localStorage.getItem('llm_presencePenalty')) || 0.0,
+  frequencyPenalty: parseFloat(localStorage.getItem('llm_frequencyPenalty')) || 0.0,
+  customTemplate: localStorage.getItem('llm_customTemplate') || '',
+  tensorBufferType: localStorage.getItem('llm_tensorBufferType') || '',
+  disableKVOffload: localStorage.getItem('llm_disableKVOffload') === 'true',
+  batchSize: parseInt(localStorage.getItem('llm_batchSize')) || 512,
+  customSystemPrompt: localStorage.getItem('llm_customSystemPrompt') || '',
+})
+
+// Tools configuration
+const toolsConfig = reactive({
+  mcpEnabled: localStorage.getItem('tools_mcpEnabled') !== 'false',
+  agentsEnabled: localStorage.getItem('tools_agentsEnabled') !== 'false',
+  searchEnabled: localStorage.getItem('tools_searchEnabled') !== 'false',
+  webBrowsingEnabled: localStorage.getItem('tools_webBrowsingEnabled') === 'true',
+  codeInterpreterEnabled: localStorage.getItem('tools_codeInterpreterEnabled') === 'true',
+  integramDatabaseEnabled: localStorage.getItem('tools_integramDatabaseEnabled') === 'true',
+})
+
+// Integram MCP state
+const integraMCPState = reactive({
+  isAuthenticated: false,
+  serverURL: '',
+  database: '',
+  username: '',
+  userId: null
+})
+
+const integramAuthForm = reactive({
+  serverURL: 'https://dronedoc.ru',
+  database: 'my',
+  login: '',
+  password: ''
+})
+
+const integramAuthLoading = ref(false)
+const integramAuthError = ref(null)
+
+// Chat Agent capabilities
+const showCodeExecutionWindow = ref(false)
+const codeExecutions = ref([])
+const agentMode = ref(localStorage.getItem('chat_agentMode') === 'true')
+
+// Workspace management
+const workspaces = ref([])
+const selectedWorkspace = ref(null)
+const loadingWorkspaces = ref(false)
+const creatingWorkspace = ref(false)
+const createWorkspaceError = ref(null)
+const newWorkspace = reactive({
+  name: '',
+  repositoryUrl: '',
+  branch: 'main'
+})
+
+watch(selectedModel, (newVal) => {
+  localStorage.setItem('selectedModel', newVal)
+})
+
+watch(llmSettings, (newVal) => {
+  Object.keys(newVal).forEach(key => {
+    localStorage.setItem(`llm_${key}`, String(newVal[key]))
+  })
+}, { deep: true })
+
+watch(toolsConfig, (newVal) => {
+  Object.keys(newVal).forEach(key => {
+    localStorage.setItem(`tools_${key}`, String(newVal[key]))
+  })
+}, { deep: true })
+
+watch(agentMode, (newVal) => {
+  localStorage.setItem('chat_agentMode', String(newVal))
+})
+
+// Agent helper functions
+const handleWebSearch = async (query) => {
+  try {
+    const results = await searchWeb(query)
+    const formatted = formatSearchResults(results.data)
+
+    aiChat.messages.push({
+      text: formatted,
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isUser: false,
+      isSearchResult: true
+    })
+
+    scrollToBottom(aiMessagesContainer)
+    if (isModalVisible.value) {
+      scrollToBottom(modalMessagesContainer)
+    }
+  } catch (error) {
+    console.error('Search error:', error)
+    aiError.value = 'Ошибка поиска: ' + error.message
+  }
+}
+
+const handleCodeExecution = (messageText) => {
+  const blocks = extractCodeBlocks(messageText)
+
+  blocks.forEach((block, index) => {
+    codeExecutions.value.push({
+      id: `exec_${Date.now()}_${index}`,
+      title: `${block.language} (${index + 1})`,
+      code: block.code,
+      language: block.language,
+      executed: false,
+      executing: false,
+      output: null,
+      error: null,
+      exitCode: null,
+      execId: null,
+      filename: null,
+      dependencies: [],
+      dependenciesInstalled: false,
+      installingDeps: false
+    })
+  })
+
+  if (blocks.length > 0) {
+    showCodeExecutionWindow.value = true
+  }
+}
+
+// Polza.ai Chat API configuration
+// Using Polza.ai through orchestrator backend (via Vite proxy)
+const POLZA_CHAT_API_URL = '/api/polza'
+
+// Session management for Polza.ai - we'll create session dynamically
+const polzaSessionId = ref(null)
+
+// Флаг для отслеживания доступности API
+const isApiAvailable = ref(false)
+
+const isImage = (attachment) => {
+  if (!attachment.type) return false
+  return attachment.type.startsWith('image/') || 
+         ['.jpg', '.jpeg', '.png', '.gif', '.webp'].some(ext => attachment.name.toLowerCase().endsWith(ext))
+}
+
+const showImagePreview = (url) => {
+  currentImage.value = url
+  showImageDialog.value = true
+}
+
+const toggleVoiceInput = () => {
+  if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+    alert('Голосовой ввод не поддерживается вашим браузером')
+    return
+  }
+
+  if (isRecording.value) {
+    recognition.value.stop()
+    isRecording.value = false
+    return
+  }
+
+  recognition.value = new (window.SpeechRecognition || window.webkitSpeechRecognition)()
+  recognition.value.lang = 'ru-RU'
+  recognition.value.continuous = false
+  recognition.value.interimResults = true
+
+  recognition.value.onstart = () => isRecording.value = true
+
+  recognition.value.onresult = (event) => {
+    const transcript = Array.from(event.results)
+      .map(result => result[0].transcript)
+      .join('')
+    
+    if (activeTabIndex.value === 0) {
+      aiMessage.value = transcript
+    } else {
+      newMessage.value = transcript
+    }
+  }
+
+  recognition.value.onend = () => isRecording.value = false
+  recognition.value.onerror = () => isRecording.value = false
+
+  recognition.value.start()
+}
+
+const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch (err) {
+    const textArea = document.createElement('textarea')
+    textArea.value = text
+    document.body.appendChild(textArea)
+    textArea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textArea)
+  }
+}
+
+const savedChats = ref(JSON.parse(localStorage.getItem('aiChatHistory')) || [])
+const newChatName = ref('')
+
+const saveChat = () => {
+  if (!newChatName.value.trim()) return
+
+  const chat = {
+    id: Date.now().toString(),
+    name: newChatName.value,
+    messages: [...aiChat.messages],
+    timestamp: new Date().toISOString()
+  }
+
+  savedChats.value.push(chat)
+  localStorage.setItem('aiChatHistory', JSON.stringify(savedChats.value))
+  newChatName.value = ''
+  showHistory.value = false
+}
+
+const loadChat = (chat) => {
+  aiChat.messages = [...chat.messages]
+  showHistory.value = false
+}
+
+const deleteChat = (id) => {
+  savedChats.value = savedChats.value.filter(chat => chat.id !== id)
+  localStorage.setItem('aiChatHistory', JSON.stringify(savedChats.value))
+}
+
+// New session management functions
+const createNewChatSession = async () => {
+  try {
+    // Clear current chat
+    aiChat.messages = [
+      {
+        text: 'Ты цифровой помощник. Отвечаешь кратко и по существу. Анализируешь JSON в которых таблицы в формате:Работаем с таблицей: headers (id,value,type,isMain) определяют колонки, rows (id,values) содержат ячейки с headerId для связи данных.',
+        time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+        isUser: true,
+      },
+      {
+        text: 'Здравствуйте! Я цифровой помощник DronDoc.\nЯ могу анализировать таблицы и отчёты, отвечать на вопросы и т.д.\nЧем могу помочь?',
+        time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+        isUser: false,
+      },
+    ]
+
+    // Clear session ID to create new one
+    localStorage.removeItem('polza_session_id')
+    polzaSessionId.value = null
+
+    // Initialize session service and create new session
+    await integramChatSessionService.initialize()
+
+    console.log('[Chat] New chat session created')
+  } catch (error) {
+    console.error('[Chat] Failed to create new session:', error)
+  }
+}
+
+const loadSessionHistory = async () => {
+  loadingHistory.value = true
+  try {
+    // Use Integram report endpoint for session history
+    const reportUrl = 'https://dronedoc.ru/my/report/session_chat'
+    const response = await fetch(reportUrl, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json'
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+
+    // Parse the report data into session format
+    if (data && data.object) {
+      const sessions = data.object.map(sessionId => {
+        const sessionData = data.reqs[sessionId] || {}
+        return {
+          id: sessionId,
+          val: sessionData.name || `Session ${sessionId}`,
+          created: sessionData.created,
+          lastActivity: sessionData.lastActivity,
+          ...sessionData
+        }
+      })
+      sessionHistory.value = sessions
+      console.log('[Chat] Loaded session history from report:', sessions.length)
+    } else {
+      sessionHistory.value = []
+    }
+  } catch (error) {
+    console.error('[Chat] Failed to load session history from report:', error)
+    // Fallback to service method
+    try {
+      await integramChatSessionService.initialize()
+      const sessions = await integramChatSessionService.loadSessionHistory(50)
+      sessionHistory.value = sessions || []
+      console.log('[Chat] Loaded session history (fallback):', sessions?.length)
+    } catch (fallbackError) {
+      console.error('[Chat] Fallback also failed:', fallbackError)
+      sessionHistory.value = []
+    }
+  } finally {
+    loadingHistory.value = false
+  }
+}
+
+const loadSession = async (session) => {
+  try {
+    // Get session data from Integram
+    const sessionId = session.val || session.id
+    const sessionData = await integramChatSessionService.getSession(sessionId)
+
+    if (sessionData.success && sessionData.messages) {
+      // Load messages into chat
+      aiChat.messages = sessionData.messages
+
+      // Set current session ID
+      polzaSessionId.value = sessionId
+      localStorage.setItem('polza_session_id', sessionId)
+
+      // Load transactions to get full conversation
+      const transactions = await integramChatSessionService.getSessionTransactions(sessionId)
+
+      if (transactions && transactions.length > 0) {
+        // Convert transactions to messages
+        const messages = []
+
+        for (const transaction of transactions) {
+          const question = transaction.reqs?.['205916']?.value || ''
+          const answer = transaction.reqs?.['205931']?.value || ''
+
+          if (question) {
+            messages.push({
+              text: question,
+              time: new Date(transaction.val).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+              isUser: true
+            })
+          }
+
+          if (answer) {
+            messages.push({
+              text: answer,
+              time: new Date(transaction.val).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+              isUser: false
+            })
+          }
+        }
+
+        if (messages.length > 0) {
+          aiChat.messages = messages
+        }
+      }
+
+      showHistory.value = false
+      console.log('[Chat] Session loaded:', sessionId)
+    }
+  } catch (error) {
+    console.error('[Chat] Failed to load session:', error)
+  }
+}
+
+const deleteSession = async (sessionId) => {
+  try {
+    // Delete session from Integram
+    const integramId = integramChatSessionService.sessionsCache.get(sessionId)
+
+    if (integramId) {
+      await integramApiClient.deleteObject(integramId)
+
+      // Remove from cache
+      integramChatSessionService.sessionsCache.delete(sessionId)
+      integramChatSessionService.saveCacheToStorage()
+
+      // Reload history
+      await loadSessionHistory()
+
+      console.log('[Chat] Session deleted:', sessionId)
+    }
+  } catch (error) {
+    console.error('[Chat] Failed to delete session:', error)
+  }
+}
+
+const formatSessionName = (session) => {
+  // Try to get session name from value, or generate from timestamp
+  if (session.val) {
+    return session.val
+  }
+  return `Сессия ${new Date(session.created || Date.now()).toLocaleString('ru-RU')}`
+}
+
+const formatDateTime = (dateStr) => {
+  if (!dateStr) return ''
+  try {
+    const date = new Date(dateStr)
+    return date.toLocaleString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  } catch (e) {
+    return dateStr
+  }
+}
+
+// Message edit/delete functions
+const editMessage = (index) => {
+  editingMessageIndex.value = index
+  editingMessageText.value = aiChat.messages[index].text
+  showEditMessageDialog.value = true
+}
+
+const cancelEditMessage = () => {
+  showEditMessageDialog.value = false
+  editingMessageIndex.value = null
+  editingMessageText.value = ''
+}
+
+const saveEditedMessage = async () => {
+  if (editingMessageIndex.value === null) return
+
+  try {
+    // Update message in local array
+    aiChat.messages[editingMessageIndex.value].text = editingMessageText.value
+
+    // TODO: Save to database
+    // For now, we'll save to localStorage
+    const messagesToSave = aiChat.messages.filter(msg => msg !== assistantMessage.value)
+    localStorage.setItem('aiChat', JSON.stringify(messagesToSave))
+
+    // Close dialog
+    showEditMessageDialog.value = false
+    editingMessageIndex.value = null
+    editingMessageText.value = ''
+
+    console.log('[Chat] Message edited')
+  } catch (error) {
+    console.error('[Chat] Failed to edit message:', error)
+  }
+}
+
+const deleteMessage = async (index) => {
+  try {
+    // Remove message from array
+    aiChat.messages.splice(index, 1)
+
+    // TODO: Delete from database
+    // For now, we'll save to localStorage
+    const messagesToSave = aiChat.messages.filter(msg => msg !== assistantMessage.value)
+    localStorage.setItem('aiChat', JSON.stringify(messagesToSave))
+
+    console.log('[Chat] Message deleted')
+  } catch (error) {
+    console.error('[Chat] Failed to delete message:', error)
+  }
+}
+
+const resendMessage = async (index) => {
+  try {
+    const message = aiChat.messages[index]
+    if (!message) return
+
+    // Set the message text to input field
+    aiMessage.value = message.text
+
+    // If message has attachments, restore them
+    if (message.attachments && message.attachments.length > 0) {
+      currentAttachments.value = [...message.attachments]
+    }
+
+    // Send the message
+    await sendAiMessage()
+
+    console.log('[Chat] Message resent')
+  } catch (error) {
+    console.error('[Chat] Failed to resend message:', error)
+  }
+}
+
+// Watch for history dialog open to load sessions
+watch(showHistory, (newVal) => {
+  if (newVal) {
+    loadSessionHistory()
+  }
+})
+
+const dataTypes = ref([
+  { value: 'table', label: 'Таблица' },
+  { value: 'report', label: 'Отчёт' },
+])
+const selectedDataType = ref(null)
+const selectedDataItem = ref(null)
+const dataComment = ref('')
+const loadingDataItems = ref(false)
+const dataItems = ref([])
+
+const getAttachmentIcon = (attachment) => {
+  // Phase 3: Handle MCP table references
+  if (attachment.source === 'integram_mcp' && attachment.type === 'integram/table-reference') {
+    return 'pi pi-database' // Database icon for MCP references
+  }
+
+  if (attachment.source === 'api') {
+    return attachment.itemType === 'table' ? 'pi pi-table' : 'pi pi-chart-bar'
+  }
+
+  const extension = attachment.name.split('.').pop().toLowerCase()
+  const iconMap = {
+    pdf: 'pi pi-file-pdf',
+    doc: 'pi pi-file-word',
+    docx: 'pi pi-file-word',
+    xls: 'pi pi-file-excel',
+    xlsx: 'pi pi-file-excel',
+    ppt: 'pi pi-file-powerpoint',
+    pptx: 'pi pi-file-powerpoint',
+    jpg: 'pi pi-image',
+    jpeg: 'pi pi-image',
+    png: 'pi pi-image',
+    gif: 'pi pi-image',
+    txt: 'pi pi-file',
+    json: 'pi pi-code',
+    csv: 'pi pi-table',
+    xml: 'pi pi-code',
+    html: 'pi pi-code',
+    md: 'pi pi-file'
+  }
+
+  return iconMap[extension] || 'pi pi-file'
+}
+
+const getAttachmentDisplayName = (attachment) => {
+  // Phase 3: Show MCP reference info
+  if (attachment.source === 'integram_mcp' && attachment.mcpReference) {
+    const ref = attachment.mcpReference
+    return `${ref.tableName} (${ref.rowCount.toLocaleString('ru-RU')} rows, ${ref.columnCount} columns)`
+  }
+
+  if (attachment.source === 'api') {
+    return attachment.itemName || attachment.name.replace('.json', '')
+  }
+  return attachment.name
+}
+
+const formatFileSize = (bytes) => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+const isSystemMessage = (msg) => {
+  return msg.text.includes('Ты цифровой помощник') && msg.isUser
+}
+
+// Handle model change from ModelSelector
+const handleModelChange = ({ modelId, model }) => {
+  logger.debug('Model changed:', { modelId, model })
+  // Use model.id if model object is provided, otherwise use modelId
+  // This ensures we always get the model identifier (e.g., "anthropic/claude-sonnet-4.5")
+  const modelIdentifier = model?.id || model?.model_id || modelId
+  selectedModel.value = modelIdentifier
+  localStorage.setItem('selectedModel', modelIdentifier)
+  logger.debug('Selected model updated to:', modelIdentifier)
+}
+
+const closeChat = () => {
+  localStorage.setItem('chat', 'false')
+  window.dispatchEvent(new StorageEvent('storage', {
+    key: 'chat',
+    newValue: 'false',
+    storageArea: localStorage
+  }))
+}
+
+const clearCurrentChat = async () => {
+  if (activeTabIndex.value === 0) {
+    if (confirm('Очистить историю чата с Polza.ai?')) {
+      // Завершаем текущую сессию Polza.ai если она есть
+      const sessionId = localStorage.getItem('polza_session_id')
+      if (sessionId) {
+        try {
+          await fetch(`${POLZA_CHAT_API_URL}/terminate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ sessionId }),
+          })
+        } catch (error) {
+          console.warn('Не удалось завершить Polza сессию:', error)
+        }
+        localStorage.removeItem('polza_session_id')
+        polzaSessionId.value = null
+      }
+
+      aiChat.messages = [
+        {
+          text: getCombinedSystemPrompt(),
+          time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          isUser: true,
+        },
+        {
+          text: 'Здравствуйте! Я цифровой помощник DronDoc на базе Polza.ai.\nЯ могу анализировать таблицы и отчёты, отвечать на вопросы и т.д.\nЧем могу помочь?',
+          time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          isUser: false,
+        },
+      ]
+      localStorage.removeItem('aiChat')
+    }
+  } else {
+    if (confirm('Очистить историю общего чата?')) {
+      activeChat.messages = [
+        {
+          text: 'Добро пожаловать в общий чат! Здесь вы можете общаться с коллегами.',
+          time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          isUser: false,
+        },
+      ]
+    }
+  }
+}
+
+const loadAllPages = async (baseUrl, id) => {
+  let allData = null
+  let page = 1
+  let allRows = []
+
+  while (true) {
+    try {
+      const url = page === 1 ? `${baseUrl}/${id}` : `${baseUrl}/${id}/page/${page}`
+      const response = await apiClient.get(url)
+      const data = response.data.response || response.data
+
+      if (page === 1) {
+        allData = { ...data }
+      }
+
+      if (data.rows && data.rows.length > 0) {
+        allRows = [...allRows, ...data.rows]
+        page++
+      } else {
+        break
+      }
+    } catch (error) {
+      console.error(`Ошибка загрузки страницы ${page}:`, error)
+      break
+    }
+  }
+
+  if (allData) {
+    allData.rows = allRows
+  }
+
+  return allData
+}
+
+watch(selectedDataType, async newType => {
+  if (!newType) {
+    dataItems.value = []
+    return
+  }
+
+  loadingDataItems.value = true
+  try {
+    const endpoint = newType.value === 'table' ? '/tables' : '/report'
+    const response = await apiClient.get(endpoint)
+    const data = response.data
+
+    if (data.status === 200 && data.response) {
+      if (newType.value === 'report' && data.response.rows) {
+        dataItems.value = data.response.rows.map(row => ({
+          id: row.id,
+          name: row.values.find(v => v.headerId === 22)?.value || `Отчет ${row.id}`,
+          fullData: row
+        }))
+      } else {
+        dataItems.value = Array.isArray(data.response) ? data.response : [data.response]
+      }
+    } else {
+      dataItems.value = data.response || data
+    }
+  } catch (error) {
+    console.error('Ошибка загрузки данных:', error)
+    dataItems.value = []
+  } finally {
+    loadingDataItems.value = false
+  }
+})
+
+const attachData = async () => {
+  if (!selectedDataItem.value) return
+
+  // Show loading state
+  loadingDataItems.value = true
+
+  try {
+    const itemName = selectedDataItem.value.name || selectedDataItem.value.value || selectedDataItem.value.id
+    const itemType = selectedDataType.value.value
+
+    // Phase 3: Check if MCP is enabled and authenticated for performance optimization
+    const useMCPReference = toolsConfig.integramDatabaseEnabled &&
+                            integraMCPState.isAuthenticated &&
+                            itemType === 'table' // Only tables support MCP references for now
+
+    let attachment
+
+    if (useMCPReference) {
+      // Phase 3: Use MCP reference instead of loading all data
+      // This approach is 43x faster and uses 48x less memory
+      console.log(`[Phase 3] Using MCP table reference for table ${selectedDataItem.value.id}`)
+
+      // Get table metadata via MCP (lightweight operation - typically <200ms)
+      const metadata = await integraMCPService.getTypeMetadata(selectedDataItem.value.id)
+
+      attachment = {
+        name: `[MCP] ${itemName}`,
+        type: 'integram/table-reference', // New attachment type for Phase 3
+        source: 'integram_mcp',
+        itemId: selectedDataItem.value.id,
+        itemName: itemName,
+        itemType: 'table',
+        // Store reference info instead of full data
+        mcpReference: {
+          typeId: selectedDataItem.value.id,
+          tableName: itemName,
+          rowCount: metadata.object_count || 0,
+          columnCount: metadata.requisites?.length || 0,
+          server: integraMCPState.serverURL,
+          database: integraMCPState.database
+        },
+        // Lightweight metadata for display
+        metadata: {
+          id: metadata.id,
+          name: metadata.name,
+          requisites: metadata.requisites?.map(r => ({
+            id: r.id,
+            alias: r.alias || r.name,
+            type: r.requisite_type_id
+          })) || []
+        },
+        size: JSON.stringify(metadata).length // Size of metadata only, not full data
+      }
+
+      console.log(`[Phase 3] MCP reference created: ${attachment.mcpReference.rowCount} rows, ${attachment.mcpReference.columnCount} columns`)
+    } else {
+      // Fallback: Use traditional full data loading (Phases 1-2 behavior)
+      console.log(`[Fallback] Loading full data for ${itemType} ${selectedDataItem.value.id}`)
+
+      const baseUrl = itemType === 'table' ? '/tables' : '/report'
+      const fullData = await loadAllPages(baseUrl, selectedDataItem.value.id)
+
+      if (!fullData) {
+        throw new Error('Не удалось загрузить данные')
+      }
+
+      const jsonData = JSON.stringify(fullData, null, 2)
+      const blob = new Blob([jsonData], { type: 'application/json' })
+      const fileName = `${itemType}_${itemName}.json`
+
+      attachment = {
+        name: fileName,
+        type: 'application/json',
+        size: blob.size,
+        data: jsonData,
+        url: URL.createObjectURL(blob),
+        source: 'api',
+        itemId: selectedDataItem.value.id,
+        itemName: itemName,
+        itemType: itemType
+      }
+
+      console.log(`[Fallback] Full data loaded: ${blob.size} bytes`)
+    }
+
+    const messageText = dataComment.value || `Прикреплён файл: ${itemName}`
+
+    if (activeTabIndex.value === 0) {
+      currentAttachments.value.push(attachment)
+    } else {
+      activeChat.messages.push({
+        text: messageText,
+        time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+        isUser: true,
+        attachment,
+      })
+      scrollToBottom(messagesContainer)
+    }
+
+    showDataSelector.value = false
+    selectedDataType.value = null
+    selectedDataItem.value = null
+    dataComment.value = ''
+  } catch (error) {
+    console.error('Ошибка при загрузке данных:', error)
+    alert('Ошибка при загрузке данных: ' + error.message)
+  } finally {
+    // Hide loading state
+    loadingDataItems.value = false
+  }
+}
+
+const triggerFileUpload = () => fileInput.value?.click()
+const triggerFileUploadGeneral = () => fileInputGeneral.value?.click()
+const triggerModalFileUpload = () => modalFileInput.value?.click()
+
+const handleFileUpload = (event) => handleFileUploadGeneric(event, true)
+const handleFileUploadGeneral = (event) => handleFileUploadGeneric(event, false)
+const handleModalFileUpload = (event) => handleFileUploadGeneric(event, activeTabIndex.value === 0)
+
+const handleFileUploadGeneric = (event, isAiChat) => {
+  const files = Array.from(event.target.files)
+  if (!files.length) return
+
+  uploadProgress.value = 0
+  const totalFiles = files.length
+  let processedFiles = 0
+
+  files.forEach(file => {
+    if (isAiChat && file.size > 5 * 1024 * 1024) {
+      alert(`Файл ${file.name} слишком большой. Максимальный размер: 5MB`)
+      return
+    }
+
+    const reader = new FileReader()
+    
+    reader.onloadstart = () => {
+      uploadProgress.value = (processedFiles / totalFiles) * 100
+    }
+    
+    reader.onload = (e) => {
+      processedFiles++
+      uploadProgress.value = (processedFiles / totalFiles) * 100
+      
+      const fileContent = e.target.result
+      
+      const attachment = {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        data: fileContent,
+        url: URL.createObjectURL(file),
+        source: 'file'
+      }
+      
+      if (isAiChat) {
+        currentAttachments.value.push(attachment)
+      } else {
+        activeChat.messages.push({
+          text: `Прикреплён файл: ${file.name}`,
+          time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          isUser: true,
+          attachment,
+        })
+        scrollToBottom(messagesContainer)
+      }
+
+      if (processedFiles === totalFiles) {
+        setTimeout(() => uploadProgress.value = 0, 1000)
+      }
+    }
+    
+    reader.onerror = () => {
+      processedFiles++
+      alert(`Ошибка чтения файла: ${file.name}`)
+      if (processedFiles === totalFiles) uploadProgress.value = 0
+    }
+    
+    if (isAiChat) {
+      const allowedTypes = ['text/plain', 'application/json', 'text/csv', 'application/pdf', 'image/']
+      if (!allowedTypes.some(type => file.type.includes(type.replace('application/', '').replace('text/', '')))) {
+        alert('Для ИИ-ассистента поддерживаются только текстовые файлы и изображения')
+        return
+      }
+    }
+    
+    if (file.type.startsWith('image/')) {
+      reader.readAsDataURL(file)
+    } else {
+      reader.readAsText(file, 'UTF-8')
+    }
+  })
+  
+  event.target.value = ''
+}
+
+const removeCurrentAttachment = (index) => {
+  URL.revokeObjectURL(currentAttachments.value[index].url)
+  currentAttachments.value.splice(index, 1)
+}
+
+const downloadAttachment = attachment => {
+  if (attachment.source === 'api') {
+    alert('Скачивание таблиц и отчетов недоступно')
+    return
+  }
+  
+  const link = document.createElement('a')
+  link.href = attachment.url
+  link.download = attachment.name
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
+const showModal = () => {
+  isModalVisible.value = true
+  nextTick(() => {
+    scrollToBottom(modalMessagesContainer)
+  })
+}
+
+const hideModal = () => isModalVisible.value = false
+
+const resetSettings = () => {
+  llmSettings.contextSize = 8192
+  llmSettings.gpuLayers = 100
+  llmSettings.temperature = 0.6
+  llmSettings.topK = 40
+  llmSettings.topP = 0.9
+  llmSettings.minP = 0.1
+  llmSettings.repeatLastN = 64
+  llmSettings.repeatPenalty = 1.0
+  llmSettings.presencePenalty = 0.0
+  llmSettings.frequencyPenalty = 0.0
+  llmSettings.customTemplate = ''
+  llmSettings.tensorBufferType = ''
+  llmSettings.disableKVOffload = false
+  llmSettings.batchSize = 512
+  llmSettings.customSystemPrompt = ''
+}
+
+const SYSTEM_PROMPT = 'Ты - полезный ассистент DronDoc на базе Polza.ai. Отвечаешь кратко и по существу. Анализируешь JSON в которых таблицы в формате: Работаем с таблицей: headers (id,value,type,isMain) определяют колонки, rows (id,values) содержат ячейки с headerId для связи данных.'
+
+// Helper function to combine default and custom system prompts
+const getCombinedSystemPrompt = () => {
+  let combined = SYSTEM_PROMPT
+  if (llmSettings.customSystemPrompt && llmSettings.customSystemPrompt.trim()) {
+    combined += '\n\n' + llmSettings.customSystemPrompt.trim()
+  }
+  return combined
+}
+
+// Demo response generator для случаев, когда API недоступен
+const generateDemoResponse = (userMessage, model) => {
+  const message = userMessage.toLowerCase();
+  
+  // Анализируем тип запроса и генерируем соответствующий ответ
+  if (message.includes('привет') || message.includes('hello') || message.includes('добр')) {
+    return `Привет! Я работаю в демо-режиме на базе ${model}. В полной версии я смогу помочь вам с анализом данных, таблиц и отчётов. Пока что это просто демонстрация интерфейса!`;
+  }
+  
+  if (message.includes('помощь') || message.includes('help') || message.includes('что умеешь')) {
+    return `Я - демо-версия ИИ-ассистента DronDoc на базе ${model}. В полной версии я умею:
+• Анализировать таблицы и JSON данные
+• Создавать отчёты и документацию
+• Отвечать на вопросы по бизнес-процессам
+• Помогать с интеграцией систем
+• Работать с дронными данными
+
+Пока это демо-режим, но интерфейс уже полностью готов!`;
+  }
+  
+  if (message.includes('таблиц') || message.includes('json') || message.includes('данные')) {
+    return `Отлично! Я вижу, что вас интересует работа с данными. В полной версии на базе ${model} я смогу:
+• Анализировать структуру таблиц (headers: id,value,type,isMain)
+• Обрабатывать строки данных (rows: id,values с headerId)
+• Создавать сводки и отчёты
+• Находить паттерны в данных
+
+Сейчас это демо, но функциональность уже интегрирована!`;
+  }
+  
+  if (message.includes('отчёт') || message.includes('report') || message.includes('анализ')) {
+    return `Готов помочь с отчётами! В полной версии ${model} я создам для вас:
+• Аналитические отчёты по данным дронов
+• Сводки по бизнес-метрикам
+• Документацию по процессам
+• Презентации результатов
+
+Пока это демонстрация возможностей. API интеграция готова!`;
+  }
+  
+  if (message.includes('спасиб') || message.includes('thanks')) {
+    return `Пожалуйста! Рад, что демо-интерфейс работает. Когда Polza.ai API будет доступен, ${model} сможет полноценно отвечать на ваши запросы. Следите за обновлениями!`;
+  }
+  
+  // Общий ответ для остальных случаев
+  const responses = [
+    `Интересный вопрос! В полной версии на базе ${model} я дам вам подробный ответ. Пока это демо-режим - API интеграция готова, но сервис временно недоступен.`,
+    `Понял ваш запрос. Когда ${model} будет доступен, я смогу предоставить детальную информацию. Сейчас демонстрирую возможности интерфейса.`,
+    `Хороший вопрос! В рабочей версии я помогу с анализом. Сейчас показываю, как будет выглядеть общение с ИИ-ассистентом.`,
+    `Спасибо за сообщение! ${model} в полной версии сможет помочь с такими задачами. Пока это демо готовой системы.`
+  ];
+  
+  return responses[Math.floor(Math.random() * responses.length)];
+};
+
+const activeTabIndex = ref(0)
+const messagesContainer = ref(null)
+const modalMessagesContainer = ref(null)
+const newMessage = ref('')
+const activeChat = reactive({
+  name: 'General Chat',
+  messages: [
+    {
+      text: 'Добро пожаловать в общий чат! Здесь вы можете общаться с коллегами.',
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isUser: false,
+    },
+    {
+      text: 'Привет! Кто-нибудь работал с PrimeVue?',
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isUser: true,
+    },
+  ],
+})
+
+const aiMessagesContainer = ref(null)
+const aiMessage = ref('')
+const aiLoading = ref(false)
+const aiError = ref(null)
+const assistantMessage = ref(null)
+const currentAttachments = ref([])
+const aiChat = reactive({
+  messages: JSON.parse(localStorage.getItem('aiChat')) || [
+            {
+          text: 'Ты цифровой помощник. Отвечаешь кратко и по существу. Анализируешь JSON в которых таблицы в формате:Работаем с таблицей: headers (id,value,type,isMain) определяют колонки, rows (id,values) содержат ячейки с headerId для связи данных.',
+          time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          isUser: true,
+        },
+    {
+      text: 'Здравствуйте! Я цифровой помощник DronDoc.\nЯ могу анализировать таблицы и отчёты, отвечать на вопросы и т.д.\nЧем могу помочь?',
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isUser: false,
+    },
+  ],
+})
+
+// Polza.ai health check
+const checkPolzaHealth = async () => {
+  try {
+    const response = await fetch(`${POLZA_CHAT_API_URL}/health`);
+    
+    if (!response.ok) {
+      console.warn(`Polza.ai API недоступен: HTTP ${response.status}. Используем демо-режим.`);
+      isApiAvailable.value = false;
+      return false;
+    }
+    
+    // Проверяем Content-Type перед парсингом JSON
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      console.warn('Polza.ai API вернул некорректный ответ. Используем демо-режим.');
+      isApiAvailable.value = false;
+      return false;
+    }
+    
+    const data = await response.json();
+    logger.debug('Polza.ai Health:', data);
+    isApiAvailable.value = true;
+    return data.success === true;
+  } catch (error) {
+    console.warn('Polza.ai API недоступен:', error.message, '- используем демо-режим');
+    isApiAvailable.value = false;
+    return false;
+  }
+};
+
+// Get available Polza.ai models
+const getAvailablePolzaModels = async () => {
+  try {
+    const response = await fetch(`${POLZA_CHAT_API_URL}/models`);
+    
+    if (!response.ok) {
+      console.error(`Failed to fetch Polza models: HTTP ${response.status} ${response.statusText}`);
+      return [];
+    }
+    
+    // Проверяем Content-Type перед парсингом JSON
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      console.error('Failed to fetch Polza models: Invalid content type:', contentType);
+      return [];
+    }
+    
+    const data = await response.json();
+    if (data.success) {
+      logger.debug('Available Polza models:', data.models);
+      return data.models;
+    }
+    return [];
+  } catch (error) {
+    console.error('Failed to fetch Polza models:', error);
+    return [];
+  }
+};
+
+// Get available models from external API
+const getExternalModels = async () => {
+  try {
+    const response = await fetch(getApiUrl('/api/ai-tokens/external-models'));
+    
+    if (!response.ok) {
+      console.error(`Failed to fetch external models: HTTP ${response.status} ${response.statusText}`);
+      return [];
+    }
+    
+    const data = await response.json();
+    if (data.success) {
+      logger.debug('Available external models:', data.data);
+      return data.data;
+    }
+    return [];
+  } catch (error) {
+    console.error('Failed to fetch external models:', error);
+    return [];
+  }
+};
+
+onMounted(async () => {
+  scrollToBottom(aiMessagesContainer);
+  scrollToBottom(messagesContainer);
+
+  // Check Polza.ai connection
+  const isHealthy = await checkPolzaHealth();
+  
+  // Combine models from both Polza.ai and external API
+  let allModels = [];
+  
+  // Get Koda models first (independent of Polza.ai)
+  const kodaModels = await getExternalModels();
+  if (kodaModels.length > 0) {
+    const kodaFormatted = kodaModels.map(model => ({
+      name: `${model.name} (Koda)`,
+      value: model.value,
+      provider: model.provider
+    }));
+    allModels = [...allModels, ...kodaFormatted];
+    logger.debug(`Koda API предоставил ${kodaModels.length} моделей`);
+  }
+  
+  if (isHealthy) {
+    const polzaModels = await getAvailablePolzaModels();
+    if (polzaModels.length > 0) {
+      const polzaFormatted = polzaModels.map(model => ({
+        name: model.name || model.id,
+        value: model.id || model.value,
+        provider: model.provider || 'polza'
+      }));
+      allModels = [...allModels, ...polzaFormatted];
+      logger.debug(`Polza.ai подключен с ${polzaModels.length} моделями`);
+    }
+  }
+
+  // If no models from any source, use fallback
+  if (allModels.length === 0) {
+    aiError.value = 'Все API недоступны. Работаем в демо-режиме с предустановленными ответами.';
+    const fallbackModels = [
+      { name: 'Claude Sonnet 4.5', value: 'anthropic/claude-sonnet-4.5', provider: 'anthropic' },
+      { name: 'GPT-5.1', value: 'openai/gpt-5.1', provider: 'openai' },
+      { name: 'GPT-5.1 Chat', value: 'openai/gpt-5.1-chat', provider: 'openai' },
+      { name: 'GPT-5.1 Codex', value: 'openai/gpt-5.1-codex', provider: 'openai' },
+      { name: 'GPT-5.1 Codex Mini', value: 'openai/gpt-5.1-codex-mini', provider: 'openai' },
+      { name: 'Nova Premier V1', value: 'amazon/nova-premier-v1', provider: 'amazon' },
+      { name: 'Gemini 3 Pro Preview', value: 'google/gemini-3-pro-preview', provider: 'google' },
+      { name: 'Kimi K2 Thinking', value: 'moonshotai/kimi-k2-thinking', provider: 'moonshotai' },
+      { name: 'Sherlock Dash Alpha', value: 'openrouter/sherlock-dash-alpha', provider: 'openrouter' },
+      { name: 'Sherlock Think Alpha', value: 'openrouter/sherlock-think-alpha', provider: 'openrouter' }
+    ];
+    allModels = fallbackModels;
+    logger.debug('Using demo mode with fallback models');
+  }
+
+  // Note: availableModels is now managed by the ModelSelector component
+  // No need to set it here as ModelSelector fetches models independently
+
+  // Load workspaces if agent mode is enabled
+  if (agentMode.value) {
+    loadWorkspaces()
+  }
+
+  // Check Integram MCP connection (Phase 1)
+  checkIntegrامMCPConnection()
+});
+
+const onExecutionComplete = (exec) => {
+  logger.debug('Code execution completed:', exec)
+}
+
+const onExecutionError = (exec) => {
+  logger.error('Code execution error:', exec)
+}
+
+// Workspace functions
+const loadWorkspaces = async () => {
+  if (!agentMode.value) return
+
+  loadingWorkspaces.value = true
+  try {
+    // Use consistent user ID (same as WorkspaceAIAgent)
+    // TODO: Get actual user ID from auth system
+    const userId = currentUserId.value
+    const loadedWorkspaces = await getUserWorkspaces(userId)
+    workspaces.value = loadedWorkspaces
+  } catch (error) {
+    logger.error('Failed to load workspaces:', error)
+  } finally {
+    loadingWorkspaces.value = false
+  }
+}
+
+const getWorkspaceName = (workspaceId) => {
+  const workspace = workspaces.value.find(w => w.id === workspaceId)
+  return workspace ? workspace.name : 'Unknown'
+}
+
+const createNewWorkspace = async () => {
+  if (!newWorkspace.name.trim()) {
+    createWorkspaceError.value = 'Введите название workspace'
+    return
+  }
+
+  creatingWorkspace.value = true
+  createWorkspaceError.value = null
+
+  try {
+    // Use consistent user ID (same as WorkspaceAIAgent)
+    // TODO: Get actual user ID from auth system
+    const userId = currentUserId.value
+    const workspace = await createWorkspace(userId, {
+      name: newWorkspace.name,
+      repositoryUrl: newWorkspace.repositoryUrl || undefined,
+      branch: newWorkspace.branch || undefined
+    })
+
+    workspaces.value.push(workspace)
+    selectedWorkspace.value = workspace.id
+
+    // Reset form
+    newWorkspace.name = ''
+    newWorkspace.repositoryUrl = ''
+    newWorkspace.branch = 'main'
+    showCreateWorkspaceDialog.value = false
+  } catch (error) {
+    logger.error('Failed to create workspace:', error)
+    createWorkspaceError.value = error.message || 'Не удалось создать workspace'
+  } finally {
+    creatingWorkspace.value = false
+  }
+}
+
+// Watch agentMode to load workspaces when enabled
+watch(agentMode, (newVal) => {
+  if (newVal) {
+    loadWorkspaces()
+  }
+})
+
+onUnmounted(() => {
+  currentAttachments.value.forEach(att => URL.revokeObjectURL(att.url));
+  if (recognition.value) recognition.value.stop();
+});
+
+watch(
+  () => [...aiChat.messages],
+  newVal => {
+    const messagesToSave = newVal.filter(msg => msg !== assistantMessage.value);
+    localStorage.setItem('aiChat', JSON.stringify(messagesToSave));
+  },
+  { deep: true },
+);
+
+watch(activeTabIndex, () => {
+  nextTick(() => {
+    if (isModalVisible.value) {
+      scrollToBottom(modalMessagesContainer);
+    } else {
+      if (activeTabIndex.value === 0) {
+        scrollToBottom(aiMessagesContainer);
+      } else {
+        scrollToBottom(messagesContainer);
+      }
+    }
+  });
+});
+
+const sendMessage = () => {
+  if (newMessage.value.trim()) {
+    activeChat.messages.push({
+      text: newMessage.value,
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isUser: true,
+    });
+    newMessage.value = '';
+    scrollToBottom(messagesContainer);
+    if (isModalVisible.value) {
+      scrollToBottom(modalMessagesContainer);
+    }
+  }
+};
+
+/**
+ * Phase 2: Chat with Integram MCP tool calling
+ *
+ * Calls the AI model with Integram MCP tools available.
+ * The AI can then use tools like integram_get_dictionary, integram_get_object_list, etc.
+ *
+ * @param {string} userMessage - User's message
+ * @param {Array} conversationHistory - Previous messages
+ * @param {Object} options - Chat options (model, temperature, maxTokens)
+ * @param {Function} onChunk - Callback for streaming chunks
+ */
+const chatWithIntegrامMCP = async (userMessage, conversationHistory, options, onChunk) => {
+  const orchestratorURL = import.meta.env.VITE_ORCHESTRATOR_URL || 'https://dev.drondoc.ru'
+
+  // Build system prompt with MCP usage guidelines (Phase 3: Table references support)
+  const mcpSystemPrompt = `${getCombinedSystemPrompt()}
+
+## Integram MCP Tools Available
+
+You have access to Integram database tools via MCP (Model Context Protocol). Use these tools to query and manipulate data in the Integram database.
+
+**Current Database Context:**
+- Server: ${integraMCPState.serverURL}
+- Database: ${integraMCPState.database}
+- User: ${integraMCPState.username}
+
+**Available Tools:**
+
+1. **integram_get_dictionary()** - Get list of all tables (types)
+   - Returns: Array of tables with { id, name, ... }
+
+2. **integram_get_type_metadata(typeId)** - Get table schema
+   - Parameters: typeId (number)
+   - Returns: Table metadata with columns (requisites)
+
+3. **integram_get_object_list(typeId, params)** - Get records from table
+   - Parameters:
+     - typeId (number)
+     - params (object): { offset, limit, filter }
+   - Returns: List of objects (records) with pagination
+
+4. **integram_get_object_edit_data(objectId)** - Get single record details
+   - Parameters: objectId (number)
+   - Returns: Object with all field values
+
+5. **integram_create_object(typeId, value, requisites)** - Create new record
+   - Parameters:
+     - typeId (number)
+     - value (string) - object name
+     - requisites (object) - field values { "fieldId": "value", ... }
+   - Returns: Created object details
+
+6. **integram_set_object_requisites(objectId, requisites)** - Update record
+   - Parameters:
+     - objectId (number)
+     - requisites (object) - updated field values
+   - Returns: Update result
+
+7. **integram_delete_object(objectId)** - Delete record
+   - Parameters: objectId (number)
+   - Returns: Delete result
+
+**🚀 Phase 3: MCP Table References**
+
+When the user attaches a table using the "📎 Таблицы/отчёты" button with MCP enabled, you will receive a **table reference** instead of full data. This reference looks like:
+
+\`\`\`json
+{
+  "type": "integram/table-reference",
+  "mcpReference": {
+    "typeId": 123,
+    "tableName": "Клиенты",
+    "rowCount": 10500,
+    "columnCount": 8,
+    "server": "https://dronedoc.ru",
+    "database": "my"
+  },
+  "metadata": {
+    "id": 123,
+    "name": "Клиенты",
+    "requisites": [
+      { "id": 456, "alias": "Название", "type": 3 },
+      { "id": 457, "alias": "Email", "type": 3 },
+      ...
+    ]
+  }
+}
+\`\`\`
+
+**How to Work with Table References:**
+
+1. **Recognize the reference**: Check if attachment.type === 'integram/table-reference'
+2. **Extract typeId**: Use \`mcpReference.typeId\` for MCP tool calls
+3. **Fetch data on-demand**: Use \`integram_get_object_list(typeId, { offset: 0, limit: 50 })\` to get first 50 rows
+4. **Paginate if needed**: Adjust offset/limit to get more data
+5. **Show schema**: Use \`metadata.requisites\` to display table structure
+
+**Benefits of Table References:**
+- ⚡ **43x faster**: No need to load 10K+ rows into memory
+- 💾 **48x less memory**: Only metadata is stored (~1KB vs 48MB for large tables)
+- 🪙 **290x fewer tokens**: Reference uses ~500 tokens vs 145K for full data
+- 🚀 **5.8x faster AI**: Less context = faster AI responses
+
+**Example Workflow:**
+
+User: "Analyze the Клиенты table"
+1. Recognize table reference in attachments
+2. Call \`integram_get_object_list(123, { offset: 0, limit: 100 })\` to get first 100 records
+3. Analyze the data
+4. If more data needed, fetch with different offset
+
+User: "Find clients with email ending in @gmail.com"
+1. Use \`integram_get_object_list(123, { filter: "email LIKE '%@gmail.com'" })\`
+2. Or fetch in batches and filter programmatically
+
+**Usage Guidelines:**
+- Start with integram_get_dictionary() to explore available tables
+- Use integram_get_type_metadata() to understand table structure before queries
+- **NEW (Phase 3)**: When user attaches table via MCP, use reference instead of loading all data
+- Use integram_get_object_list() with pagination to retrieve data on-demand
+- Use create/update/delete tools when user requests data modifications
+- Always show tool execution results to the user
+- Format results in readable tables or lists
+
+**Performance Best Practices:**
+- Fetch data in batches (e.g., 50-100 rows at a time)
+- Use filters and pagination to minimize data transfer
+- Only fetch the data you need to answer the user's question
+- Show row counts and schema info before fetching full data
+`
+
+  try {
+    const response = await fetch(`${orchestratorURL}/api/mcp/integram/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: userMessage,
+        conversationHistory: conversationHistory.map(msg => ({
+          role: msg.role,
+          content: msg.content
+        })),
+        systemPrompt: mcpSystemPrompt,
+        model: options.model || 'deepseek-v3.2',
+        temperature: options.temperature || 0.7,
+        maxTokens: options.maxTokens || 4096,
+        stream: true, // Request streaming response
+        // MCP session context
+        mcpContext: {
+          serverURL: integraMCPState.serverURL,
+          database: integraMCPState.database,
+          username: integraMCPState.username
+        }
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+      throw new Error(errorData.error || `HTTP ${response.status}`)
+    }
+
+    // Handle non-streaming response (for Phase 2)
+    // TODO: Add streaming support in Phase 3
+    const data = await response.json()
+
+    if (!data.success) {
+      throw new Error(data.error || 'Integram MCP chat failed')
+    }
+
+    // Send the response as text chunks
+    const responseText = data.response || ''
+    if (responseText) {
+      onChunk({ type: 'text', text: responseText })
+    }
+
+    // If there were tool calls, show summary
+    if (data.toolCallsCount > 0) {
+      const toolSummary = `\n\n✅ **Executed ${data.toolCallsCount} MCP tool call(s)**\n`
+      onChunk({ type: 'text', text: toolSummary })
+    }
+  } catch (error) {
+    logger.error('Integram MCP chat error:', error)
+    throw error
+  }
+}
+
+const sendAiMessage = async () => {
+  const message = aiMessage.value.trim()
+  if ((!message && currentAttachments.value.length === 0) || aiLoading.value) return
+
+  aiError.value = null
+  aiLoading.value = true
+  let lastUsage = null  // Track token usage for Integram transactions
+
+  try {
+    let finalMessage = message
+  
+    if (currentAttachments.value.length > 0) {
+      finalMessage += `\n\nПрикрепленные файлы (${currentAttachments.value.length}):`
+      currentAttachments.value.forEach(attachment => {
+        if (attachment.type.startsWith('image/')) {
+          finalMessage += `\n- Изображение: ${attachment.name}`
+        } else {
+          finalMessage += `\n- ${attachment.name}:\n\`\`\`\n${attachment.data}\n\`\`\``
+        }
+      })
+    }
+
+    const userMessage = {
+      text: message || `Запрос с ${currentAttachments.value.length} файлом(ами)`,
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isUser: true,
+      attachments: currentAttachments.value.length > 0 ? [...currentAttachments.value] : null,
+    }
+    aiChat.messages.push(userMessage)
+    aiMessage.value = ''
+    
+    scrollToBottom(aiMessagesContainer)
+    if (isModalVisible.value) {
+      scrollToBottom(modalMessagesContainer)
+    }
+
+    assistantMessage.value = {
+      text: '',
+      time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      isUser: false,
+    }
+    aiChat.messages.push(assistantMessage.value)
+
+    // Создаем сессию если её нет или она устарела
+    let sessionId = localStorage.getItem('polza_session_id')
+    if (!sessionId || polzaSessionId.value === null) {
+      console.log('Создаем новую сессию Polza.ai...')
+
+      const sessionResponse = await fetch(`${POLZA_CHAT_API_URL}/session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          systemPrompt: getCombinedSystemPrompt(),
+          model: selectedModel.value,
+          userId: currentUserId.value // Use real user ID for token tracking
+        }),
+      })
+
+      if (!sessionResponse.ok) {
+        const errorText = await sessionResponse.text()
+        console.error('Ошибка создания сессии:', sessionResponse.status, errorText)
+        throw new Error(`Не удалось создать сессию: ${sessionResponse.status}`)
+      }
+
+      const sessionData = await sessionResponse.json()
+      if (!sessionData.success || !sessionData.sessionId) {
+        console.error('Некорректный ответ сессии:', sessionData)
+        throw new Error('Некорректный ответ при создании сессии')
+      }
+
+      sessionId = sessionData.sessionId
+      polzaSessionId.value = sessionId
+      localStorage.setItem('polza_session_id', sessionId)
+      console.log('Сессия создана:', sessionId)
+
+      // Сохраняем сессию в Integram (Issue: Session Tracking)
+      try {
+        const tokenId = localStorage.getItem('current_ai_token_id') || '206099'
+        integramChatSessionService.setCurrentToken(tokenId)
+        await integramChatSessionService.createSession({
+          sessionId: sessionId,
+          model: selectedModel.value,
+          systemPrompt: getCombinedSystemPrompt() || ''
+        })
+        console.log('[Chat] Session saved to Integram:', sessionId)
+      } catch (integramError) {
+        console.warn('[Chat] Failed to save session to Integram:', integramError)
+        // Не прерываем работу если Integram недоступен
+      }
+    } else {
+      // Сессия уже существует - убеждаемся что она есть в кэше Integram
+      polzaSessionId.value = sessionId
+      console.log('[Chat] Using existing session:', sessionId)
+
+      // Проверяем/восстанавливаем сессию в Integram кэше
+      try {
+        const tokenId = localStorage.getItem('current_ai_token_id') || '206099'
+        integramChatSessionService.setCurrentToken(tokenId)
+
+        // Проверяем есть ли сессия в кэше, если нет - создаём
+        if (!integramChatSessionService.sessionsCache.has(sessionId)) {
+          console.log('[Chat] Session not in Integram cache, creating...')
+          await integramChatSessionService.createSession({
+            sessionId: sessionId,
+            model: selectedModel.value,
+            systemPrompt: getCombinedSystemPrompt() || ''
+          })
+          console.log('[Chat] Session restored in Integram:', sessionId)
+        }
+      } catch (integramError) {
+        console.warn('[Chat] Failed to restore session in Integram:', integramError)
+      }
+    }
+
+    // Подготавливаем сообщения для отправки
+    const messages = aiChat.messages
+      .filter(msg => {
+        if (msg === assistantMessage.value) return false
+        if (msg === userMessage) return false
+        if (isSystemMessage(msg)) return false
+        if (!msg.text || msg.text.trim() === '') return false
+        return true
+      })
+      .map(msg => ({
+        role: msg.isUser ? 'user' : 'assistant',
+        content: String(msg.text).trim()
+      }))
+
+    // Добавляем текущее сообщение
+    messages.push({
+      role: 'user',
+      content: finalMessage
+    })
+
+    // Check if we should use workspace tool calling (agent mode + workspace selected)
+    // IMPORTANT: Only use workspace chat if BOTH agent mode is enabled AND workspace is selected
+    // AND the model is an Anthropic Claude model that supports tool calling
+    const modelName = String(selectedModel.value || '').toLowerCase()
+    const isClaudeModel = modelName.includes('claude') || modelName.includes('anthropic')
+    const useWorkspace = agentMode.value && selectedWorkspace.value && isClaudeModel
+
+    // Phase 2: Check if we should use Integram MCP tool calling
+    // Use MCP mode when: Integram DB is enabled AND authenticated AND agent mode is on
+    const useMCP = toolsConfig.integramDatabaseEnabled &&
+                   integraMCPState.isAuthenticated &&
+                   agentMode.value
+
+    // Log the decision for debugging
+    logger.debug('Chat routing decision', {
+      agentMode: agentMode.value,
+      selectedWorkspace: selectedWorkspace.value,
+      isClaudeModel,
+      useWorkspace,
+      useMCP,
+      integramAuthenticated: integraMCPState.isAuthenticated,
+      model: selectedModel.value,
+      hasAttachments: currentAttachments.value.length > 0
+    })
+
+    // Определяем провайдера на основе выбранной модели
+    const isKodaModel = modelName.includes('(koda)')
+    const isPolzaModel = !isKodaModel && !isClaudeModel // Все остальные - Polza модели
+
+    let response
+
+    if (useWorkspace) {
+      // Use workspace tool calling for agent mode with Claude
+      logger.info('Using workspace tool calling with Claude', {
+        workspaceId: selectedWorkspace.value,
+        model: selectedModel.value,
+        fileAttachments: currentAttachments.value.length
+      })
+
+      try {
+        // Stream workspace chat response
+        await chatWithWorkspace(
+          selectedWorkspace.value,
+          finalMessage,
+          messages,
+          {
+            model: selectedModel.value,
+            temperature: llmSettings.temperature,
+            maxTokens: 4096,
+            enableTools: toolsConfig.codeInterpreterEnabled || toolsConfig.searchEnabled,
+            systemPrompt: getCombinedSystemPrompt() // Ensure system prompt is passed
+          },
+          (chunk) => {
+            // Handle streaming chunks
+            if (chunk.type === 'text') {
+              assistantMessage.value.text += chunk.text
+              scrollToBottom(aiMessagesContainer)
+              if (isModalVisible.value) {
+                scrollToBottom(modalMessagesContainer)
+              }
+            } else if (chunk.type === 'tool_use') {
+              // Show tool execution in message
+              const toolInfo = `\n\n🔧 **Executing tool:** ${chunk.toolName}\n\`\`\`json\n${JSON.stringify(chunk.toolInput, null, 2)}\n\`\`\`\n`
+              assistantMessage.value.text += toolInfo
+              scrollToBottom(aiMessagesContainer)
+              if (isModalVisible.value) {
+                scrollToBottom(modalMessagesContainer)
+              }
+            } else if (chunk.type === 'tool_execution') {
+              // Show tool result
+              const resultInfo = `\n**Tool result:**\n\`\`\`\n${chunk.result}\n\`\`\`\n`
+              assistantMessage.value.text += resultInfo
+              scrollToBottom(aiMessagesContainer)
+              if (isModalVisible.value) {
+                scrollToBottom(modalMessagesContainer)
+              }
+            } else if (chunk.type === 'warning') {
+              logger.warn('Workspace chat warning:', chunk.message)
+            } else if (chunk.type === 'error') {
+              logger.error('Workspace chat error:', chunk.error)
+              throw new Error(chunk.error)
+            }
+          }
+        )
+      } catch (error) {
+        logger.error('Workspace chat error:', error)
+        // Fall back to regular Polza/Koda chat if workspace chat fails
+        aiError.value = `Ошибка workspace chat: ${error.message}. Переключитесь на обычный режим или выберите другую модель.`
+        throw new Error(`Workspace chat failed: ${error.message}`)
+      }
+    } else if (useMCP) {
+      // Phase 2: Use Integram MCP tool calling mode
+      logger.info('Using Integram MCP mode', {
+        database: integraMCPState.database,
+        model: selectedModel.value,
+        isAuthenticated: integraMCPState.isAuthenticated
+      })
+
+      try {
+        // Call AI with MCP tool support via orchestrator
+        await chatWithIntegrامMCP(
+          finalMessage,
+          messages,
+          {
+            model: selectedModel.value,
+            temperature: llmSettings.temperature,
+            maxTokens: 4096
+          },
+          (chunk) => {
+            // Handle streaming chunks
+            if (chunk.type === 'text') {
+              assistantMessage.value.text += chunk.text
+              scrollToBottom(aiMessagesContainer)
+              if (isModalVisible.value) {
+                scrollToBottom(modalMessagesContainer)
+              }
+            } else if (chunk.type === 'tool_use') {
+              // Show Integram MCP tool execution
+              const toolInfo = `\n\n🗄️ **Integram MCP Tool:** ${chunk.toolName}\n\`\`\`json\n${JSON.stringify(chunk.toolInput, null, 2)}\n\`\`\`\n`
+              assistantMessage.value.text += toolInfo
+              scrollToBottom(aiMessagesContainer)
+              if (isModalVisible.value) {
+                scrollToBottom(modalMessagesContainer)
+              }
+            } else if (chunk.type === 'tool_result') {
+              // Show Integram MCP tool result
+              const resultPreview = typeof chunk.result === 'string'
+                ? chunk.result.substring(0, 500)
+                : JSON.stringify(chunk.result, null, 2).substring(0, 500)
+              const resultInfo = `\n**Результат:**\n\`\`\`json\n${resultPreview}${chunk.result.length > 500 ? '...' : ''}\n\`\`\`\n`
+              assistantMessage.value.text += resultInfo
+              scrollToBottom(aiMessagesContainer)
+              if (isModalVisible.value) {
+                scrollToBottom(modalMessagesContainer)
+              }
+            } else if (chunk.type === 'error') {
+              logger.error('Integram MCP error:', chunk.error)
+              throw new Error(chunk.error)
+            }
+          }
+        )
+      } catch (error) {
+        logger.error('Integram MCP chat error:', error)
+        aiError.value = `Ошибка Integram MCP: ${error.message}`
+        throw new Error(`Integram MCP chat failed: ${error.message}`)
+      }
+    } else if (isKodaModel) {
+      // Используем Koda API для Koda моделей
+      console.log('Используем Koda API для модели:', selectedModel.value)
+      
+      const externalMessages = messages.map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }))
+
+      response = await fetch('/api/ai-tokens/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: selectedModel.value.replace(' (Koda)', ''), // Убираем маркер Koda модели
+          messages: externalMessages,
+          temperature: 0.7,
+          max_tokens: 2048,
+          provider: 'external'
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `Koda API вернул ${response.status}: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      if (!data.success) {
+        throw new Error(data.error || 'Ошибка Koda API')
+      }
+
+      // Извлекаем ответ из Koda API формата
+      const responseText = data.data.choices?.[0]?.message?.content || 
+                          data.data.choices?.[0]?.text || 
+                          'Извините, не удалось получить ответ от Koda API.'
+      
+      assistantMessage.value.text = responseText
+
+    } else {
+      // Используем Polza.ai
+      if (!isApiAvailable.value) {
+        // Демо-режим: генерируем локальный ответ
+        console.log('Работаем в демо-режиме');
+        await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000)); // Имитация задержки
+
+        const demoResponse = generateDemoResponse(finalMessage, selectedModel.value);
+        assistantMessage.value.text = demoResponse;
+      } else {
+        // Нормальный режим: отправляем запрос к Polza.ai API с поддержкой streaming
+        response = await fetch(`${POLZA_CHAT_API_URL}/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sessionId: sessionId,
+            message: finalMessage,
+            model: selectedModel.value,
+            temperature: 0.7,
+            maxTokens: 2048,
+            attachments: currentAttachments.value.length > 0 ? currentAttachments.value : [],
+            stream: true  // Enable streaming
+          }),
+        })
+
+        if (!response.ok) {
+          // Проверяем Content-Type для определения типа ошибки
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            // Fallback: используем локальный ответ для демонстрации
+            console.warn('Polza.ai API недоступен, используем демо-ответ');
+            const demoResponse = generateDemoResponse(finalMessage, selectedModel.value);
+            assistantMessage.value.text = demoResponse;
+          } else {
+            const errorData = await response.json()
+            throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`)
+          }
+        } else {
+          // Check if response is streaming (SSE)
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('text/event-stream')) {
+            // Handle SSE streaming response
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  const data = line.substring(6);
+
+                  try {
+                    const chunk = JSON.parse(data);
+
+                    if (chunk.type === 'content') {
+                      // Append content character by character
+                      assistantMessage.value.text += chunk.content;
+
+                      // Scroll to bottom after each chunk
+                      scrollToBottom(aiMessagesContainer);
+                      if (isModalVisible.value) {
+                        scrollToBottom(modalMessagesContainer);
+                      }
+                    } else if (chunk.type === 'done') {
+                      console.log('Streaming completed. Usage:', chunk.usage);
+                      lastUsage = chunk.usage  // Save usage for Integram transaction
+                    } else if (chunk.error) {
+                      throw new Error(chunk.error);
+                    }
+                  } catch (parseError) {
+                    console.warn('Failed to parse SSE chunk:', data);
+                  }
+                }
+              }
+            }
+          } else if (contentType && contentType.includes('application/json')) {
+            // Fallback to non-streaming response
+            const data = await response.json()
+            if (!data.success) {
+              throw new Error(data.error || 'Неизвестная ошибка Polza.ai')
+            }
+            // Отображаем ответ от API
+            assistantMessage.value.text = data.response;
+          } else {
+            // Fallback при некорректном ответе
+            console.warn('Polza.ai API вернул некорректный ответ, используем демо-ответ');
+            const demoResponse = generateDemoResponse(finalMessage, selectedModel.value);
+            assistantMessage.value.text = demoResponse;
+          }
+        }
+      }
+    }
+    
+    const finalMessageObj = { ...assistantMessage.value }
+    aiChat.messages.splice(aiChat.messages.indexOf(assistantMessage.value), 1, finalMessageObj)
+    assistantMessage.value = null
+
+    // Agent mode: Detect and handle code execution
+    if (agentMode.value && toolsConfig.codeInterpreterEnabled && finalMessageObj.text) {
+      handleCodeExecution(finalMessageObj.text)
+    }
+
+    // Сохраняем сообщения и транзакцию в Integram после ответа (Issue: Session Tracking)
+    if (polzaSessionId.value) {
+      try {
+        const messagesToSave = aiChat.messages
+          .filter(msg => !isSystemMessage(msg) && msg.text)
+          .map(msg => ({
+            role: msg.isUser ? 'user' : 'assistant',
+            content: msg.text,
+            timestamp: new Date().toISOString()
+          }))
+        await integramChatSessionService.updateMessages(polzaSessionId.value, messagesToSave)
+        console.log('[Chat] Messages saved to Integram')
+
+        // Сохраняем транзакцию с токенами и стоимостью
+        // Issue: Сохраняем даже если usage не пришёл - используем примерный расчёт
+        if (finalMessageObj.text) {
+          // Примерный расчёт токенов если API не вернул usage
+          // ~4 символа = 1 токен для русского/английского текста
+          const estimatedInputTokens = lastUsage?.prompt_tokens || Math.ceil(message.length / 4)
+          const estimatedOutputTokens = lastUsage?.completion_tokens || Math.ceil(finalMessageObj.text.length / 4)
+
+          await integramChatSessionService.saveMessageExchange({
+            sessionId: polzaSessionId.value,
+            userMessage: message,
+            assistantMessage: finalMessageObj.text,
+            model: selectedModel.value,
+            inputTokens: estimatedInputTokens,
+            outputTokens: estimatedOutputTokens,
+            cost: lastUsage?.cost || 0,
+            systemPrompt: getCombinedSystemPrompt() || ''
+          })
+          console.log('[Chat] Transaction saved to Integram. Usage from API:', !!lastUsage,
+            'Input tokens:', estimatedInputTokens, 'Output tokens:', estimatedOutputTokens)
+        }
+      } catch (integramError) {
+        console.warn('[Chat] Failed to save to Integram:', integramError)
+      }
+    }
+
+    currentAttachments.value.forEach(att => URL.revokeObjectURL(att.url))
+    currentAttachments.value = []
+
+  } catch (error) {
+    aiError.value = error.message
+    console.error('Ошибка Polza.ai:', error)
+    if (assistantMessage.value) {
+      aiChat.messages = aiChat.messages.filter(msg => msg !== assistantMessage.value)
+      assistantMessage.value = null
+    }
+  } finally {
+    aiLoading.value = false
+    uploadProgress.value = 0
+    scrollToBottom(aiMessagesContainer)
+    if (isModalVisible.value) {
+      scrollToBottom(modalMessagesContainer)
+    }
+  }
+}
+
+const transferToEditor = content => {
+  window.dispatchEvent(
+    new CustomEvent('insert-ai-content', {
+      detail: { content },
+    }),
+  );
+};
+
+const scrollToBottom = container => {
+  nextTick(() => {
+    if (container.value) {
+      container.value.scrollTop = container.value.scrollHeight;
+    }
+  });
+};
+
+const chatWidth = ref(parseInt(localStorage.getItem('chatWidth')) || 320);
+const isResizing = ref(false);
+
+const startResize = (e) => {
+  isResizing.value = true;
+  document.addEventListener('mousemove', handleResize);
+  document.addEventListener('mouseup', stopResize);
+  e.preventDefault();
+};
+
+const handleResize = (e) => {
+  if (!isResizing.value) return;
+  const newWidth = window.innerWidth - e.clientX;
+  if (newWidth >= 280 && newWidth <= 800) {
+    chatWidth.value = newWidth;
+  }
+};
+
+const stopResize = () => {
+  if (isResizing.value) {
+    isResizing.value = false;
+    localStorage.setItem('chatWidth', chatWidth.value.toString());
+    document.removeEventListener('mousemove', handleResize);
+    document.removeEventListener('mouseup', stopResize);
+  }
+};
+
+// ========== Integram MCP Functions (Phase 1) ==========
+
+const checkIntegrامMCPConnection = () => {
+  const status = integraMCPService.getConnectionStatus()
+  Object.assign(integraMCPState, status)
+  return status
+}
+
+const handleIntegrामMCPAuth = async () => {
+  integramAuthLoading.value = true
+  integramAuthError.value = null
+
+  try {
+    const result = await integraMCPService.authenticate({
+      serverURL: integramAuthForm.serverURL,
+      database: integramAuthForm.database,
+      login: integrামAuthForm.login,
+      password: integramAuthForm.password
+    })
+
+    if (result.success) {
+      // Update state
+      checkIntegrامMCPConnection()
+
+      // Close dialog
+      showIntegrامMCPAuth.value = false
+
+      // Clear password
+      integramAuthForm.password = ''
+
+      // Show success notification
+      console.log('✅ Integram MCP authenticated:', result)
+    }
+  } catch (error) {
+    integramAuthError.value = error.message
+    console.error('❌ Integram MCP authentication failed:', error)
+  } finally {
+    integramAuthLoading.value = false
+  }
+}
+
+const handleIntegrамMCPLogout = () => {
+  integraMCPService.logout()
+  checkIntegrامMCPConnection()
+  integrամAuthForm.password = ''
+}
+
+const testIntegrامMCP = async () => {
+  try {
+    console.log('🧪 Testing Integram MCP with getDictionary...')
+    const result = await integraMCPService.getDictionary()
+    console.log('✅ Integram MCP test successful:', result)
+    return result
+  } catch (error) {
+    console.error('❌ Integram MCP test failed:', error)
+    throw error
+  }
+}
+
+onUnmounted(() => {
+  document.removeEventListener('mousemove', handleResize);
+  document.removeEventListener('mouseup', stopResize);
+});
+</script>
+
+<style scoped lang="scss">
+.resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 1000;
+  transition: background 0.2s;
+
+  &:hover {
+    background: var(--primary-color);
+  }
+
+  &:active {
+    background: var(--primary-color);
+  }
+}
+
+.quick-prompts {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--surface-border);
+  
+  :deep(.p-button) {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+  }
+}
+
+.message-actions, .modal-message-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+  
+  .action-buttons {
+    display: flex;
+    gap: 0.25rem;
+  }
+}
+
+.voice-btn {
+  &.recording {
+    animation: pulse 1s infinite;
+    color: var(--red-500) !important;
+  }
+}
+
+.upload-progress {
+  padding: 0.5rem;
+  background: var(--surface-ground);
+  border-top: 1px solid var(--surface-border);
+  
+  span {
+    font-size: 0.75rem;
+    display: block;
+    text-align: center;
+    margin-top: 0.25rem;
+  }
+}
+
+.image-preview {
+  max-width: 200px;
+  max-height: 150px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.image-preview-small {
+  max-width: 40px;
+  max-height: 40px;
+  border-radius: 4px;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 70vh;
+}
+
+.history-dialog {
+  .chat-list {
+    max-height: 300px;
+    overflow-y: auto;
+    
+    .chat-item {
+      display: flex;
+      justify-content: between;
+      align-items: center;
+      padding: 0.5rem;
+      border-bottom: 1px solid var(--surface-border);
+      
+      .chat-actions {
+        display: flex;
+        gap: 0.25rem;
+        margin-left: auto;
+      }
+    }
+  }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+}
+
+.tabview-container {
+  position: relative;
+  height: 100%;
+}
+
+.expand-button-container {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 10;
+  display: flex;
+  gap: 0.25rem;
+  
+  .expand-button {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+  }
+}
+
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--surface-card);
+  border-radius: 12px;
+  height: 100%;
+  position: relative;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-bottom: 80px;
+  
+  .message {
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin: 0.25rem 0.5rem;
+    display: flex;
+    
+    &.user-message {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+    
+    .message-content {
+      background: var(--surface-ground);
+      padding: 0.5rem;
+      border-radius: 12px;
+      box-shadow: var(--shadow-1);
+      position: relative;
+      
+      .attachment-info {
+        .attachment-item {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem;
+          background: var(--surface-100);
+          border-radius: 4px;
+          margin-bottom: 0.5rem;
+          font-size: 0.875rem;
+          
+          &:last-child {
+            margin-bottom: 0;
+          }
+          
+          .pi-file, .pi-database { 
+            color: var(--primary-color); 
+          }
+          
+          .file-size, .api-id {
+            font-size: 0.75rem;
+            opacity: 0.7;
+          }
+        }
+      }
+      
+      .message-text {
+        margin-bottom: 0.5rem;
+        white-space: pre-wrap;
+      }
+      
+      .message-time {
+        font-size: 0.75rem;
+        opacity: 0.7;
+      }
+      
+      .transfer-button {
+        width: 24px;
+        height: 24px;
+      }
+    }
+    
+    &.user-message .message-content {
+      background: var(--primary-color);
+      color: var(--primary-color-text);
+    }
+  }
+}
+
+.input-container {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: var(--surface-ground);
+  border-radius: 12px;
+  margin-top: auto;
+  box-shadow: var(--shadow-2);
+  align-items: center;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  
+  .input-field {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    height: 35px;
+  }
+}
+
+.current-attachments {
+  padding: 0 0.5rem 0.5rem;
+  
+  .current-attachment {
+    margin-bottom: 0.25rem;
+    
+    .attachment-info.current {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem 0.5rem;
+      background: var(--surface-100);
+      border-radius: 4px;
+      font-size: 0.875rem;
+    }
+  }
+}
+
+.loading-indicator {
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.error-message {
+  color: var(--red-500);
+  padding: 0.5rem;
+  background: var(--red-50);
+  border-radius: 4px;
+  margin: 0.5rem;
+  text-align: left;
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.streaming-cursor::after {
+  content: '|';
+  animation: blink 1s infinite;
+  color: var(--primary-color);
+}
+
+.attachment-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 150px;
+  
+  :deep(.p-button) {
+    justify-content: flex-start;
+  }
+}
+
+.modal-chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.modal-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-height: 0;
+  
+  .modal-message {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    max-width: 85%;
+    
+    &.modal-user-message {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+    
+    .modal-message-content {
+      background: var(--surface-ground);
+      padding: 0.75rem 1rem;
+      border-radius: 12px;
+      box-shadow: var(--shadow-1);
+      position: relative;
+      word-break: break-word;
+      max-width: 100%;
+      
+      .modal-attachment-info {
+        .attachment-item {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          padding: 0.5rem;
+          background: var(--surface-100);
+          border-radius: 4px;
+          margin-bottom: 0.5rem;
+          font-size: 0.875rem;
+          
+          &:last-child {
+            margin-bottom: 0;
+          }
+          
+          .pi-file, .pi-database { 
+            color: var(--primary-color); 
+          }
+          
+          .file-size, .api-id {
+            font-size: 0.75rem;
+            opacity: 0.7;
+          }
+        }
+      }
+      
+      .modal-message-text {
+        :deep(p) { margin: 0; }
+        :deep(pre) {
+          white-space: pre-wrap;
+          background: var(--surface-100);
+          padding: 0.5rem;
+          border-radius: 4px;
+          overflow-x: auto;
+        }
+      }
+      
+      .modal-message-time {
+        font-size: 0.75rem;
+        opacity: 0.7;
+        text-align: right;
+      }
+    }
+    
+    &.modal-user-message .modal-message-content {
+      background: var(--primary-color);
+      color: var(--primary-color-text);
+    }
+  }
+}
+
+.modal-controls {
+  flex-shrink: 0;
+  background: var(--surface-ground);
+  border-top: 1px solid var(--surface-border);
+}
+
+.model-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem 0.5rem;
+  border-bottom: 1px solid var(--surface-border);
+
+  label {
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .model-dropdown {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .settings-btn, .tools-btn {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+  }
+}
+
+.modal-input-container {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem 1rem;
+
+  .modal-input-field {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.modal-loading-indicator {
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-error-message {
+  color: var(--red-500);
+  padding: 0.75rem;
+  background: var(--red-50);
+  border-radius: 6px;
+  margin: 0.5rem;
+  text-align: left;
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.data-selector-dialog {
+  .field {
+    margin-bottom: 1rem;
+
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+  }
+}
+
+.settings-dialog {
+  max-height: 60vh;
+  overflow-y: auto;
+
+  .field {
+    margin-bottom: 1.5rem;
+
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: 500;
+    }
+
+    small {
+      display: block;
+      margin-top: 0.25rem;
+      opacity: 0.7;
+      font-size: 0.75rem;
+    }
+  }
+}
+
+.tools-dialog {
+  .field {
+    margin-bottom: 1rem;
+
+    label {
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+    }
+  }
+
+  .agent-mode-toggle {
+    background: rgba(var(--primary-500), 0.1);
+    padding: 1rem;
+    border-radius: 8px;
+
+    label {
+      font-size: 1.1rem;
+    }
+  }
+
+  .agent-info {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background: var(--surface-ground);
+    border-radius: 4px;
+    border-left: 3px solid var(--primary-color);
+
+    i {
+      margin-right: 0.5rem;
+      color: var(--primary-color);
+    }
+  }
+}
+
+:deep(.p-tabview) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  
+  .p-tabview-panels {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    padding: 0 0 0;
+    
+    .p-tabview-panel {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+  }
+  
+  .p-button {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    
+    .pi { font-size: 1rem; }
+  }
+  
+  .p-inputtext {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+  }
+  
+  .p-avatar { aspect-ratio: 1/1; flex-shrink: 0; }
+  
+  .p-tabview-nav { position: relative; }
+  .p-tabview-nav-link { padding: 0.75rem 1rem; }
+  .p-tabview-ink-bar {
+    background-color: var(--primary-color);
+    height: 2px;
+    display: block !important;
+  }
+}
+
+.modal-messages::-webkit-scrollbar,
+.messages::-webkit-scrollbar {
+  width: 8px;
+  
+  &-track { background: var(--surface-ground); }
+  &-thumb {
+    background: var(--surface-border);
+    border-radius: 4px;
+    
+    &:hover { background: var(--text-color-secondary); }
+  }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+@media screen and (max-width: 960px) {
+  :deep(.p-dialog) { width: 75vw !important; }
+  .modal-message { max-width: 90%; }
+}
+
+@media screen and (max-width: 640px) {
+  :deep(.p-dialog) {
+    width: 90vw !important;
+    height: 90vh !important;
+  }
+  
+  .modal-message { max-width: 95%; }
+  .modal-message-content { padding: 0.5rem 0.75rem; }
+  .modal-input-container { padding: 0.75rem; }
+  
+  .message {
+    flex-direction: column;
+    align-items: flex-start;
+    
+    &.user-message { align-items: flex-end; }
+    
+    .message-content { max-width: 90%; }
+  }
+  
+}
+
+.polza-agents-info {
+  padding: 2rem;
+  text-align: left;
+  
+  h3 {
+    color: var(--primary-color);
+    margin-bottom: 1rem;
+    font-size: 1.5rem;
+  }
+  
+  p {
+    margin-bottom: 1rem;
+    line-height: 1.6;
+  }
+  
+  ul {
+    margin: 1rem 0;
+    padding-left: 1.5rem;
+    
+    li {
+      margin-bottom: 0.5rem;
+      line-height: 1.5;
+      
+      strong {
+        color: var(--primary-color);
+      }
+    }
+  }
+  
+  em {
+    color: var(--text-color-secondary);
+    font-style: italic;
+  }
+}
+
+/* Utility classes for theme-aware colors */
+.status-text {
+  font-size: 0.75rem;
+  color: var(--text-color);
+}
+
+.success-icon {
+  color: var(--green-500);
+}
+
+.warning-icon {
+  color: var(--orange-500);
+}
+
+.error-icon {
+  color: var(--red-500);
+}
+
+/* Session history styles */
+.history-dialog {
+  .chat-list {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .chat-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    background: var(--surface-50);
+    border: 1px solid var(--surface-200);
+    transition: all 0.2s;
+
+    &:hover {
+      background: var(--surface-100);
+      border-color: var(--primary-color);
+    }
+
+    .chat-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+
+      strong {
+        color: var(--text-color);
+      }
+
+      small {
+        color: var(--text-color-secondary);
+        font-size: 0.85rem;
+      }
+    }
+
+    .chat-actions {
+      display: flex;
+      gap: 0.25rem;
+    }
+  }
+
+  .text-muted {
+    color: var(--text-color-secondary);
+  }
+}
+
+/* Edit message dialog */
+.edit-message-dialog {
+  :deep(.p-inputtextarea) {
+    font-family: inherit;
+    font-size: 0.95rem;
+  }
+}
+
+/* Message action buttons */
+.message-actions {
+  .action-buttons {
+    display: flex;
+    gap: 0.25rem;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .message:hover & .action-buttons {
+    opacity: 1;
+  }
+
+  .edit-button,
+  .delete-button {
+    &:hover {
+      background: var(--surface-100);
+    }
+  }
+
+  .delete-button:hover {
+    color: var(--red-500);
+  }
+}
+</style>

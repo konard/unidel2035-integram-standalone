@@ -1,0 +1,173 @@
+/* SmartQ Styles - Migrated from legacy smartq.css */
+
+.sq-blocks td {
+    overflow-wrap: anywhere;
+}
+
+.sq-blocks .p-datatable thead th {
+    white-space: normal !important;
+    vertical-align: top !important;
+    text-align: center;
+    position: relative;
+}
+
+.sq-blocks .p-datatable tfoot th {
+    text-align: right;
+}
+
+.sq-blocks tr.no-padding td {
+    padding: 0;
+}
+
+.sq-blocks tr.no-padding input {
+    width: 100%;
+    background-color: #f5f5f5;
+    border: 1px solid gray;
+}
+
+.sq-blocks .saving {
+    background-color: #fff5f5;
+}
+
+.sq-blocks .editing {
+    padding: 0 !important;
+}
+
+.sq-blocks .editing-text {
+    border: 2px solid #333 !important;
+}
+
+.sq-blocks .switch-pages {
+    width: 30px;
+}
+
+.sq-blocks .new-req {
+    position: absolute;
+}
+
+.sq-blocks .sq-table th,
+.page-count-from,
+.page-count-to {
+    font-weight: 500;
+}
+
+.sq-blocks .sq-order-num,
+.sq-blocks .sq-order-dir {
+    color: #a1a1a1;
+    font-weight: 400;
+}
+
+.sq-blocks .calculable,
+.dub-grouped {
+    background-color: #fafafa;
+}
+
+.sq-blocks .dub-rec {
+    background-color: #fff5f5;
+}
+
+.sq-blocks .ms-link {
+    color: #333;
+}
+
+.sq-blocks .err-msg {
+    z-index: 1000;
+}
+
+.sq-blocks .new-table-req {
+    margin: -2px;
+}
+
+.sq-blocks .NUMBER {
+    left: 0;
+}
+
+.sq-blocks .NO-NUMBER {
+    right: 0;
+}
+
+.sq-blocks .select2 {
+    padding: 0.25rem !important;
+}
+
+.sq-blocks .same-object {
+    background-color: lightgray;
+}
+
+.sq-blocks td[base='SIGNED'],
+.sq-blocks td[base='NUMBER'] {
+    white-space: nowrap;
+    text-align-last: right;
+}
+
+.sq-blocks input.inline-edit,
+.sq-blocks textarea.inline-edit {
+    outline: none;
+    border: none;
+}
+
+.sq-blocks .sub-totals-left {
+    border-left: 2px solid darkgreen !important;
+}
+
+.sq-blocks .sub-totals-right {
+    border-right: 2px solid darkgreen !important;
+}
+
+.sq-blocks .sub-totals-top {
+    border-top: 2px solid darkgreen !important;
+}
+
+.sq-blocks .sub-totals-bottom {
+    border-bottom: 2px solid darkgreen !important;
+}
+
+.sq-blocks .sub-totals {
+    background-color: #fafafa;
+}
+
+.sq-blocks .sub-totals-tab {
+    z-index: 10;
+}
+
+.sq-blocks .right-totals {
+    right: 0;
+}
+
+.sq-blocks .tr-sticky {
+    position: sticky;
+    top: 48px;
+    z-index: 1;
+}
+
+.sq-blocks svg {
+    display: inline;
+}
+
+.position-relative {
+    position: relative !important;
+}
+
+.position-absolute {
+    position: absolute !important;
+}
+
+.resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background: black;
+    opacity: 0;
+    width: 6px;
+    cursor: col-resize;
+}
+
+.resize-handle:hover,
+.header--being-resized .resize-handle {
+    opacity: 0.5;
+}
+
+th:hover .resize-handle {
+    opacity: 0.3;
+}
