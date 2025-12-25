@@ -630,6 +630,34 @@ const fetchMenuItems = async () => {
     logger.debug('Created Pages section with default fallback link')
   }
 
+  // Load MyRoleMenu report from my database
+  try {
+    let token = localStorage.getItem('my_token') || localStorage.getItem('token')
+    let xsrf = localStorage.getItem('my_xsrf') || localStorage.getItem('_xsrf')
+    const user = localStorage.getItem('user') || localStorage.getItem('my_user')
+
+    if (token && user) {
+      const apiBase = localStorage.getItem('apiBase') || window.location.hostname
+      integramApiClient.setServer(`https://${apiBase}`)
+      integramApiClient.setCredentials('my', token, xsrf, 'my')
+
+      const response = await integramApiClient.get('report/MyRoleMenu', { JSON_KV: true })
+
+      if (response && Array.isArray(response) && response.length > 0) {
+        // Process MyRoleMenu data
+        pagesSection.items = response.map(row => ({
+          label: row.Name || row['Name'],
+          to: row.HREF || row['HREF'],
+          icon: 'pi pi-fw pi-link'
+        }))
+        logger.debug('Loaded MyRoleMenu items:', pagesSection.items.length)
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to load MyRoleMenu:', error)
+  }
+
+  loading.value = false
 }
 
 // Drag and drop handlers
