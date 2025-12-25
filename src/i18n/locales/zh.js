@@ -541,7 +541,7 @@ export default {
       aiPromptPlaceholder: '例如：创建一个代理，用于从社交网络收集和分析文本情感，并自动生成报告',
       generateWithAI: '使用 AI 生成'
     },
-    creator: 'DronDoc Team',
+    creator: 'Integram Team',
     statusRunning: '运行中',
     statusDraft: '草稿',
     statusBeta: '测试版'
@@ -563,7 +563,7 @@ export default {
 
     // Monolith Backend
     monolith: {
-      info: '配置 DronDoc 单体后端 (Node.js/Express) 的连接设置',
+      info: '配置 Integram 单体后端 (Node.js/Express) 的连接设置',
       backendSettings: '后端服务器设置',
       backendUrl: '后端 URL',
       backendUrlPlaceholder: 'http://localhost:8081',
@@ -603,7 +603,7 @@ export default {
       info: '配置 Integram 数据库 (ddadmin) 的连接设置',
       apiSettings: 'Integram API 设置',
       apiUrl: 'Integram API URL',
-      apiUrlPlaceholder: 'https://dronedoc.ru',
+      apiUrlPlaceholder: '${import.meta.env.VITE_INTEGRAM_URL}',
       apiUrlHelp: 'Integram API 的基础 URL',
       database: '数据库名称',
       databasePlaceholder: 'ddadmin',
@@ -712,7 +712,7 @@ export default {
     },
 
     solution: {
-      title: 'DronDoc — 您的数字化组织',
+      title: 'Integram — 您的数字化组织',
       speed: '数小时内完成设置',
       speedDesc: '速度',
       savings: '成本降低 10 倍',
@@ -734,7 +734,7 @@ export default {
     },
 
     useCases: {
-      title: '我们为谁创建了 DronDoc',
+      title: '我们为谁创建了 Integram',
       it: {
         title: 'IT 公司',
         feature1: '客户支持自动化',
@@ -824,7 +824,7 @@ export default {
       q3: '启动第一个代理需要多长时间？',
       a3: '平均而言，第一个代理可在 2-4 小时内启动。对于简单任务，可能只需 30-60 分钟。',
       q4: '可以与我的现有系统集成吗？',
-      a4: '是的，DronDoc 支持 50 多种与流行服务的现成集成：CRM、消息应用、支付系统、数据库等。',
+      a4: '是的，Integram 支持 50 多种与流行服务的现成集成：CRM、消息应用、支付系统、数据库等。',
       q5: '提供什么支持？',
       a5: '免费套餐提供电子邮件支持。付费套餐提供优先支持，保证响应时间。企业版配备专属经理。',
       q6: '客户数据会怎样？',

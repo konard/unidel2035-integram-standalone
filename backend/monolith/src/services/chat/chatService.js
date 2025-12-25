@@ -14,7 +14,7 @@ import CHAT_TABLES from '../../config/chat-tables.js'
 import { debugLog } from './debug-log.js'
 
 const INTEGRAM_CONFIG = {
-  serverURL: process.env.INTEGRAM_API_URL || 'https://dronedoc.ru',
+  serverURL: process.env.INTEGRAM_API_URL || 'https://example.integram.io',
   database: process.env.INTEGRAM_DATABASE || 'my'
 }
 
@@ -225,7 +225,7 @@ export class ChatService {
         // Photo field returns HTML: <a target="_blank" href="/download/...">filename</a>
         const hrefMatch = photoValue.match(/href="([^"]+)"/)
         if (hrefMatch) {
-          const baseUrl = process.env.INTEGRAM_URL || 'https://dronedoc.ru'
+          const baseUrl = process.env.INTEGRAM_URL || 'https://example.integram.io'
           authorAvatar = `${baseUrl}${hrefMatch[1]}`
         }
       }
@@ -349,7 +349,7 @@ export class ChatService {
           const hrefMatch = photoValue.match(/href="([^"]+)"/)
           if (hrefMatch) {
             // Store full URL to the file
-            const baseUrl = process.env.INTEGRAM_URL || 'https://dronedoc.ru'
+            const baseUrl = process.env.INTEGRAM_URL || 'https://example.integram.io'
             authorPhotos[authorId] = `${baseUrl}${hrefMatch[1]}`
             debugLog(`✅ Photo URL for user ${authorId}: ${authorPhotos[authorId]}`)
             console.log(`[ChatService] ✅ Photo URL for user ${authorId}: ${authorPhotos[authorId]}`)

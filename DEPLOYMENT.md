@@ -69,10 +69,10 @@ npm start
 ```bash
 # Создайте .env.production с настройками
 cat > .env.production << 'EOF'
-INTEGRAM_URL=https://dronedoc.ru
+INTEGRAM_URL=https://example.integram.io
 INTEGRAM_DEFAULT_DB=my
 INTEGRAM_SYSTEM_USERNAME=your_username
-INTEGRAM_SYSTEM_PASSWORD=your_password
+INTEGRAM_SYSTEM_PASSWORD=your_secure_password
 SESSION_SECRET=your-super-secret-key-change-this
 CORS_ORIGIN=https://yourdomain.com
 EOF
@@ -98,7 +98,7 @@ docker run -d \
   --name integram-app \
   -p 3000:3000 \
   -e NODE_ENV=production \
-  -e INTEGRAM_URL=https://dronedoc.ru \
+  -e INTEGRAM_URL=https://example.integram.io \
   integram-standalone:latest
 
 # Проверка

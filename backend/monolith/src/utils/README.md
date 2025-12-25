@@ -1,6 +1,6 @@
 # Utils - Utility Functions
 
-This directory contains utility functions and modules used across the DronDoc backend application.
+This directory contains utility functions and modules used across the Integram backend application.
 
 ## Logger (`logger.js`)
 

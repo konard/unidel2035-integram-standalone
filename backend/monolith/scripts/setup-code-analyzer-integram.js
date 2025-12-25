@@ -16,7 +16,7 @@
 
 import IntegramMCPClient from '../src/services/mcp/IntegramMCPClient.js'
 
-const SERVER_URL = process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru'
+const SERVER_URL = process.env.INTEGRAM_SERVER_URL || process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io'
 const DATABASE = process.env.INTEGRAM_DATABASE || 'a2025'
 const LOGIN = process.env.INTEGRAM_LOGIN || 'd'
 const PASSWORD = process.env.INTEGRAM_PASSWORD || 'd'

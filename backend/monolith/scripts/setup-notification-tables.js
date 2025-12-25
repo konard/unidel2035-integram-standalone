@@ -12,7 +12,7 @@ const IntegramMCPClient = require('../src/services/mcp/IntegramMCPClient')
 
 // Configuration
 const CONFIG = {
-  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru',
+  serverURL: process.env.INTEGRAM_SERVER_URL || process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io',
   database: process.env.INTEGRAM_DATABASE || 'my',
   login: process.env.INTEGRAM_LOGIN || 'd',
   password: process.env.INTEGRAM_PASSWORD || 'd'

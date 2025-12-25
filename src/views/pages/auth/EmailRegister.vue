@@ -4,7 +4,7 @@
       <!-- Logo/Header -->
       <div class="header">
         <h1>📧 Регистрация через Email</h1>
-        <p class="subtitle">Создайте аккаунт DronDoc</p>
+        <p class="subtitle">Создайте аккаунт Integram</p>
       </div>
 
       <!-- Registration Form -->

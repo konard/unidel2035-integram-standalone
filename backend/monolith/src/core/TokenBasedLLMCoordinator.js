@@ -43,7 +43,7 @@ export class TokenBasedLLMCoordinator extends LLMCoordinator {
 1. СНАЧАЛА ОБЯЗАТЕЛЬНО аутентифицируйся: integram_authenticate с параметрами:
 
    ДЕФОЛТНЫЕ ЗНАЧЕНИЯ (используй если пользователь НЕ указал свои):
-   - serverURL: "https://dronedoc.ru"
+   - serverURL: "https://example.integram.io"
    - database: "my"
    - login: "d"
    - password: "d"
@@ -227,14 +227,14 @@ export class TokenBasedLLMCoordinator extends LLMCoordinator {
       const defaultToken = {
         id: `default_${userId}`,
         token_prefix: 'dd_api_...',
-        name: 'DronDoc API Access',
+        name: 'Integram API Access',
         user_id: userId,
         scopes: ['model:read', 'model:use'],
         allowed_models: ['*'],
         allowed_applications: ['*'],
         rate_limit_rpm: 60,
         rate_limit_tpm: 100000,
-        token_balance: 999999999, // Effectively unlimited via DronDoc API
+        token_balance: 999999999, // Effectively unlimited via Integram API
         daily_limit: 100000,
         monthly_limit: 1000000,
         expires_at: null,

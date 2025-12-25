@@ -15,7 +15,7 @@ const router = express.Router()
 
 // Integram configuration
 const INTEGRAM_CONFIG = {
-  serverURL: 'https://dronedoc.ru',
+  serverURL: 'https://example.integram.io',
   database: 'my'
 }
 

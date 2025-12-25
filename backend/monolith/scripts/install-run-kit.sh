@@ -8,7 +8,7 @@
 # Usage:
 #   bash install-run-kit.sh
 #   or
-#   ssh root@dev.drondoc.ru 'bash -s' < install-run-kit.sh
+#   ssh root@dev.example.integram.io 'bash -s' < install-run-kit.sh
 
 set -e
 

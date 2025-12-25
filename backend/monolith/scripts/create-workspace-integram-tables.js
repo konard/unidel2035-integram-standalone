@@ -13,7 +13,7 @@ import IntegramMCPClient from '../src/services/mcp/IntegramMCPClient.js';
 import logger from '../src/utils/logger.js';
 
 // Configuration
-const INTEGRAM_SERVER = process.env.INTEGRAM_SERVER || 'https://dronedoc.ru';
+const INTEGRAM_SERVER = process.env.INTEGRAM_SERVER || process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io';
 const INTEGRAM_DATABASE = process.env.INTEGRAM_DATABASE || 'my';
 const INTEGRAM_LOGIN = process.env.INTEGRAM_LOGIN || 'd';
 const INTEGRAM_PASSWORD = process.env.INTEGRAM_PASSWORD || 'd';

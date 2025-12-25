@@ -1,6 +1,6 @@
 #!/bin/bash
 # Diagnostic script for Claude Chat health check issues
-# Run this on the server where dev.drondoc.ru backend is deployed
+# Run this on the server where dev.example.integram.io backend is deployed
 
 echo "=========================================="
 echo "Claude Chat Diagnostic Script"

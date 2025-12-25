@@ -648,7 +648,7 @@
         <div class="field">
           <label for="integram-server">Сервер</label>
           <InputText id="integram-server" v-model="integramAuthForm.serverURL"
-                     placeholder="https://dronedoc.ru" class="w-full" />
+                     placeholder="${import.meta.env.VITE_INTEGRAM_URL}" class="w-full" />
           <small>URL сервера Integram</small>
         </div>
 

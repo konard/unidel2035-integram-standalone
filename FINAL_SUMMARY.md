@@ -25,7 +25,7 @@
 
 ## 🎯 Что реализовано
 
-### ✅ 1. Авторизация (идентично proxy.drondoc.ru/login)
+### ✅ 1. Авторизация (идентично example.integram.io/login)
 - Login страница (Email/Password)
 - Register страница
 - OAuth callback
@@ -33,14 +33,14 @@
 - Access/Error pages
 - Session management
 
-### ✅ 2. Welcome страница (идентично proxy.drondoc.ru/welcome)
+### ✅ 2. Welcome страница (идентично example.integram.io/welcome)
 - OnboardingWizard
 - Готовые решения для бизнеса
 - Карточки с функционалом
 - Quick start checklist
 - Adaptive design
 
-### ✅ 3. Integram (полностью proxy.drondoc.ru/integram)
+### ✅ 3. Integram (полностью example.integram.io/integram)
 **Страницы:**
 - IntegramLogin
 - IntegramLanding
@@ -306,7 +306,7 @@ integram-standalone/
 
 ### ✅ Все задачи выполнены:
 1. ✅ Выделен в отдельный репозиторий
-2. ✅ Включено всё с proxy.drondoc.ru/integram
+2. ✅ Включено всё с example.integram.io/integram
 3. ✅ Добавлены меню, регистрация, авторизация
 4. ✅ Добавлена welcome и landing страницы
 5. ✅ Включены все чаты

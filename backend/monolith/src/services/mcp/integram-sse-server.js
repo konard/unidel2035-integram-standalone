@@ -60,7 +60,7 @@ function createMCPServer() {
             properties: {
               serverURL: {
                 type: 'string',
-                description: 'Integram server URL (e.g., https://dronedoc.ru)',
+                description: 'Integram server URL (e.g., https://example.integram.io)',
               },
               database: {
                 type: 'string',

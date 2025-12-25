@@ -1,10 +1,10 @@
 #!/bin/bash
-# Скрипт автоматической настройки DKIM для mail.drondoc.ru
-# Запускать с правами root на сервере mail.drondoc.ru
+# Скрипт автоматической настройки DKIM для mail.example.integram.io
+# Запускать с правами root на сервере mail.example.integram.io
 # Версия: 1.0
 # Дата: 2025-12-15
 
-DOMAIN="drondoc.ru"
+DOMAIN="example.integram.io"
 SELECTOR="default"
 OPENDKIM_DIR="/etc/opendkim"
 KEYS_DIR="${OPENDKIM_DIR}/keys/${DOMAIN}"

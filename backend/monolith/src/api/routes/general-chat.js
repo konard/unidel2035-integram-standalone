@@ -21,7 +21,7 @@ router.use(async (req, res, next) => {
 
     if (integramToken) {
       // Get XSRF token and userId from /xsrf endpoint
-      const xsrfResponse = await fetch(`${process.env.INTEGRAM_API_URL || 'https://dronedoc.ru'}/${process.env.INTEGRAM_DATABASE || 'my'}/xsrf?JSON_KV=true`, {
+      const xsrfResponse = await fetch(`${process.env.INTEGRAM_API_URL || 'https://example.integram.io'}/${process.env.INTEGRAM_DATABASE || 'my'}/xsrf?JSON_KV=true`, {
         headers: { 'X-Authorization': integramToken }
       })
 

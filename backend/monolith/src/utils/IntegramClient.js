@@ -14,7 +14,7 @@
 import axios from 'axios';
 import logger from './logger.js';
 
-const INTEGRAM_BASE_URL = process.env.INTEGRAM_API_URL || 'https://dronedoc.ru';
+const INTEGRAM_BASE_URL = process.env.INTEGRAM_API_URL || 'https://example.integram.io';
 const DDADMIN_DATABASE = 'ddadmin';
 const USERS_TABLE = '18'; // Table 18 in ddadmin for users
 

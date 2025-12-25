@@ -21,7 +21,7 @@ const http = require('http')
 
 // Configuration
 const config = {
-  serverURL: process.env.INTEGRAM_SERVER_URL || 'https://dronedoc.ru',
+  serverURL: process.env.INTEGRAM_SERVER_URL || process.env.INTEGRAM_SERVER_URL || 'https://example.integram.io',
   database: process.env.INTEGRAM_DATABASE || 'my',
   login: process.env.INTEGRAM_LOGIN || 'd',
   password: process.env.INTEGRAM_PASSWORD || 'd'
@@ -151,7 +151,7 @@ async function createGitHubUsersTable() {
 
     // Add requisites (columns)
     const requisites = [
-      { name: 'User ID', type: REQ_TYPE_NUMBER, description: 'DronDoc User ID' },
+      { name: 'User ID', type: REQ_TYPE_NUMBER, description: 'Integram User ID' },
       { name: 'Login', type: REQ_TYPE_SHORT, description: 'GitHub username' },
       { name: 'Name', type: REQ_TYPE_SHORT, description: 'GitHub display name' },
       { name: 'Avatar URL', type: REQ_TYPE_SHORT, description: 'GitHub avatar URL' },

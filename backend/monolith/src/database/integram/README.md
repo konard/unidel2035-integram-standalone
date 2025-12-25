@@ -4,7 +4,7 @@ This directory contains SQL schema definitions for the Integram database system 
 
 ## Overview
 
-Each organization in the DronDoc platform gets its own Integram database instance with a standard set of system tables. These schemas document the structure and purpose of each table.
+Each organization in the Integram platform gets its own Integram database instance with a standard set of system tables. These schemas document the structure and purpose of each table.
 
 **Issue Reference**: #3193 - База данных Integram для организаций
 

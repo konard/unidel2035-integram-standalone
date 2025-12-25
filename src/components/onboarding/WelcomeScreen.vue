@@ -10,7 +10,7 @@
     <template #header>
       <div class="flex align-items-center gap-2">
         <i class="pi pi-heart-fill text-4xl text-primary"></i>
-        <span class="font-bold text-2xl">Добро пожаловать в DronDoc!</span>
+        <span class="font-bold text-2xl">Добро пожаловать в Integram!</span>
       </div>
     </template>
 
@@ -19,7 +19,7 @@
       <div class="text-center mb-3">
         <h2 class="text-3xl font-bold mb-3">Мы рады видеть вас!</h2>
         <p class="text-lg text-color-secondary">
-          DronDoc - это мощная платформа для управления дронами, агентами и бизнес-процессами.
+          Integram - это мощная платформа для управления дронами, агентами и бизнес-процессами.
           Давайте настроим вашу рабочую среду.
         </p>
       </div>
@@ -36,7 +36,7 @@
 
       <!-- Step 1: Introduction -->
       <div v-if="currentLocalStep === 1" class="step-content">
-        <h3 class="text-xl font-semibold mb-3">Что вы можете делать с DronDoc?</h3>
+        <h3 class="text-xl font-semibold mb-3">Что вы можете делать с Integram?</h3>
         <div class="grid">
           <div class="col-12 md:col-6 mb-3">
             <Card class="feature-card h-full">

@@ -1,4 +1,4 @@
-// index.js - Monolithic DronDoc Backend Server
+// index.js - Monolithic Integram Backend Server
 // IMPORTANT: Load environment variables FIRST, before any other imports
 // Issue #1402: Database pool creation requires env vars to be loaded
 import './config/env.js';
@@ -146,7 +146,7 @@ import agentRegistryRoutes from './api/routes/agent-registry.js';
 import agentInstancesRoutes from './api/routes/agent-instances.js';
 import customAgentsRoutes from './api/routes/custom-agents.js';
 import drondocAgentsRoutes from './api/routes/drondoc-agents.js';
-import { createDronDocAgentsIntegramRoutes } from './api/routes/drondoc-agents-integram.js';
+import { createIntegramAgentsIntegramRoutes } from './api/routes/integram-agents.js';
 import ensemblesRoutes from './api/routes/ensembles.js';
 import { createApiGatewayRoutes } from './api/routes/api-gateway.js';
 import { createAgentCreatorRoutes } from './api/routes/agent-creator.js';
@@ -201,10 +201,10 @@ import {
 } from './middleware/security/requestValidation.js';
 
 /**
- * DronDoc Monolithic Backend
+ * Integram Monolithic Backend
  * Consolidates: Orchestrator, YouTube Analytics, MCP Server, Accounting App
  */
-class DronDocBackend {
+class IntegramBackend {
   constructor(config = {}) {
     this.config = {
       port: config.port || process.env.PORT || 8081,
@@ -248,7 +248,7 @@ class DronDocBackend {
     this.healthMonitor = null;
     this.memoryMonitor = null;
 
-    logger.info('DronDoc Monolithic Backend initialized', this.config);
+    logger.info('Integram Monolithic Backend initialized', this.config);
   }
 
   /**
@@ -530,7 +530,7 @@ class DronDocBackend {
 
     // ========================================
     // CLI API Routes (Issue #4471)
-    // API endpoints for DronDoc CLI tool with model selection support
+    // API endpoints for Integram CLI tool with model selection support
     // ========================================
     this.app.use('/api/cli', cliRoutes);
     console.log('✅ [MONOLITH] CLI API routes registered at /api/cli (Issue #4471)');
@@ -679,19 +679,19 @@ class DronDocBackend {
     console.log('✅ [MONOLITH] Custom Agents System routes registered at /api/custom-agents (Issue #3463)');
 
     // ========================================
-    // DronDoc Unified Agent API (Issue #4692)
+    // Integram Unified Agent API (Issue #4692)
     // Unified API for agent creation and management
     // Combines: Agent Registry, Agent Instances, Integram, MCP, AI Tokens
     // ========================================
     this.app.use('/api/drondoc-agents', drondocAgentsRoutes);
-    console.log('✅ [MONOLITH] DronDoc Unified Agent API routes registered at /api/drondoc-agents (Issue #4692)');
+    console.log('✅ [MONOLITH] Integram Unified Agent API routes registered at /api/drondoc-agents (Issue #4692)');
 
     // ========================================
-    // DronDoc Agents Integram Persistence
+    // Integram Agents Integram Persistence
     // Save/load agent instances to/from Integram database
     // ========================================
-    this.app.use('/api/drondoc-agents/integram', createDronDocAgentsIntegramRoutes());
-    console.log('✅ [MONOLITH] DronDoc Agents Integram routes registered at /api/drondoc-agents/integram');
+    this.app.use('/api/drondoc-agents/integram', createIntegramAgentsIntegramRoutes());
+    console.log('✅ [MONOLITH] Integram Agents Integram routes registered at /api/drondoc-agents/integram');
 
     // ========================================
     // Ensemble Deployment Routes (Issue #3114 - Phase 2)
@@ -970,7 +970,7 @@ class DronDocBackend {
     // ========================================
     this.app.get('/', (req, res) => {
       res.json({
-        name: 'DronDoc Monolithic Backend',
+        name: 'Integram Monolithic Backend',
         version: '1.0.0',
         status: 'running',
         architecture: 'monolithic',
@@ -1128,7 +1128,7 @@ class DronDocBackend {
    */
   async start() {
     try {
-      logger.info('Starting DronDoc Monolithic Backend...');
+      logger.info('Starting Integram Monolithic Backend...');
 
       // Setup Express
       this.setupExpress();
@@ -1304,7 +1304,7 @@ class DronDocBackend {
 
       // Console output with clear visual formatting
       console.log('\n' + '='.repeat(70));
-      console.log('🚀 DronDoc Monolithic Backend Started Successfully');
+      console.log('🚀 Integram Monolithic Backend Started Successfully');
       console.log('='.repeat(70));
       console.log(`📡 Server Protocol: ${protocol.toUpperCase()}`);
       console.log(`🔌 Port: ${this.config.port}`);
@@ -1391,7 +1391,7 @@ class DronDocBackend {
       }
 
       // Structured logging for log files
-      logger.info(`DronDoc Monolithic Backend started successfully`);
+      logger.info(`Integram Monolithic Backend started successfully`);
       logger.info(`Port: ${this.config.port}`);
       logger.info(`Protocol: ${protocol.toUpperCase()}`);
       logger.info(`Is HTTPS Server: ${isHttpsServer}`);
@@ -1428,7 +1428,7 @@ class DronDocBackend {
    * Graceful shutdown
    */
   async shutdown() {
-    logger.info('Shutting down DronDoc Backend...');
+    logger.info('Shutting down Integram Backend...');
 
     try {
       // Stop coordinator
@@ -1485,7 +1485,7 @@ class DronDocBackend {
 
 // Start backend if running as main module
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const backend = new DronDocBackend();
+  const backend = new IntegramBackend();
 
   // Graceful shutdown handlers
   process.on('SIGINT', () => backend.shutdown());
@@ -1498,4 +1498,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 // Export for testing and integration
-export { DronDocBackend };
+export { IntegramBackend };

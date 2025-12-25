@@ -123,7 +123,7 @@ router.post('/register-direct', async (req, res) => {
     const axios = (await import('axios')).default;
     const { createIntegramClient } = await import('../../utils/IntegramClient.js');
 
-    const baseUrl = 'https://dronedoc.ru';
+    const baseUrl = 'https://example.integram.io';
     const systemLogin = 'api_reg';
     const systemPwd = 'ca84qkcx';
 

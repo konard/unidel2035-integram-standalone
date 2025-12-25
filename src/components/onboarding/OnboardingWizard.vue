@@ -440,7 +440,7 @@ const freeAgents = ref([
 // Current step data
 const currentStepData = computed(() => {
   const steps = [
-    { title: 'Добро пожаловать!', subtitle: 'Начните работу с DronDoc' },
+    { title: 'Добро пожаловать!', subtitle: 'Начните работу с Integram' },
     { title: 'Обзор возможностей', subtitle: 'Узнайте, что умеет платформа' },
     { title: 'Готовые решения', subtitle: 'Выберите подходящий пакет агентов' },
     { title: 'Первый бесплатный агент', subtitle: 'Получите агента для ознакомления' },

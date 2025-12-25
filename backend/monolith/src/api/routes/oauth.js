@@ -179,7 +179,7 @@ async function findUserByOAuthId(client, provider, providerUserId) {
     searchData.append('_xsrf', client.session.xsrf)
 
     const response = await axios.post(
-      `https://dronedoc.ru/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${providerUserId}`,
+      `https://example.integram.io/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${providerUserId}`,
       searchData,
       {
         headers: {
@@ -216,7 +216,7 @@ async function findUserByUsername(client, username) {
     searchData.append('_xsrf', client.session.xsrf)
 
     const response = await axios.post(
-      `https://dronedoc.ru/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${encodeURIComponent(username)}`,
+      `https://example.integram.io/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${encodeURIComponent(username)}`,
       searchData,
       {
         headers: {
@@ -253,7 +253,7 @@ async function findUserByEmail(client, email) {
     searchData.append('_xsrf', client.session.xsrf)
 
     const response = await axios.post(
-      `https://dronedoc.ru/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${encodeURIComponent(email)}`,
+      `https://example.integram.io/my/_m_lst/${USERS_TABLE}?JSON_KV&search=${encodeURIComponent(email)}`,
       searchData,
       {
         headers: {
@@ -309,7 +309,7 @@ async function createOrUpdateOAuthUser(client, provider, userData) {
       setData.append(`t${OAUTH_FIELDS.xsrf}`, integramXsrf)
 
       await axios.post(
-        `https://dronedoc.ru/my/_m_set/${existingUser.id}?JSON_KV`,
+        `https://example.integram.io/my/_m_set/${existingUser.id}?JSON_KV`,
         setData,
         {
           headers: {
@@ -372,7 +372,7 @@ async function createOrUpdateOAuthUser(client, provider, userData) {
   createData.append('up', '1')
 
   const createResponse = await axios.post(
-    `https://dronedoc.ru/my/_m_new/${USERS_TABLE}?JSON_KV`,
+    `https://example.integram.io/my/_m_new/${USERS_TABLE}?JSON_KV`,
     createData,
     {
       headers: {
@@ -451,7 +451,7 @@ async function createOrUpdateOAuthUser(client, provider, userData) {
   let setResponse
   try {
     setResponse = await axios.post(
-      `https://dronedoc.ru/my/_m_set/${userId}?JSON_KV`,
+      `https://example.integram.io/my/_m_set/${userId}?JSON_KV`,
       setData,
       {
         headers: {
@@ -513,7 +513,7 @@ async function saveOAuthPhoto(client, userId, avatarUrl, provider) {
       responseType: 'arraybuffer',
       timeout: 10000,
       headers: {
-        'User-Agent': 'DronDoc/1.0',
+        'User-Agent': 'Integram/1.0',
         'Accept': 'image/*'
       }
     })
@@ -546,7 +546,7 @@ async function saveOAuthPhoto(client, userId, avatarUrl, provider) {
     })
 
     await axios.post(
-      `https://dronedoc.ru/my/_m_set/${userId}?JSON_KV`,
+      `https://example.integram.io/my/_m_set/${userId}?JSON_KV`,
       formData,
       {
         headers: {
@@ -793,7 +793,7 @@ router.get('/:provider', async (req, res) => {
 router.get('/yandex/callback', async (req, res) => {
   try {
     const { code, state, error } = req.query
-    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.example.integram.io'
 
     if (error) {
       return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error)}`)
@@ -852,7 +852,7 @@ router.get('/yandex/callback', async (req, res) => {
     res.redirect(`${frontendUrl}/oauth-callback?${params.toString()}`)
   } catch (error) {
     logger.error({ error: error.message, stack: error.stack }, 'Yandex OAuth callback error')
-    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.example.integram.io'
     res.redirect(`${frontendUrl}/login?error=oauth_failed`)
   }
 })
@@ -863,7 +863,7 @@ router.get('/yandex/callback', async (req, res) => {
 router.get('/google/callback', async (req, res) => {
   try {
     const { code, state, error } = req.query
-    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.example.integram.io'
 
     if (error) {
       return res.redirect(`${frontendUrl}/login?error=${encodeURIComponent(error)}`)
@@ -918,7 +918,7 @@ router.get('/google/callback', async (req, res) => {
     res.redirect(`${frontendUrl}/oauth-callback?${params.toString()}`)
   } catch (error) {
     logger.error({ error: error.message, stack: error.stack }, 'Google OAuth callback error')
-    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.example.integram.io'
     res.redirect(`${frontendUrl}/login?error=oauth_failed`)
   }
 })
@@ -929,7 +929,7 @@ router.get('/google/callback', async (req, res) => {
 router.get('/vk/callback', async (req, res) => {
   try {
     const { code, state, error, device_id } = req.query
-    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.example.integram.io'
 
     logger.info({ code: code?.substring(0, 20), state: state?.substring(0, 20), device_id }, 'VK callback received')
 
@@ -994,7 +994,7 @@ router.get('/vk/callback', async (req, res) => {
     res.redirect(`${frontendUrl}/oauth-callback?${params.toString()}`)
   } catch (error) {
     logger.error({ error: error.message, stack: error.stack }, 'VK OAuth callback error')
-    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.drondoc.ru'
+    const frontendUrl = process.env.FRONTEND_URL || 'https://dev.example.integram.io'
     res.redirect(`${frontendUrl}/login?error=oauth_failed`)
   }
 })
