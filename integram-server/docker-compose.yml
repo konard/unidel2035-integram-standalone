@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # MySQL база данных
+  mysql:
+    image: mysql:8.0
+    container_name: integram-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: integram_root_pass
+      MYSQL_DATABASE: integram_db
+      MYSQL_USER: integram_user
+      MYSQL_PASSWORD: integram_pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    networks:
+      - integram-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # PHP Integram приложение
+  integram-php:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: integram-php-app
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+      - "8443:443"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      # Database connection
+      DB_HOST: mysql
+      DB_NAME: integram_db
+      DB_USER: integram_user
+      DB_PASSWORD: integram_pass
+
+      # Application settings
+      APP_ENV: production
+      APP_DEBUG: "false"
+    volumes:
+      # Персистентное хранение логов
+      - ./logs:/var/www/html/logs
+      # Персистентное хранение загруженных файлов
+      - ./download:/var/www/html/download
+    networks:
+      - integram-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node.js backend (порт 3001) - если нужен
+  integram-node:
+    image: node:20-alpine
+    container_name: integram-node-api
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "echo 'Node.js API placeholder - configure if needed' && tail -f /dev/null"
+    ports:
+      - "3001:3001"
+    networks:
+      - integram-network
+    # Раскомментируйте если есть Node.js backend:
+    # volumes:
+    #   - ../backend/monolith:/app
+    # command: npm start
+
+networks:
+  integram-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local

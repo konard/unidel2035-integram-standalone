@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation
+README.md
+DOCKER.md
+
+# Scripts
+quick-start.sh
+
+# Logs
+logs/*.log
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+*.backup.*
+
+# Environment
+.env
+.env.local
+
+# Downloads (будет volume)
+download/*
+!download/.gitkeep
+
+# Editor
+.vscode
+.idea
+*.swp
+*.swo
+*~

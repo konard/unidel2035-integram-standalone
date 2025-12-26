@@ -4,6 +4,23 @@
 **Domain:** https://интеграм.рф (xn--80afflxcxn.xn--p1ai)
 **Synced:** 2025-12-26 22:19 MSK
 
+## 🚀 Быстрый запуск с Docker
+
+```bash
+# Запустить всё одной командой
+cd integram-server/
+docker-compose up -d
+
+# Или использовать скрипт
+./quick-start.sh
+```
+
+**Приложение доступно на:**
+- HTTP: http://localhost:8080
+- HTTPS: https://localhost:8443
+
+**Подробная документация:** [DOCKER.md](DOCKER.md)
+
 ## Описание
 
 Это производственный код PHP Integram приложения с сервера 185.128.105.78.
@@ -36,9 +53,16 @@ integram-server/
 ├── ace/                   # ACE editor files
 ├── download/              # Downloads directory
 │
-└── apache-config/         # Apache VirtualHost configs
-    ├── integram-rf.conf   # Main domain config
-    └── integram-dual.conf # /app alias config
+├── apache-config/         # Apache VirtualHost configs
+│   ├── integram-rf.conf   # Main domain config
+│   └── integram-dual.conf # /app alias config
+│
+└── Docker                 # Docker deployment
+    ├── Dockerfile         # PHP 8.0 + Apache image
+    ├── docker-compose.yml # Full stack (PHP + MySQL)
+    ├── DOCKER.md          # Подробная документация
+    ├── quick-start.sh     # Скрипт быстрого запуска
+    └── .env.example       # Пример конфигурации
 ```
 
 ## Apache Конфигурация
