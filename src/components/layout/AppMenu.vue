@@ -648,9 +648,43 @@ const fetchMenuItems = async () => {
     logger.debug('Created Pages section with default fallback link')
   }
 
-  // MyRoleMenu loading disabled - database 'my' does not exist
-  // If you need to load menu items from a database, configure the report in your active database
-  logger.debug('MyRoleMenu loading skipped - feature disabled')
+  // Load MyRoleMenu report from my database via API v2
+  try {
+    const token = localStorage.getItem('my_token') || localStorage.getItem('token')
+    
+    if (token) {
+      const apiBase = localStorage.getItem('apiBase') || window.location.hostname
+      
+      // Use API v2 endpoint for report execution
+      const response = await fetch(`https://${apiBase}/api/v2/reports/MyRoleMenu/execute?JSON_KV=true`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'X-Database': 'my',
+          'Content-Type': 'application/vnd.api+json'
+        }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        const rows = data.data?.attributes?.rows || data.data || []
+        
+        if (Array.isArray(rows) && rows.length > 0) {
+          // Process MyRoleMenu data
+          pagesSection.items = rows.map(row => ({
+            label: row.Name || row['Name'] || row.name,
+            to: row.HREF || row['HREF'] || row.href,
+            icon: 'pi pi-fw pi-link'
+          }))
+          logger.debug('Loaded MyRoleMenu items via API v2:', pagesSection.items.length)
+        }
+      } else {
+        logger.warn('MyRoleMenu report not found or empty')
+      }
+    }
+  } catch (error) {
+    logger.error('Failed to load MyRoleMenu via API v2:', error)
+  }
 
   loading.value = false
 }
