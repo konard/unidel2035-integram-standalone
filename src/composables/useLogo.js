@@ -27,7 +27,21 @@ const dynamicLogoColors = [
 const getSavedLogoConfig = () => {
   if (typeof window === 'undefined') return null
   const saved = localStorage.getItem('logoConfig')
-  return saved ? JSON.parse(saved) : null
+  if (!saved) return null
+
+  const config = JSON.parse(saved)
+
+  // Migration: convert old 'preset' type to 'dynamic'
+  if (config.type === 'preset') {
+    return {
+      type: 'dynamic',
+      preset: null,
+      color: 'blue',
+      customSvg: null
+    }
+  }
+
+  return config
 }
 
 const logoConfig = ref(
