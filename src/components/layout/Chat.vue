@@ -883,21 +883,21 @@ const {
 // Model selector overlay panel ref
 const modelPanel = ref(null)
 
+// ✅ Extract constant object outside computed to avoid recreation
+const PROVIDER_NAMES = Object.freeze({
+  polza: 'Полза',
+  kodacode: 'KodaCode',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
+  deepseek: 'DeepSeek',
+  yandex: 'Yandex'
+})
+
 // Current model display name for the button
 const currentModelDisplayName = computed(() => {
   if (!selectedModel.value) return null
 
-  // Map of provider names to readable labels
-  const providerNames = {
-    polza: 'Полза',
-    kodacode: 'KodaCode',
-    openai: 'OpenAI',
-    anthropic: 'Anthropic',
-    deepseek: 'DeepSeek',
-    yandex: 'Yandex'
-  }
-
-  const providerLabel = providerNames[selectedProvider.value] || selectedProvider.value
+  const providerLabel = PROVIDER_NAMES[selectedProvider.value] || selectedProvider.value
   const modelName = selectedModel.value
     .replace(/^(gpt-|claude-|deepseek-|yandex-)/, '')
     .split('-')

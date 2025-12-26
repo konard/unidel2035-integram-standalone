@@ -621,12 +621,12 @@ const reportName = ref('')
 const reportDescription = ref('')
 const saving = ref(false)
 
-// Constants
-const joinTypes = ['INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN']
-const operators = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN', 'IS NULL', 'IS NOT NULL']
+// Constants - frozen for immutability and performance
+const joinTypes = Object.freeze(['INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN'])
+const operators = Object.freeze(['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'IN', 'NOT IN', 'IS NULL', 'IS NOT NULL'])
 
 // Aggregate function types for the GUI dropdown
-const aggregateFunctionTypes = [
+const aggregateFunctionTypes = Object.freeze([
   { value: 'COUNT', label: 'COUNT - Количество' },
   { value: 'COUNT_ALL', label: 'COUNT(*) - Всего записей' },
   { value: 'SUM', label: 'SUM - Сумма' },
@@ -634,10 +634,10 @@ const aggregateFunctionTypes = [
   { value: 'MAX', label: 'MAX - Максимум' },
   { value: 'MIN', label: 'MIN - Минимум' },
   { value: 'GROUP_CONCAT', label: 'GROUP_CONCAT - Объединить' }
-]
+])
 
 // Column format options
-const columnFormatTypes = [
+const columnFormatTypes = Object.freeze([
   { value: '', label: 'По умолчанию' },
   { value: 'number', label: 'Число' },
   { value: 'decimal2', label: 'Десятичное (2 знака)' },
@@ -648,12 +648,18 @@ const columnFormatTypes = [
   { value: 'datetime', label: 'Дата и время' },
   { value: 'time', label: 'Время' },
   { value: 'bool', label: 'Да/Нет' }
-]
+])
+
+// ✅ Extract constant object for aggregate columns to avoid recreation
+const ALL_COLUMNS_OPTION = Object.freeze({ value: '*', label: '* (все колонки)' })
+
+// ✅ Extract constant breadcrumb to avoid recreation
+const QUERY_BUILDER_BREADCRUMB = Object.freeze([
+  Object.freeze({ label: 'Конструктор запросов', icon: 'pi pi-sliders-h' })
+])
 
 // Breadcrumb
-const breadcrumbItems = computed(() => [
-  { label: 'Конструктор запросов', icon: 'pi pi-sliders-h' }
-])
+const breadcrumbItems = computed(() => QUERY_BUILDER_BREADCRUMB)
 
 // Computed
 const isQueryValid = computed(() => {
@@ -663,7 +669,7 @@ const isQueryValid = computed(() => {
 // Available columns for aggregate functions (includes * for COUNT)
 const availableColumnsForAggregate = computed(() => {
   return [
-    { value: '*', label: '* (все колонки)' },
+    ALL_COLUMNS_OPTION,
     ...availableColumns.value
   ]
 })

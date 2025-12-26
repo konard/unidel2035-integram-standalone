@@ -1379,6 +1379,9 @@ const createForm = ref({
   requisites: {}
 })
 
+// ✅ Extract constant breadcrumb item to avoid recreation
+const TABLES_BREADCRUMB_ITEM = Object.freeze({ label: 'Таблицы', to: `/integram/table`, icon: 'pi pi-table' })
+
 // Computed
 const database = computed(() => props.databaseProp || props.database || route.params.database || sessionDatabase.value || 'A2025')
 
@@ -1391,9 +1394,7 @@ const apiServerUrl = computed(() => {
 })
 
 const breadcrumbItems = computed(() => {
-  const items = [
-    { label: 'Таблицы', to: `/integram/table`, icon: 'pi pi-table' }
-  ]
+  const items = [TABLES_BREADCRUMB_ITEM]
   if (typeData.value?.val) {
     items.push({ label: typeData.value.val, icon: 'pi pi-bars' })
   }
