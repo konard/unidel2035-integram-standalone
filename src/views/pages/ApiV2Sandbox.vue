@@ -24,8 +24,12 @@
             <input
               v-model="authForm.serverUrl"
               type="text"
-              placeholder="https://dronedoc.ru"
+              placeholder="https://dronedoc.ru или https://185.128.105.78"
             />
+            <div class="quick-db-buttons">
+              <button @click="authForm.serverUrl = 'https://dronedoc.ru'">dronedoc.ru</button>
+              <button @click="authForm.serverUrl = 'https://185.128.105.78'">185.128.105.78</button>
+            </div>
           </div>
 
           <div class="auth-input-group">
@@ -173,10 +177,10 @@ export default {
   data() {
     return {
       authForm: {
-        serverUrl: 'https://dronedoc.ru',
-        database: 'a2025',
-        login: 'd',
-        password: 'd'
+        serverUrl: 'https://185.128.105.78',
+        database: 'my',
+        login: 'admin',
+        password: 'DronedocIntegram2025'
       },
 
       authState: {
@@ -259,11 +263,17 @@ export default {
 
   methods: {
     async authenticate() {
-      const { serverUrl, database, login, password } = this.authForm;
+      let { serverUrl, database, login, password } = this.authForm;
 
       if (!serverUrl || !database || !login || !password) {
         this.$toast.add({ severity: 'error', summary: 'Ошибка', detail: 'Заполните все поля', life: 3000 });
         return;
+      }
+
+      // Автоматически добавляем https:// если протокол отсутствует
+      if (!serverUrl.startsWith('http://') && !serverUrl.startsWith('https://')) {
+        serverUrl = 'https://' + serverUrl;
+        this.authForm.serverUrl = serverUrl; // Обновляем поле
       }
 
       this.authState.isAuthenticating = true;
