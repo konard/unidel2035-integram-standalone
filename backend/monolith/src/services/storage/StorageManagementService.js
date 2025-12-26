@@ -347,11 +347,13 @@ export class StorageManagementService {
   }
 
   /**
-   * Calculate MD5 hash of a file
+   * Calculate SHA-256 hash of a file for integrity verification
+   * Security: Using SHA-256 instead of MD5 (CWE-327)
+   * MD5 is cryptographically broken and unsuitable for file integrity checks
    */
   async calculateFileHash(filePath) {
     return new Promise((resolve, reject) => {
-      const hash = crypto.createHash('md5');
+      const hash = crypto.createHash('sha256');
       const stream = require('fs').createReadStream(filePath);
 
       stream.on('data', data => hash.update(data));

@@ -70,17 +70,16 @@ function generateIntegramXsrf(token, database) {
 
 /**
  * Generate Integram TOKEN and XSRF directly (as done in PHP google.php)
- * TOKEN = md5(microtime) - random 32-char hex
+ * TOKEN = random 32-char hex (using crypto.randomBytes instead of MD5)
  * XSRF = sha1(SALT + TOKEN.toUpperCase() + database + database).substring(0, 22)
  * @param {string} database - Database name (e.g., 'my')
  * @returns {object} { integramToken, integramXsrf }
  */
 function generateIntegramCredentials(database = 'my') {
-  // Generate TOKEN like PHP: md5(microtime(TRUE))
-  // In JS we use crypto.randomBytes for similar randomness
-  const integramToken = crypto.createHash('md5')
-    .update(Date.now().toString() + Math.random().toString())
-    .digest('hex')
+  // Security: Using crypto.randomBytes instead of MD5 for token generation (CWE-327)
+  // MD5 is cryptographically broken and should not be used for security tokens
+  // Generate 16 random bytes = 32 hex characters (same length as MD5)
+  const integramToken = crypto.randomBytes(16).toString('hex')
 
   // Generate XSRF like PHP: substr(sha1(Salt($token, $z)), 0, 22)
   // Salt($u, $val) = SALT + uppercase($u) + $z + $val

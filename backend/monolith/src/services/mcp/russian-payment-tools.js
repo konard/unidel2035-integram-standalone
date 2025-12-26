@@ -129,9 +129,11 @@ class RobokassaPaymentProvider extends PaymentProviderBase {
     this.baseUrl = this.testMode ? 'https://auth.robokassa.ru/Merchant' : 'https://auth.robokassa.ru/Merchant';
   }
 
-  generateMd5Signature(params) {
+  generateSignature(params) {
     const str = params.join(':');
-    return crypto.createHash('md5').update(str).digest('hex');
+    // Security: Using SHA-256 instead of MD5 (CWE-327)
+    // MD5 is cryptographically broken and unsuitable for security-critical operations
+    return crypto.createHash('sha256').update(str).digest('hex');
   }
 
   async getBalance() {
@@ -162,7 +164,7 @@ class RobokassaPaymentProvider extends PaymentProviderBase {
 
     // Генерация подписи для запроса
     const signatureParams = [this.merchantLogin, params.DateFrom || '', params.DateTo || '', this.password2];
-    params.Signature = this.generateMd5Signature(signatureParams);
+    params.Signature = this.generateSignature(signatureParams);
 
     try {
       const queryString = new URLSearchParams(params).toString();
