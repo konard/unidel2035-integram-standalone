@@ -9,6 +9,7 @@ import logger from '../../utils/logger.js'
 import { authLimiter, registerLimiter, passwordResetLimiter, verificationLimiter } from '../../middleware/security/rateLimiter.js'
 import { authenticate } from '../../middleware/auth/auth.js'
 import defaultTokenService from '../../services/ai/defaultTokenService.js'
+import { asyncHandler } from '../../middleware/errorHandler.js'
 
 // Auth-specific logging helpers
 const logAuthSuccess = (data) => logger.info({ ...data, type: 'auth_success' })
@@ -124,7 +125,13 @@ router.post(
         },
       })
     } catch (error) {
-      console.error('Registration error:', error)
+      // Security Issue #67: Log full error server-side, send generic message to client
+      logger.error({
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+        path: req.path
+      }, 'Registration error');
+
       res.status(500).json({
         success: false,
         error: 'Ошибка регистрации',
@@ -220,7 +227,13 @@ router.post(
         },
       })
     } catch (error) {
-      console.error('Registration error:', error)
+      // Security Issue #67: Log full error server-side, send generic message to client
+      logger.error({
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+        path: req.path
+      }, 'Registration error');
+
       res.status(500).json({
         success: false,
         error: 'Ошибка регистрации',

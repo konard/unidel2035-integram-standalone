@@ -28,6 +28,7 @@ import {
   verifyMagicLink
 } from '../../services/email/EmailVerificationService.js';
 import defaultTokenService from '../../services/ai/defaultTokenService.js';
+import { asyncHandler } from '../../middleware/errorHandler.js';
 import {
   enforceHTTPS,
   getSecureAxiosConfig,
@@ -49,55 +50,47 @@ const router = express.Router();
  * - username: string (optional)
  * - displayName: string (optional)
  */
-router.post('/register', async (req, res) => {
-  try {
-    const { email, password, username, displayName, referralCode } = req.body;
+router.post('/register', asyncHandler(async (req, res) => {
+  const { email, password, username, displayName, referralCode } = req.body;
 
-    // Validate required fields
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email is required'
-      });
-    }
-
-    if (!password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Password is required'
-      });
-    }
-
-    // Get base URL for verification link
-    const protocol = req.protocol;
-    const host = req.get('host');
-    const baseUrl = process.env.FRONTEND_URL || `${protocol}://${host}`;
-
-    logger.info({ email, username, referralCode }, 'Email registration request');
-
-    // Send verification email
-    const result = await sendEmailVerification({
-      email,
-      password,
-      username,
-      displayName,
-      referralCode, // Pass referral code
-      baseUrl
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Verification email sent. Please check your inbox.',
-      email: result.email
-    });
-  } catch (error) {
-    logger.error({ error: error.message }, 'Email registration failed');
-    res.status(400).json({
+  // Validate required fields
+  if (!email) {
+    return res.status(400).json({
       success: false,
-      error: error.message
+      error: 'Email is required'
     });
   }
-});
+
+  if (!password) {
+    return res.status(400).json({
+      success: false,
+      error: 'Password is required'
+    });
+  }
+
+  // Get base URL for verification link
+  const protocol = req.protocol;
+  const host = req.get('host');
+  const baseUrl = process.env.FRONTEND_URL || `${protocol}://${host}`;
+
+  logger.info({ email, username, referralCode }, 'Email registration request');
+
+  // Send verification email - errors are caught by asyncHandler
+  const result = await sendEmailVerification({
+    email,
+    password,
+    username,
+    displayName,
+    referralCode, // Pass referral code
+    baseUrl
+  });
+
+  res.status(200).json({
+    success: true,
+    message: 'Verification email sent. Please check your inbox.',
+    email: result.email
+  });
+}));
 
 /**
  * POST /api/email-auth/register-direct
@@ -313,8 +306,13 @@ router.post('/register-direct', async (req, res) => {
       database
     });
   } catch (error) {
+    // Log full error server-side only (Issue #67)
     logger.error({ error: error.message, stack: error.stack }, 'Direct registration failed');
-    res.status(400).json({ success: false, error: error.message });
+    // Send generic error to client without exposing internal details
+    res.status(400).json({
+      success: false,
+      error: 'Ошибка регистрации. Пожалуйста, проверьте данные и попробуйте снова.'
+    });
   }
 });
 
@@ -326,37 +324,29 @@ router.post('/register-direct', async (req, res) => {
  * - token: string (required)
  * - databases: string[] (optional, default: ['my'])
  */
-router.post('/verify', async (req, res) => {
-  try {
-    const { token, databases } = req.body;
+router.post('/verify', asyncHandler(async (req, res) => {
+  const { token, databases } = req.body;
 
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        error: 'Verification token is required'
-      });
-    }
-
-    logger.info({ token: token.substring(0, 10) + '...' }, 'Email verification request');
-
-    // Verify email and create user
-    const result = await verifyEmail(token, databases);
-
-    res.status(200).json({
-      success: true,
-      message: 'Email verified successfully. Your account has been created.',
-      userId: result.userId,
-      email: result.email,
-      databases: result.databases
-    });
-  } catch (error) {
-    logger.error({ error: error.message }, 'Email verification failed');
-    res.status(400).json({
+  if (!token) {
+    return res.status(400).json({
       success: false,
-      error: error.message
+      error: 'Verification token is required'
     });
   }
-});
+
+  logger.info({ token: token.substring(0, 10) + '...' }, 'Email verification request');
+
+  // Verify email and create user - errors caught by asyncHandler
+  const result = await verifyEmail(token, databases);
+
+  res.status(200).json({
+    success: true,
+    message: 'Email verified successfully. Your account has been created.',
+    userId: result.userId,
+    email: result.email,
+    databases: result.databases
+  });
+}));
 
 /**
  * POST /api/email-auth/resend-verification
@@ -368,45 +358,37 @@ router.post('/verify', async (req, res) => {
  * - username: string (optional)
  * - displayName: string (optional)
  */
-router.post('/resend-verification', async (req, res) => {
-  try {
-    const { email, password, username, displayName } = req.body;
+router.post('/resend-verification', asyncHandler(async (req, res) => {
+  const { email, password, username, displayName } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email and password are required'
-      });
-    }
-
-    const protocol = req.protocol;
-    const host = req.get('host');
-    const baseUrl = process.env.FRONTEND_URL || `${protocol}://${host}`;
-
-    logger.info({ email }, 'Resend verification email request');
-
-    // Send new verification email
-    const result = await sendEmailVerification({
-      email,
-      password,
-      username,
-      displayName,
-      baseUrl
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'Verification email resent. Please check your inbox.',
-      email: result.email
-    });
-  } catch (error) {
-    logger.error({ error: error.message }, 'Resend verification failed');
-    res.status(400).json({
+  if (!email || !password) {
+    return res.status(400).json({
       success: false,
-      error: error.message
+      error: 'Email and password are required'
     });
   }
-});
+
+  const protocol = req.protocol;
+  const host = req.get('host');
+  const baseUrl = process.env.FRONTEND_URL || `${protocol}://${host}`;
+
+  logger.info({ email }, 'Resend verification email request');
+
+  // Send new verification email - errors caught by asyncHandler
+  const result = await sendEmailVerification({
+    email,
+    password,
+    username,
+    displayName,
+    baseUrl
+  });
+
+  res.status(200).json({
+    success: true,
+    message: 'Verification email resent. Please check your inbox.',
+    email: result.email
+  });
+}));
 
 /**
  * POST /api/email-auth/password-reset-request
@@ -472,42 +454,34 @@ router.post('/password-reset-request', async (req, res) => {
  * - token: string (required)
  * - newPassword: string (required, min 8 chars)
  */
-router.post('/password-reset', async (req, res) => {
-  try {
-    const { token, newPassword } = req.body;
+router.post('/password-reset', asyncHandler(async (req, res) => {
+  const { token, newPassword } = req.body;
 
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        error: 'Reset token is required'
-      });
-    }
-
-    if (!newPassword) {
-      return res.status(400).json({
-        success: false,
-        error: 'New password is required'
-      });
-    }
-
-    logger.info({ token: token.substring(0, 10) + '...' }, 'Password reset');
-
-    // Reset password
-    const result = await resetPassword(token, newPassword);
-
-    res.status(200).json({
-      success: true,
-      message: 'Password reset successfully. You can now login with your new password.',
-      email: result.email
-    });
-  } catch (error) {
-    logger.error({ error: error.message }, 'Password reset failed');
-    res.status(400).json({
+  if (!token) {
+    return res.status(400).json({
       success: false,
-      error: error.message
+      error: 'Reset token is required'
     });
   }
-});
+
+  if (!newPassword) {
+    return res.status(400).json({
+      success: false,
+      error: 'New password is required'
+    });
+  }
+
+  logger.info({ token: token.substring(0, 10) + '...' }, 'Password reset');
+
+  // Reset password - errors caught by asyncHandler
+  const result = await resetPassword(token, newPassword);
+
+  res.status(200).json({
+    success: true,
+    message: 'Password reset successfully. You can now login with your new password.',
+    email: result.email
+  });
+}));
 
 /**
  * GET /api/email-auth/verify-reset-token
@@ -603,40 +577,32 @@ router.post('/magic-link', async (req, res) => {
  * Body:
  * - token: string (required)
  */
-router.post('/magic-login', async (req, res) => {
-  try {
-    const { token } = req.body;
+router.post('/magic-login', asyncHandler(async (req, res) => {
+  const { token } = req.body;
 
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        error: 'Magic link token is required'
-      });
-    }
-
-    logger.info({ token: token.substring(0, 10) + '...' }, 'Magic login');
-
-    // Verify magic link
-    const result = await verifyMagicLink(token);
-
-    // TODO: Create session/JWT token for the user
-    // For now, just return user info
-
-    res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      userId: result.userId,
-      email: result.email
-      // TODO: Add session token or JWT here
-    });
-  } catch (error) {
-    logger.error({ error: error.message }, 'Magic login failed');
-    res.status(400).json({
+  if (!token) {
+    return res.status(400).json({
       success: false,
-      error: error.message
+      error: 'Magic link token is required'
     });
   }
-});
+
+  logger.info({ token: token.substring(0, 10) + '...' }, 'Magic login');
+
+  // Verify magic link - errors caught by asyncHandler
+  const result = await verifyMagicLink(token);
+
+  // TODO: Create session/JWT token for the user
+  // For now, just return user info
+
+  res.status(200).json({
+    success: true,
+    message: 'Login successful',
+    userId: result.userId,
+    email: result.email
+    // TODO: Add session token or JWT here
+  });
+}));
 
 /**
  * GET /api/email-auth/health
