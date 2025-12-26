@@ -4,7 +4,7 @@
  * Integrates with /api/general-chat/* endpoints and WebSocket
  */
 
-import apiClient from '@/orchestratorAxios'
+import apiClient from '@/axios2'
 import { logger } from '@/utils/logger'
 
 class GeneralChatService {
