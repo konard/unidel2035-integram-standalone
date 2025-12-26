@@ -9,11 +9,17 @@
  */
 
 const axios = require('axios');
+const https = require('https');
 
 class IntegramAuthService {
   constructor(config = {}) {
     this.baseURL = config.baseURL || 'https://dronedoc.ru';
     this.sessions = new Map(); // In-memory session store (use Redis in production)
+
+    // HTTPS agent для самоподписанных сертификатов
+    this.httpsAgent = new https.Agent({
+      rejectUnauthorized: false
+    });
   }
 
   /**
@@ -37,7 +43,8 @@ class IntegramAuthService {
 
       // Make POST request
       const response = await axios.post(authURL, formData, {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        httpsAgent: this.httpsAgent
       });
 
       // Check response format

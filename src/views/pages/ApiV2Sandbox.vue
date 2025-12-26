@@ -760,5 +760,8 @@ pre {
   max-height: 500px;
   overflow-y: auto;
   margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Courier New', Consolas, Monaco, monospace;
 }
 </style>
