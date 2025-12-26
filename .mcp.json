@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "integram": {
+      "command": "node",
+      "args": ["backend/monolith/src/services/mcp/integram-server.js"],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}

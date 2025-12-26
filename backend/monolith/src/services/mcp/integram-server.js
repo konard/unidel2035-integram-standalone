@@ -199,7 +199,7 @@ class IntegramMCPClient {
    * Build API URL based on server type
    *
    * Supports multiple URL structures:
-   * - example.integram.io: https://example.integram.io/{database}/{endpoint}?JSON_KV
+   * - dronedoc.ru: https://dronedoc.ru/{database}/{endpoint}?JSON_KV
    * - integram.io: https://integram.io/api/{database}/{endpoint}
    * - app.integram.io: https://app.integram.io/api/{database}/{endpoint}
    * - Any custom domain: Auto-detects format based on domain patterns
@@ -217,12 +217,12 @@ class IntegramMCPClient {
     const hasDbInPath = dbPathRegex.test(cleanBaseURL);
 
     // Detect server type by domain name
-    const isDronedoc = cleanBaseURL.includes('example.integram.io');
+    const isDronedoc = cleanBaseURL.includes('dronedoc.ru');
     const isIntegram = cleanBaseURL.includes('integram.io');
 
     // Build URL based on server type
     if (isDronedoc) {
-      // Integram format: https://example.integram.io/{database}/{endpoint}?JSON_KV
+      // DronDoc format: https://dronedoc.ru/{database}/{endpoint}?JSON_KV
       if (hasDbInPath) {
         // Database already in baseURL, just append endpoint
         const url = `${cleanBaseURL}/${endpoint}`;
@@ -387,7 +387,7 @@ const TOOLS = [
       properties: {
         serverURL: {
           type: 'string',
-          description: 'Integram server URL (e.g., https://example.integram.io or https://app.integram.io)'
+          description: 'Integram server URL (e.g., https://dronedoc.ru or https://app.integram.io)'
         },
         database: {
           type: 'string',
