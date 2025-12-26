@@ -168,7 +168,7 @@ import logger from './utils/logger.js';
 import BackendHealthMonitor from './services/health/BackendHealthMonitor.js';
 import { MemoryMonitor } from './utils/memoryOptimization.js';
 
-// Security middleware (Issue #77, #1890)
+// Security middleware (Issue #77, #1890, #66)
 import {
   securityHeaders,
   additionalSecurityHeaders,
@@ -176,6 +176,7 @@ import {
   ensureCorsHeaders,
   developmentSecurityHeaders
 } from './middleware/security/securityHeaders.js';
+import { generateCspNonce } from './middleware/security/cspNonce.js';
 import {
   apiLimiter,
   authLimiter,
@@ -265,36 +266,40 @@ class IntegramBackend {
     // 1. Trust proxy (for correct IP detection behind reverse proxy)
     this.app.set('trust proxy', 1);
 
-    // 2. Ensure CORS headers on all responses (Issue #1890)
+    // 2. Generate CSP nonce for each request (Issue #66)
+    // This must be BEFORE security headers so the nonce is available for CSP
+    this.app.use(generateCspNonce);
+
+    // 3. Ensure CORS headers on all responses (Issue #1890)
     // This must be BEFORE other middleware to ensure headers are set even on errors
     this.app.use(ensureCorsHeaders);
 
-    // 3. Security headers (Helmet)
+    // 4. Security headers (Helmet)
     this.app.use(securityHeaders);
     this.app.use(additionalSecurityHeaders);
     if (process.env.NODE_ENV === 'development') {
       this.app.use(developmentSecurityHeaders);
     }
 
-    // 4. CORS with security options (additional layer)
+    // 5. CORS with security options (additional layer)
     this.app.use(cors(secureCorsOptions));
 
-    // 5. IP filtering (block blacklisted, mark whitelisted)
+    // 6. IP filtering (block blacklisted, mark whitelisted)
     this.app.use(blockBlacklistedIPs);
     this.app.use(markWhitelistedIPs);
 
-    // 6. Request validation
+    // 7. Request validation
     this.app.use(validatePayloadSize);
     this.app.use(validateQueryParams);
 
-    // 7. Body parsing with size limits
+    // 8. Body parsing with size limits
     this.app.use(express.json({ limit: '10mb' })); // Reduced from 50mb for security
     this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-    // 8. Request body validation (after parsing)
+    // 9. Request body validation (after parsing)
     this.app.use(validateRequestBody);
 
-    // 9. Request logging
+    // 10. Request logging
     this.app.use(requestLogger);
 
     // ========================================

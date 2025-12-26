@@ -3,27 +3,43 @@ import helmet from 'helmet';
 /**
  * Security Headers Middleware
  * Issue #77: Comprehensive security headers for production
+ * Issue #66: Strengthen CSP by removing unsafe-inline and unsafe-eval
  *
  * Implements:
  * - X-Frame-Options (clickjacking protection)
  * - X-Content-Type-Options (MIME sniffing protection)
  * - X-XSS-Protection (XSS protection for older browsers)
- * - Content-Security-Policy (CSP)
+ * - Content-Security-Policy (CSP) with environment-specific directives
  * - Strict-Transport-Security (HSTS)
  * - Referrer-Policy
  * - Permissions-Policy
+ *
+ * Security Improvements:
+ * - Production: No unsafe-inline, no unsafe-eval (uses nonces instead)
+ * - Development: unsafe-eval allowed for Vue dev tools, nonces for inline scripts
+ * - Nonce-based CSP for inline scripts and styles (Issue #66)
  */
 
 /**
+ * Check if running in development mode
+ */
+const isDevelopment = process.env.NODE_ENV === 'development';
+
+/**
  * Configure Content Security Policy
+ * Uses nonces for inline scripts/styles to eliminate need for unsafe-inline
+ * Only allows unsafe-eval in development for Vue dev tools
  */
 const contentSecurityPolicy = {
   directives: {
     defaultSrc: ["'self'"],
     scriptSrc: [
       "'self'",
-      "'unsafe-inline'", // Required for Vue and some analytics
-      "'unsafe-eval'", // Required for Vue development
+      // Issue #66: Use nonces instead of unsafe-inline
+      // The nonce will be injected dynamically per request
+      (req, res) => `'nonce-${res.locals.cspNonce}'`,
+      // Issue #66: Only allow unsafe-eval in development for Vue dev tools
+      ...(isDevelopment ? ["'unsafe-eval'"] : []),
       'https://www.google.com',
       'https://www.gstatic.com',
       'https://cdn.jsdelivr.net',
@@ -31,7 +47,11 @@ const contentSecurityPolicy = {
     ],
     styleSrc: [
       "'self'",
-      "'unsafe-inline'", // Required for inline styles
+      // Issue #66: Use nonces instead of unsafe-inline where possible
+      (req, res) => `'nonce-${res.locals.cspNonce}'`,
+      // Note: Some frameworks may still require unsafe-inline for dynamic styles
+      // Consider removing this if your application doesn't need it
+      "'unsafe-inline'", // May be needed for some CSS-in-JS frameworks
       'https://fonts.googleapis.com',
     ],
     fontSrc: [

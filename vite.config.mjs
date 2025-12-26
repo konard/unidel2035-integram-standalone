@@ -12,6 +12,23 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    assetsDir: 'assets'
+    assetsDir: 'assets',
+    // Issue #66: Configure minification for CSP-compatible production builds
+    // Vue production builds don't require eval when properly minified
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        // Remove console.log in production for better security
+        drop_console: true,
+        // Additional compression for smaller bundle size
+        passes: 2
+      },
+      format: {
+        // Remove comments in production
+        comments: false
+      }
+    },
+    // Generate source maps for debugging (optional, can be disabled for production)
+    sourcemap: false
   }
 })
