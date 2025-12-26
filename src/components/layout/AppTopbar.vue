@@ -18,7 +18,7 @@ import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { useNotifications } from '@/composables/notifications'
 import { useWorkspaceAgentStore } from '@/stores/workspaceAgentStore'
 import { useI18n } from 'vue-i18n'
-import { onMounted, ref, watch, computed, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, watch, computed, nextTick } from 'vue'
 
 const { t } = useI18n()
 const { toggleMenu, toggleDarkMode, isDarkTheme } = useLayout()
@@ -68,12 +68,12 @@ const handleChat = () => {
   emit('chat-toggle', newState)
 }
 
-// Listen to storage changes from other tabs/windows
-window.addEventListener('storage', (e) => {
+// Storage event handler for chat state
+const handleChatStorageChange = (e) => {
   if (e.key === 'chat') {
     isChatOpen.value = e.newValue === 'true'
   }
-})
+}
 
 // Profile toggle handler for Popover
 const handleToggle = (event) => {
@@ -125,6 +125,16 @@ const updateUserPhoto = () => {
   userPhoto.value = localStorage.getItem('currentUserPhoto') || ''
 }
 
+// Storage event handler for user photo
+const handlePhotoStorageChange = (e) => {
+  if (e.key === 'currentUserPhoto') {
+    updateUserPhoto()
+  }
+}
+
+// Ref to store interval ID for cleanup
+let photoUpdateInterval = null
+
 // Fetch user photo from API if not in localStorage
 const fetchUserPhotoOnMount = async () => {
   const token = localStorage.getItem('my_token') || localStorage.getItem('token')
@@ -161,14 +171,26 @@ onMounted(() => {
   // User photo is managed through Profile.vue and localStorage
   // fetchUserPhotoOnMount()
 
-  // Listen for storage changes (when Profile.vue updates the photo)
-  window.addEventListener('storage', (e) => {
-    if (e.key === 'currentUserPhoto') {
-      updateUserPhoto()
-    }
-  })
+  // Listen for chat storage changes from other tabs/windows
+  window.addEventListener('storage', handleChatStorageChange)
+
+  // Listen for photo storage changes (when Profile.vue updates the photo)
+  window.addEventListener('storage', handlePhotoStorageChange)
+
   // Also check periodically in case storage event doesn't fire (same tab)
-  setInterval(updateUserPhoto, 3000)
+  photoUpdateInterval = setInterval(updateUserPhoto, 3000)
+})
+
+onUnmounted(() => {
+  // Remove event listeners to prevent memory leaks
+  window.removeEventListener('storage', handleChatStorageChange)
+  window.removeEventListener('storage', handlePhotoStorageChange)
+
+  // Clear interval
+  if (photoUpdateInterval) {
+    clearInterval(photoUpdateInterval)
+    photoUpdateInterval = null
+  }
 })
 
 </script>
