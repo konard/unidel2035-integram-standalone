@@ -12,8 +12,8 @@ import logger from '../../utils/logger.js'
 // DronDoc API configuration
 const DRONEDOC_API_BASE_URL = process.env.DRONEDOC_API_BASE_URL || 'https://dronedoc.ru'
 const DRONEDOC_AUTH_TOKEN = process.env.DRONEDOC_AUTH_TOKEN || ''
-const INTEGRAM_SYSTEM_USERNAME = process.env.INTEGRAM_REGISTRATION_USERNAME || process.env.INTEGRAM_SYSTEM_USERNAME || 'api_reg'
-const INTEGRAM_SYSTEM_PASSWORD = process.env.INTEGRAM_REGISTRATION_PASSWORD || process.env.INTEGRAM_SYSTEM_PASSWORD || 'ca84qkcx'
+const INTEGRAM_SYSTEM_USERNAME = process.env.INTEGRAM_REGISTRATION_USERNAME || process.env.INTEGRAM_SYSTEM_USERNAME
+const INTEGRAM_SYSTEM_PASSWORD = process.env.INTEGRAM_REGISTRATION_PASSWORD || process.env.INTEGRAM_SYSTEM_PASSWORD
 
 // Default token configuration
 const DEFAULT_TOKEN_BALANCE = 1000000 // 1M tokens
@@ -62,6 +62,11 @@ async function getDronDocToken() {
 async function createDefaultToken(userId, userToken = null, options = {}) {
   try {
     logger.info('[DefaultTokenService] Creating default token for user', { userId })
+
+    // Validate required credentials
+    if (!INTEGRAM_SYSTEM_USERNAME || !INTEGRAM_SYSTEM_PASSWORD) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.')
+    }
 
     // Generate unique token value
     const tokenValue = generateTokenValue()
@@ -192,6 +197,12 @@ async function createDefaultToken(userId, userToken = null, options = {}) {
  */
 async function hasDefaultToken(userId, userToken = null) {
   try {
+    // Validate required credentials
+    if (!INTEGRAM_SYSTEM_USERNAME || !INTEGRAM_SYSTEM_PASSWORD) {
+      logger.warn('[DefaultTokenService] INTEGRAM_REGISTRATION credentials not configured')
+      return false
+    }
+
     // Authenticate with Integram to get auth token
     const baseUrl = DRONEDOC_API_BASE_URL
     const database = 'my'
@@ -312,6 +323,11 @@ async function ensureDefaultToken(userId, userToken = null, options = {}) {
 async function addTokensToUser(userId, amount, metadata = {}) {
   try {
     logger.info('[DefaultTokenService] Adding tokens to user', { userId, amount, metadata })
+
+    // Validate required credentials
+    if (!INTEGRAM_SYSTEM_USERNAME || !INTEGRAM_SYSTEM_PASSWORD) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.')
+    }
 
     // Authenticate with Integram
     const baseUrl = DRONEDOC_API_BASE_URL

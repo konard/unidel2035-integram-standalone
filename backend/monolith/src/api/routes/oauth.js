@@ -808,11 +808,16 @@ router.get('/yandex/callback', async (req, res) => {
     const userData = await exchangeYandexCode(code)
 
     // Create Integram client and authenticate
+    const systemLogin = process.env.INTEGRAM_REGISTRATION_USERNAME
+    const systemPwd = process.env.INTEGRAM_REGISTRATION_PASSWORD
+
+    // Validate required credentials
+    if (!systemLogin || !systemPwd) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.')
+    }
+
     const client = createIntegramClient('my')
-    await client.authenticate(
-      process.env.INTEGRAM_REGISTRATION_USERNAME || 'api_reg',
-      process.env.INTEGRAM_REGISTRATION_PASSWORD || 'ca84qkcx'
-    )
+    await client.authenticate(systemLogin, systemPwd)
 
     // Create or find user in Integram
     const { id: userId, isNew, integramToken, integramXsrf } = await createOrUpdateOAuthUser(client, 'yandex', userData)
@@ -876,11 +881,16 @@ router.get('/google/callback', async (req, res) => {
 
     const userData = await exchangeGoogleCode(code)
 
+    // Validate required credentials
+    const systemLogin = process.env.INTEGRAM_REGISTRATION_USERNAME
+    const systemPwd = process.env.INTEGRAM_REGISTRATION_PASSWORD
+
+    if (!systemLogin || !systemPwd) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.')
+    }
+
     const client = createIntegramClient('my')
-    await client.authenticate(
-      process.env.INTEGRAM_REGISTRATION_USERNAME || 'api_reg',
-      process.env.INTEGRAM_REGISTRATION_PASSWORD || 'ca84qkcx'
-    )
+    await client.authenticate(systemLogin, systemPwd)
 
     const { id: userId, isNew, integramToken, integramXsrf } = await createOrUpdateOAuthUser(client, 'google', userData)
 
@@ -952,11 +962,16 @@ router.get('/vk/callback', async (req, res) => {
 
     const userData = await exchangeVKCode(code, device_id, codeVerifier)
 
+    // Validate required credentials
+    const systemLogin = process.env.INTEGRAM_REGISTRATION_USERNAME
+    const systemPwd = process.env.INTEGRAM_REGISTRATION_PASSWORD
+
+    if (!systemLogin || !systemPwd) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.')
+    }
+
     const client = createIntegramClient('my')
-    await client.authenticate(
-      process.env.INTEGRAM_REGISTRATION_USERNAME || 'api_reg',
-      process.env.INTEGRAM_REGISTRATION_PASSWORD || 'ca84qkcx'
-    )
+    await client.authenticate(systemLogin, systemPwd)
 
     const { id: userId, isNew, integramToken, integramXsrf } = await createOrUpdateOAuthUser(client, 'vk', userData)
 
@@ -1037,11 +1052,16 @@ router.post('/telegram', async (req, res) => {
       avatarUrl: data.photo_url
     }
 
+    // Validate required credentials
+    const systemLogin = process.env.INTEGRAM_REGISTRATION_USERNAME
+    const systemPwd = process.env.INTEGRAM_REGISTRATION_PASSWORD
+
+    if (!systemLogin || !systemPwd) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.')
+    }
+
     const client = createIntegramClient('my')
-    await client.authenticate(
-      process.env.INTEGRAM_REGISTRATION_USERNAME || 'api_reg',
-      process.env.INTEGRAM_REGISTRATION_PASSWORD || 'ca84qkcx'
-    )
+    await client.authenticate(systemLogin, systemPwd)
 
     const { id: userId, isNew, integramToken, integramXsrf } = await createOrUpdateOAuthUser(client, 'telegram', userData)
 

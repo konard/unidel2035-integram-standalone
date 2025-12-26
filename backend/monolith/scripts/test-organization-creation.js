@@ -19,7 +19,15 @@ async function testOrganizationCreation() {
   try {
     // 1. Авторизация
     console.log('[1/5] Авторизация в Integram...')
-    const auth = await authenticateIntegram('api_reg', 'ca84qkcx')
+
+    const username = process.env.INTEGRAM_REGISTRATION_USERNAME || process.env.INTEGRAM_SYSTEM_USERNAME
+    const password = process.env.INTEGRAM_REGISTRATION_PASSWORD || process.env.INTEGRAM_SYSTEM_PASSWORD
+
+    if (!username || !password) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.')
+    }
+
+    const auth = await authenticateIntegram(username, password)
     console.log('✅ Авторизация успешна\n')
 
     // 2. Получение всех данных из DataNewton

@@ -151,8 +151,13 @@ router.post('/register-direct', async (req, res) => {
     const { createIntegramClient } = await import('../../utils/IntegramClient.js');
 
     const baseUrl = 'https://example.integram.io';
-    const systemLogin = 'api_reg';
-    const systemPwd = 'ca84qkcx';
+    const systemLogin = process.env.INTEGRAM_REGISTRATION_USERNAME;
+    const systemPwd = process.env.INTEGRAM_REGISTRATION_PASSWORD;
+
+    // Validate required credentials
+    if (!systemLogin || !systemPwd) {
+      throw new Error('INTEGRAM_REGISTRATION credentials not configured. Please set INTEGRAM_REGISTRATION_USERNAME and INTEGRAM_REGISTRATION_PASSWORD environment variables.');
+    }
 
     // Step 1: Authenticate with Integram
     const authUrl = `${baseUrl}/${database}/auth?JSON_KV`;
