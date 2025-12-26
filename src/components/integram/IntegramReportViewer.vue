@@ -204,6 +204,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue';
 import { useToast } from 'primevue/usetoast';
+import { useTimer } from '@/composables/useTimer';
 
 const props = defineProps({
   reportId: {
@@ -239,6 +240,7 @@ const props = defineProps({
 const emit = defineEmits(['refresh', 'apply-filters', 'go-home', 'export']);
 
 const toast = useToast();
+const { setTimeout: setTimerTimeout } = useTimer();
 
 // State
 const showFilters = ref(false);
@@ -416,7 +418,7 @@ function loadMoreData() {
   loadingMore.value = true;
 
   // Simulate loading delay (since we already have all data in filteredData)
-  setTimeout(() => {
+  setTimerTimeout(() => {
     currentPage.value++;
     loadingMore.value = false;
 

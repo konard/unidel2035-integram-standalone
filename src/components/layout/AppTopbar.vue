@@ -19,10 +19,12 @@ import { useNotifications } from '@/composables/notifications'
 import { useWorkspaceAgentStore } from '@/stores/workspaceAgentStore'
 import { useI18n } from 'vue-i18n'
 import { onMounted, onUnmounted, ref, watch, computed, nextTick } from 'vue'
+import { useTimer } from '@/composables/useTimer'
 
 const { t } = useI18n()
 const { toggleMenu, toggleDarkMode, isDarkTheme } = useLayout()
 const { unreadCount } = useNotifications()
+const { setInterval: setTimerInterval } = useTimer()
 
 // Safely access workspaceAgentStore - handle case where Pinia might not be ready yet (Issue #5216)
 let workspaceAgentStore
@@ -178,19 +180,15 @@ onMounted(() => {
   window.addEventListener('storage', handlePhotoStorageChange)
 
   // Also check periodically in case storage event doesn't fire (same tab)
-  photoUpdateInterval = setInterval(updateUserPhoto, 3000)
+  // useTimer auto-cleans on unmount
+  setTimerInterval(updateUserPhoto, 3000)
 })
 
 onUnmounted(() => {
   // Remove event listeners to prevent memory leaks
   window.removeEventListener('storage', handleChatStorageChange)
   window.removeEventListener('storage', handlePhotoStorageChange)
-
-  // Clear interval
-  if (photoUpdateInterval) {
-    clearInterval(photoUpdateInterval)
-    photoUpdateInterval = null
-  }
+  // Note: setTimerInterval from useTimer auto-cleans, no manual clearInterval needed
 })
 
 </script>

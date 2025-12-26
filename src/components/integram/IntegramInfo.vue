@@ -220,12 +220,14 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useToast } from 'primevue/usetoast'
 import { useConfirm } from 'primevue/useconfirm'
 import integramApiClient from '@/services/integramApiClient'
+import { useTimer } from '@/composables/useTimer'
 
 // Get database directly from client (simpler, avoids composable issues)
 const database = computed(() => integramApiClient.getDatabase() || 'default')
 
 const toast = useToast()
 const confirm = useConfirm()
+const { setTimeout: setTimerTimeout } = useTimer()
 
 // Breadcrumb navigation
 const breadcrumbItems = computed(() => [
@@ -395,17 +397,17 @@ function startLesson(lesson) {
 
   // Simulate lesson progress (in real implementation, this would be tracked by actual progress)
   // For now, show completion dialog after 5 seconds for demo purposes
-  setTimeout(() => {
+  setTimerTimeout(() => {
     lesson.progress = 50
     saveProgress()
   }, 2000)
 
-  setTimeout(() => {
+  setTimerTimeout(() => {
     lesson.progress = 75
     saveProgress()
   }, 4000)
 
-  setTimeout(() => {
+  setTimerTimeout(() => {
     showLessonCompletionPrompt(lesson)
   }, 6000)
 

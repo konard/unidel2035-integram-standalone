@@ -443,6 +443,7 @@ import { useToast } from 'primevue/usetoast'
 import { useIntegramSession } from '@/composables/useIntegramSession'
 import integramApiClient from '@/services/integramApiClient'
 import Sortable from 'sortablejs'
+import { useTimer } from '@/composables/useTimer'
 
 // PrimeVue Components
 
@@ -450,6 +451,7 @@ const router = useRouter()
 const { isAuthenticated } = useIntegramSession()
 
 const toast = useToast()
+const { setTimeout: setTimerTimeout } = useTimer()
 
 // Breadcrumb navigation
 const breadcrumbItems = computed(() => [
@@ -1032,7 +1034,7 @@ onMounted(async () => {
 // Watch for preview updates to reinitialize sortable
 watch(preview, () => {
   if (preview.value.length > 0) {
-    setTimeout(() => {
+    setTimerTimeout(() => {
       initFieldReordering()
     }, 100)
   }

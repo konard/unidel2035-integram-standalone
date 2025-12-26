@@ -55,6 +55,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import InputText from 'primevue/inputtext'
 import { useUserMentions } from './DataTable/composables/useUserMentions'
+import { useTimer } from '@/composables/useTimer'
 
 const props = defineProps({
   modelValue: {
@@ -68,6 +69,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue'])
+
+const { setTimeout: setTimerTimeout } = useTimer()
 
 const containerRef = ref(null)
 const inputRef = ref(null)
@@ -187,7 +190,7 @@ function selectUser(user) {
 
   // Restore focus and cursor position
   const input = inputRef.value?.$el || inputRef.value
-  setTimeout(() => {
+  setTimerTimeout(() => {
     input.focus()
     input.setSelectionRange(result.cursorPosition, result.cursorPosition)
   }, 0)
@@ -198,7 +201,7 @@ function selectUser(user) {
  */
 function handleBlur() {
   // Delay to allow click on dropdown
-  setTimeout(() => {
+  setTimerTimeout(() => {
     showDropdown.value = false
   }, 200)
 }

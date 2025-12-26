@@ -167,6 +167,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useTimer } from '@/composables/useTimer'
 
 import { deployEnsemble, formatDeploymentResult } from '@/services/ensembleService'
 
@@ -188,6 +189,7 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'deployment-complete'])
 
 const router = useRouter()
+const { setInterval: setTimerInterval, clearInterval: clearTimerInterval } = useTimer()
 
 const isVisible = computed({
   get: () => props.visible,
@@ -228,13 +230,13 @@ async function startDeployment() {
     const totalAgents = props.ensemble.agents?.length || 0
     let completed = 0
 
-    const progressInterval = setInterval(() => {
+    const progressInterval = setTimerInterval(() => {
       if (completed < totalAgents) {
         completed++
         deploymentProgress.value.completed = completed
         deploymentProgress.value.currentAgent = props.ensemble.agents[completed - 1]?.instanceName || 'Agent'
       } else {
-        clearInterval(progressInterval)
+        clearTimerInterval(progressInterval)
       }
     }, 1500)
 
