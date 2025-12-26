@@ -28,6 +28,12 @@ const router = createRouter({
       meta: { requiresAuth: false }
     },
     {
+      path: '/api-v2-sandbox',
+      name: 'ApiV2Sandbox',
+      component: () => import('@/views/pages/ApiV2Sandbox.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
       path: '/welcome',
       component: () => import('@/components/layout/AppLayout.vue'),
       meta: { requiresAuth: true },
