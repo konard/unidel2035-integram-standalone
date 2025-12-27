@@ -1,7 +1,23 @@
 <template>
-  <div class="integram-main">
-    <!-- Modern PrimeVue Navigation Bar -->
-    <Menubar :model="menuItems" class="integram-menubar">
+  <div class="layout-wrapper" :class="containerClass">
+    <!-- Sidebar -->
+    <app-sidebar />
+
+    <!-- Chat -->
+    <Transition name="slide-in-right">
+      <Suspense v-if="isChatActive">
+        <Chat />
+        <template #fallback>
+          <div class="chat-loading"></div>
+        </template>
+      </Suspense>
+    </Transition>
+
+    <!-- Main content with margin when chat is active -->
+    <div class="layout-main-container" :style="isChatActive ? { marginRight: chatMargin } : {}">
+      <div class="integram-main">
+        <!-- Modern PrimeVue Navigation Bar -->
+        <Menubar :model="menuItems" class="integram-menubar">
       <template #start>
         <router-link :to="`/integram/${database}`" class="integram-brand flex align-items-center gap-2 mr-3 no-underline">
           <svg width="32" height="27" viewBox="0 0 40 34" fill="none" xmlns="http://www.w3.org/2000/svg" class="integram-logo">
@@ -142,17 +158,21 @@
       </template>
     </Dialog>
 
-    <!-- Footer -->
-    <div class="footer text-center py-3">
-      <small class="text-muted">Integram v{{ version }}</small>
+        <!-- Footer -->
+        <div class="footer text-center py-3">
+          <small class="text-muted">Integram v{{ version }}</small>
+        </div>
+      </div>
     </div>
+    <div class="layout-mask animate-fadein"></div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, onUnmounted, defineAsyncComponent } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
+import { useLayout } from '@/components/layout/composables/layout'
 import Menubar from 'primevue/menubar'
 import Menu from 'primevue/menu'
 import Dropdown from 'primevue/dropdown'
@@ -160,10 +180,20 @@ import Tag from 'primevue/tag'
 import ProgressSpinner from 'primevue/progressspinner'
 import integramApiClient from '@/services/integramApiClient'
 import SafeRouterView from '@/components/SafeRouterView.vue'
+import AppSidebar from '@/components/layout/AppSidebar.vue'
+// Lazy load Chat component - it's large and impacts page load
+const Chat = defineAsyncComponent(() => import('@/components/layout/Chat.vue'))
 
 const router = useRouter()
 const route = useRoute()
 const toast = useToast()
+const { layoutConfig, layoutState, isSidebarActive } = useLayout()
+
+// Chat and Sidebar refs
+const isChatActive = ref(false)
+const chatWidth = ref(parseInt(localStorage.getItem('chatWidth')) || 320)
+const chatWidthInterval = ref(null)
+const storageHandler = ref(null)
 
 // Refs
 const userMenu = ref()
@@ -179,6 +209,12 @@ const newPasswordRepeat = ref('')
 const locale = ref('ru')
 const version = ref('1.0.0')
 
+// Helper to determine mobile device
+const isMobileDevice = () => {
+  if (typeof window === 'undefined') return false
+  return window.innerWidth <= 960
+}
+
 // Computed
 const database = computed(() => {
   const db = route.params.database || integramApiClient.currentDatabase || integramApiClient.getDatabase() || 'my'
@@ -186,6 +222,25 @@ const database = computed(() => {
   return db
 })
 const userName = computed(() => integramApiClient.getAuthInfo().userName || 'User')
+
+// Container class for layout states
+const containerClass = computed(() => {
+  return {
+    'layout-overlay': layoutConfig.menuMode === 'overlay',
+    'layout-static': layoutConfig.menuMode === 'static',
+    'layout-static-inactive': layoutState.staticMenuDesktopInactive && layoutConfig.menuMode === 'static',
+    'layout-overlay-active': layoutState.overlayMenuActive,
+    'layout-mobile-active': layoutState.staticMenuMobileActive,
+    'chat-active': isChatActive.value && layoutConfig.menuMode === 'static',
+    'sidebar-collapsed': layoutState.sidebarCollapsed,
+  }
+})
+
+// Chat margin calculation
+const chatMargin = computed(() => {
+  const marginInRem = (chatWidth.value + 32 + 32) / 16
+  return `${marginInRem}rem`
+})
 
 // Check if we should show switching overlay (NOT on database home page)
 const shouldShowSwitchingOverlay = computed(() => {
@@ -563,10 +618,116 @@ onMounted(async () => {
     locale.value = 'ru'
     localStorage.setItem('integram_locale', 'ru')
   }
+
+  // Initialize chat state from localStorage
+  const chatState = localStorage.getItem('chat')
+  if (chatState !== null) {
+    isChatActive.value = chatState === 'true'
+  }
+
+  // Listen for chat toggle events from AppTopbar
+  const updateChatState = (newState) => {
+    isChatActive.value = newState
+  }
+
+  // Storage event handler for chat state changes from other tabs
+  storageHandler.value = (e) => {
+    if (e.key === 'chat') {
+      isChatActive.value = e.newValue === 'true'
+    } else if (e.key === 'chatWidth') {
+      const newWidth = parseInt(e.newValue)
+      if (!isNaN(newWidth)) {
+        chatWidth.value = newWidth
+      }
+    }
+  }
+  window.addEventListener('storage', storageHandler.value)
+
+  // Poll chat width from localStorage (for same-tab updates)
+  if (!isMobileDevice()) {
+    chatWidthInterval.value = setInterval(() => {
+      const storedWidth = localStorage.getItem('chatWidth')
+      if (storedWidth) {
+        const newWidth = parseInt(storedWidth)
+        if (!isNaN(newWidth) && newWidth !== chatWidth.value) {
+          chatWidth.value = newWidth
+        }
+      }
+    }, 500)
+  }
+})
+
+onUnmounted(() => {
+  // Clean up event listeners and intervals
+  if (storageHandler.value) {
+    window.removeEventListener('storage', storageHandler.value)
+  }
+  if (chatWidthInterval.value) {
+    clearInterval(chatWidthInterval.value)
+  }
 })
 </script>
 
 <style scoped>
+/* Layout wrapper */
+.layout-wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Layout main container - adjusts when chat is open */
+.layout-main-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  transition: margin-right 0.3s;
+}
+
+/* Layout mask for overlay modes */
+.layout-mask {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.4);
+  z-index: 998;
+}
+
+.layout-mobile-active .layout-mask,
+.layout-overlay-active .layout-mask {
+  display: block;
+}
+
+/* Chat slide-in transition */
+.slide-in-right-enter-active,
+.slide-in-right-leave-active {
+  transition: transform 0.3s ease-out;
+}
+
+.slide-in-right-enter-from {
+  transform: translateX(100%);
+}
+
+.slide-in-right-leave-to {
+  transform: translateX(100%);
+}
+
+/* Chat loading placeholder */
+.chat-loading {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 320px;
+  background: var(--surface-ground);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .integram-main {
   min-height: 100vh;
   display: flex;
