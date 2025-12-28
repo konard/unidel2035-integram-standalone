@@ -1047,6 +1047,7 @@ const totalPages = computed(() => {
 })
 
 const breadcrumbItems = computed(() => [
+  { label: 'table', to: `/integram/${database.value}` },
   { label: 'Таблицы', icon: 'pi pi-table' }
 ])
 
