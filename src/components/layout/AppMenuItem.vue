@@ -128,8 +128,8 @@ function itemClick(event, item) {
         return;
     }
 
-    // For router-link items, prevent default and navigate
-    if (item.to && !item.items) {
+    // For items with a route, navigate to it (even if they have children)
+    if (item.to) {
         event.preventDefault();
         router.push(item.to);
 
@@ -139,6 +139,20 @@ function itemClick(event, item) {
 
         const foundItemKey = itemKey.value;
         setActiveMenuItem(foundItemKey);
+
+        // If item has children, also toggle their visibility
+        if (item.items && item.items.length > 0) {
+            // For root items with children (groups), persist collapsed state
+            if (props.root) {
+                const newCollapsedState = toggleGroupCollapsed(item.label);
+                isActiveMenu.value = !newCollapsedState;
+                emit('toggle-collapsed', { item, collapsed: newCollapsedState });
+            } else {
+                // For non-root items, just toggle expansion
+                isActiveMenu.value = !isActiveMenu.value;
+            }
+        }
+
         return;
     }
 
