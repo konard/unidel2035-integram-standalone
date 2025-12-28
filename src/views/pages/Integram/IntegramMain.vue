@@ -1,11 +1,5 @@
 <template>
   <div class="layout-wrapper" :class="containerClass">
-    <!-- Top bar -->
-    <app-topbar @chat-toggle="handleChatToggle" />
-
-    <!-- Sidebar -->
-    <app-sidebar />
-
     <!-- Chat -->
     <Transition name="slide-in-right">
       <Suspense v-if="isChatActive">
@@ -183,8 +177,6 @@ import Tag from 'primevue/tag'
 import ProgressSpinner from 'primevue/progressspinner'
 import integramApiClient from '@/services/integramApiClient'
 import SafeRouterView from '@/components/SafeRouterView.vue'
-import AppTopbar from '@/components/layout/AppTopbar.vue'
-import AppSidebar from '@/components/layout/AppSidebar.vue'
 // Lazy load Chat component - it's large and impacts page load
 const Chat = defineAsyncComponent(() => import('@/components/layout/Chat.vue'))
 
