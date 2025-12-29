@@ -357,6 +357,11 @@ class IntegramApiClient {
       const myUserId = localStorage.getItem('my_id')
       const currentDb = localStorage.getItem('db')
 
+      // Issue #65: Use current origin instead of hardcoded dronedoc.ru
+      const currentOrigin = (typeof window !== 'undefined' && window.location)
+        ? window.location.origin
+        : 'https://dronedoc.ru'
+
       // If 'my' token exists, use it
       if (myToken && myXsrf) {
         this.database = 'my'
@@ -364,7 +369,7 @@ class IntegramApiClient {
         this.xsrfToken = myXsrf
         this.userId = myUserId
         this.userName = myUser
-        this.baseURL = 'https://dronedoc.ru'
+        this.baseURL = currentOrigin
         this.authDatabase = 'my'  // Issue #3811: User authenticated to 'my' database
         console.log('[integramApiClient] Loaded session from my_token (Issue #3778)')
         return true
@@ -382,7 +387,7 @@ class IntegramApiClient {
         this.xsrfToken = legacyXsrf
         this.userId = legacyUserId
         this.userName = legacyUser
-        this.baseURL = 'https://dronedoc.ru'
+        this.baseURL = currentOrigin
         this.authDatabase = 'my'  // Issue #3811: User authenticated to 'my' database
         console.log('[integramApiClient] Loaded session from legacy token (db=my) (Issue #3778)')
         return true

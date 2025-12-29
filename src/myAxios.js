@@ -55,10 +55,13 @@ const getBaseURL = () => {
   // If localhost is selected, use local address
   if (apiBase === 'localhost') return 'http://localhost/my/'
 
-  // Issue #3651: my is the unified user account database and ALWAYS uses dronedoc.ru
-  // regardless of which server the user selected for their primary database
+  // Issue #65: Use current domain instead of hardcoded dronedoc.ru
+  // This allows интеграм.рф, dronedoc.ru, or any other domain to work correctly
   // Important: Always add trailing slash to prevent double-slash issues with axios URL joining
-  return 'https://dronedoc.ru/my/'
+  const origin = (typeof window !== 'undefined' && window.location)
+    ? window.location.origin
+    : 'https://dronedoc.ru'
+  return `${origin}/my/`
 }
 
 const myClient = axios.create({
