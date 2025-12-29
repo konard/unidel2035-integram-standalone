@@ -46,6 +46,18 @@ const router = createRouter({
       ]
     },
     {
+      path: '/tokens',
+      component: () => import('@/components/layout/AppLayout.vue'),
+      meta: { requiresAuth: false },
+      children: [
+        {
+          path: '',
+          name: 'Tokens',
+          component: () => import('@/views/pages/Tokens.vue')
+        }
+      ]
+    },
+    {
       path: '/integram',
       redirect: '/integram/my'
     },
