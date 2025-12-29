@@ -60,7 +60,7 @@ const breadcrumbItems = computed(() => {
     const isLast = index === props.items.length - 1
     result.push({
       label: item.label,
-      route: isLast ? undefined : item.to, // Last item should not be clickable
+      route: isLast ? undefined : (item.route || item.to), // Support both 'route' and 'to' props
       icon: item.icon
     })
   })

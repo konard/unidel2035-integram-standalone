@@ -1,5 +1,8 @@
 <template>
   <div class="layout-wrapper" :class="containerClass">
+    <!-- Integram Sidebar -->
+    <IntegramSidebar :database="database" @toggle-collapse="sidebarCollapsed = $event" />
+
     <!-- Chat -->
     <Transition name="slide-in-right">
       <Suspense v-if="isChatActive">
@@ -13,8 +16,8 @@
     <!-- Main content with margin when chat is active -->
     <div class="layout-main-container" :style="isChatActive ? { marginRight: chatMargin } : {}">
       <div class="integram-main">
-        <!-- Modern PrimeVue Navigation Bar -->
-        <Menubar :model="menuItems" class="integram-menubar">
+        <!-- Integram Header Bar (logo, database selector, help, profile) -->
+        <Menubar :model="[]" class="integram-menubar">
       <template #start>
         <router-link :to="`/integram/${database}`" class="integram-brand flex align-items-center gap-2 mr-3 no-underline">
           <svg width="32" height="27" viewBox="0 0 40 34" fill="none" xmlns="http://www.w3.org/2000/svg" class="integram-logo">
@@ -177,6 +180,7 @@ import Tag from 'primevue/tag'
 import ProgressSpinner from 'primevue/progressspinner'
 import integramApiClient from '@/services/integramApiClient'
 import SafeRouterView from '@/components/SafeRouterView.vue'
+import IntegramSidebar from '@/components/integram/IntegramSidebar.vue'
 // Lazy load Chat component - it's large and impacts page load
 const Chat = defineAsyncComponent(() => import('@/components/layout/Chat.vue'))
 
@@ -190,6 +194,7 @@ const isChatActive = ref(false)
 const chatWidth = ref(parseInt(localStorage.getItem('chatWidth')) || 320)
 const chatWidthInterval = ref(null)
 const storageHandler = ref(null)
+const sidebarCollapsed = ref(localStorage.getItem('integram_sidebar_collapsed') === 'true')
 
 // Refs
 const userMenu = ref()
@@ -228,7 +233,7 @@ const containerClass = computed(() => {
     'layout-overlay-active': layoutState.overlayMenuActive,
     'layout-mobile-active': layoutState.staticMenuMobileActive,
     'chat-active': isChatActive.value && layoutConfig.menuMode === 'static',
-    'sidebar-collapsed': layoutState.sidebarCollapsed,
+    'sidebar-collapsed': sidebarCollapsed.value,
   }
 })
 
@@ -677,12 +682,25 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-/* Layout main container - adjusts when chat is open */
+/* Layout main container - adjusts when chat is open and sidebar */
 .layout-main-container {
   display: flex;
   flex-direction: column;
   flex: 1;
-  transition: margin-right 0.3s;
+  margin-left: 16rem; /* IntegramSidebar width */
+  transition: margin-right 0.3s, margin-left 0.2s;
+}
+
+/* When sidebar is collapsed */
+.sidebar-collapsed .layout-main-container {
+  margin-left: 4rem;
+}
+
+/* Mobile: no left margin, sidebar slides */
+@media screen and (max-width: 960px) {
+  .layout-main-container {
+    margin-left: 0 !important;
+  }
 }
 
 /* Layout mask for overlay modes */
@@ -733,13 +751,29 @@ onUnmounted(() => {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-top: 4rem; /* Account for fixed AppTopbar height */
 }
 
 .integram-menubar {
-  position: sticky;
-  top: 4rem; /* Stick below the fixed AppTopbar (4rem height) */
+  position: fixed;
+  top: 0;
+  left: 16rem; /* IntegramSidebar width */
+  right: 0;
   z-index: 1000;
+  height: 4rem;
+  border-radius: 0;
+  transition: left 0.2s;
+}
+
+/* When sidebar is collapsed */
+.sidebar-collapsed .integram-menubar {
+  left: 4rem;
+}
+
+/* Mobile: full width menubar */
+@media screen and (max-width: 960px) {
+  .integram-menubar {
+    left: 0 !important;
+  }
 }
 
 .integram-brand {
@@ -760,6 +794,7 @@ onUnmounted(() => {
 .content {
   flex: 1;
   padding: 1rem;
+  padding-top: 5rem; /* Account for fixed menubar (4rem) + spacing */
   min-height: calc(100vh - 150px);
   position: relative;
 }

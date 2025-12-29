@@ -29,6 +29,7 @@ import Sidebar from 'primevue/sidebar'
 import Divider from 'primevue/divider'
 import Checkbox from 'primevue/checkbox'
 import Message from 'primevue/message'
+import Breadcrumb from 'primevue/breadcrumb'
 import Tooltip from 'primevue/tooltip'
 import StyleClass from 'primevue/styleclass'
 
@@ -84,6 +85,7 @@ app.component('Sidebar', Sidebar)
 app.component('Divider', Divider)
 app.component('Checkbox', Checkbox)
 app.component('Message', Message)
+app.component('Breadcrumb', Breadcrumb)
 app.directive('tooltip', Tooltip)
 app.directive('styleclass', StyleClass)
 

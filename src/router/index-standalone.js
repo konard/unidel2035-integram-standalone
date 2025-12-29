@@ -57,7 +57,7 @@ const router = createRouter({
     },
     {
       path: '/integram/:database',
-      component: () => import('@/views/pages/Integram/IntegramMain.vue'),
+      component: () => import('@/components/layout/AppLayout.vue'),
       meta: { requiresAuth: false },
       children: [
         {

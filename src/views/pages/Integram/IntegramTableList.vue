@@ -951,7 +951,7 @@ function calculateRelevance(tableName, query) {
 }
 
 // Computed
-const database = computed(() => integramApiClient.getDatabase() || '')
+const database = computed(() => route.params.database || integramApiClient.getDatabase() || 'my')
 
 const filteredTables = computed(() => {
   let result = tables.value
@@ -1047,7 +1047,7 @@ const totalPages = computed(() => {
 })
 
 const breadcrumbItems = computed(() => [
-  { label: 'table', to: `/integram/${database.value}` },
+  { label: 'table', route: `/integram/${database.value}/table` },
   { label: 'Таблицы', icon: 'pi pi-table' }
 ])
 
