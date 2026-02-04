@@ -74,15 +74,31 @@ const runAgent = async () => {
   try {
     const attrs = JSON.parse(props.requisite.attrs)
     const instructions = attrs.aiInstructions || ''
+    const model = attrs.aiModel || 'openai/gpt-3.5-turbo'
+    const webSearch = attrs.aiWebSearch || false
 
-    // Заменить {field_name} на значения из rowData
-    const processedInstructions = replaceFieldReferences(instructions, props.rowData)
+    // Call backend AI Cell API
+    const response = await fetch('/api/ai-cell/execute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        instructions,
+        rowData: props.rowData || {},
+        model,
+        webSearch,
+        provider: 'polza' // Use polza provider by default
+      })
+    })
 
-    // TODO: Вызвать AI API
-    // Пока что просто симулируем генерацию
-    await new Promise(resolve => setTimeout(resolve, 2000))
+    const result = await response.json()
 
-    const generatedText = `[AI Generated] Инструкции: ${processedInstructions}\n\nЭто демонстрация AI ячейки. Интеграция с реальным AI API требует настройки backend.`
+    if (!result.success) {
+      throw new Error(result.error || 'AI operation failed')
+    }
+
+    const generatedText = result.data.content
 
     emit('update:modelValue', generatedText)
 
@@ -92,16 +108,6 @@ const runAgent = async () => {
   } finally {
     isGenerating.value = false
   }
-}
-
-// Заменить {field_name} на фактические значения
-const replaceFieldReferences = (text, rowData) => {
-  if (!text || !rowData) return text
-
-  return text.replace(/\{([^}]+)\}/g, (match, fieldName) => {
-    const fieldValue = rowData[fieldName.trim()]
-    return fieldValue !== undefined ? String(fieldValue) : match
-  })
 }
 </script>
 
