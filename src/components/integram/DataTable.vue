@@ -748,6 +748,9 @@ import Badge from 'primevue/badge'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 import MentionDisplay from './MentionDisplay.vue'
 
+// AI Cell editor
+import AICellEditor from './editors/AICellEditor.vue'
+
 // Extracted Dialog Components
 import MemoEditDialog from './DataTable/dialogs/MemoEditDialog.vue'
 import ChangeParentDialog from './DataTable/dialogs/ChangeParentDialog.vue'
@@ -2870,6 +2873,19 @@ const formatCellValue = (value, type, rowId, headerId) => {
       // No valid path - just display as text
       return `<span class="cell-path" title="Путь: ${strVal}"><i class="pi pi-folder-open"></i><span>${displayName}</span></span>`
     }
+
+    // Type 18: AI_CELL - AI Field Agent
+    case 18: {
+      const strVal = String(displayValue)
+      if (!strVal) {
+        return `<span class="cell-ai-empty" title="Запустите агент для генерации контента"><i class="pi pi-sparkles"></i> Запустить агент</span>`
+      }
+
+      // Truncate long AI-generated text
+      const truncated = strVal.length > 150 ? strVal.substring(0, 150) + '...' : strVal
+      return `<span class="cell-ai-generated" title="${escapeHtml(strVal)}"><i class="pi pi-sparkles"></i> ${escapeHtml(truncated)}</span>`
+    }
+
     case 9: {
       // Handle both numeric timestamps and string timestamps
       let timestamp = null
@@ -5154,7 +5170,8 @@ const getEditorComponent = (type, dirTableId, columnType) => {
     12: Textarea,
     13: InputNumber,
     14: InputNumber,
-    4: Calendar
+    4: Calendar,
+    18: AICellEditor  // AI Cell - AI Field Agent
   }
   return componentMap[type] || MentionAutocomplete  // Default to MentionAutocomplete for text
 }
@@ -8964,5 +8981,61 @@ tfoot {
 .grant-placeholder {
   color: var(--p-text-muted-color, var(--text-color-secondary));
   font-size: 13px;
+}
+
+/* AI Cell Styles */
+:deep(.cell-ai-empty) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+:deep(.cell-ai-empty:hover) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+:deep(.cell-ai-empty i) {
+  font-size: 1rem;
+}
+
+:deep(.cell-ai-generated) {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  border-left: 3px solid #667eea;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  max-width: 100%;
+}
+
+:deep(.cell-ai-generated i) {
+  color: #667eea;
+  font-size: 1rem;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+/* Dark mode support for AI cells */
+:deep(.p-datatable-dark .cell-ai-generated),
+.dark :deep(.cell-ai-generated) {
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+  border-left-color: #8b5cf6;
+}
+
+:deep(.p-datatable-dark .cell-ai-empty),
+.dark :deep(.cell-ai-empty) {
+  background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
 }
 </style>

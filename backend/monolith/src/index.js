@@ -29,6 +29,7 @@ import { createScheduledMeetingsRoutes } from './api/routes/scheduledMeetings.js
 import { createTgstatRoutes } from './api/routes/tgstat.js';
 import { createYouTubeRoutes } from './api/routes/youtube.js';
 import aiTokenRoutes from './api/routes/ai-tokens.js';
+import aiCellRoutes from './api/routes/ai-cell.js';
 import { createScraperRoutes } from './api/routes/scraper.js';
 import { createKnowledgeRoutes } from './api/routes/knowledge.js';
 import { createKAGRoutes } from './api/routes/kag.js';
@@ -389,6 +390,8 @@ class IntegramBackend {
     // AI & Agent Routes
     // ========================================
     this.app.use('/api/ai-tokens', aiTokenRoutes);
+    this.app.use('/api/ai-cell', aiCellRoutes);
+    console.log('✅ [MONOLITH] AI Cell routes registered at /api/ai-cell (Issue #115)');
     this.app.use('/api/ai/youtube', youtubeAiRoutes);
     this.app.use('/api/ai/agriculture', agriculturalAiRoutes);
     this.app.use('/api/integration-agent', integrationAgentRoutes);
