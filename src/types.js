@@ -1,5 +1,5 @@
 /**
- * Integram Type IDs - все 16 типов
+ * Integram Type IDs - все 17 типов
  *
  * 2  - HTML       - HTML контент
  * 3  - SHORT      - Короткая строка (<255 символов)
@@ -17,6 +17,7 @@
  * 15 - CALCULATABLE - Вычисляемое поле
  * 16 - REPORT_COLUMN - Колонка отчёта
  * 17 - PATH       - Путь к файлу
+ * 18 - AI_CELL    - ИИ ячейка (AI Field Agent)
  */
 export const TYPES = [
   { value: 2, label: 'HTML', icon: 'fa-code' },
@@ -35,6 +36,7 @@ export const TYPES = [
   { value: 15, label: 'Вычисляемое поле', icon: 'fa-function' },
   // { value: 16, label: 'Колонка отчёта', icon: 'fa-columns' }, // REPORT_COLUMN - скрыт (системный тип)
   { value: 17, label: 'Путь к файлу', icon: 'fa-folder-open' },
+  { value: 18, label: 'ИИ ячейка', icon: 'fa-brain' },
 ]
 
 /*

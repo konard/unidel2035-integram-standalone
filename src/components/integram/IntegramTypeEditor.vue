@@ -505,6 +505,65 @@
             Выберите макрос из списка или введите значение вручную
           </small>
         </div>
+
+        <!-- AI Cell Instructions (только для типа 18 - AI_CELL) -->
+        <div v-if="requisiteDialog.data.type === 'AI_CELL'" class="field">
+          <label for="aiInstructions">Инструкции для AI агента *</label>
+          <Textarea
+            id="aiInstructions"
+            v-model="requisiteDialog.data.aiInstructions"
+            placeholder="Опишите задачу агента... Используйте {имя_поля} для ссылок на другие поля"
+            rows="6"
+            class="w-full"
+          />
+          <small class="text-color-secondary">
+            <i class="pi pi-info-circle"></i>
+            Используйте <code>{имя_поля}</code> для ссылок на значения других полей.
+            Например: "Суммируй текст из поля {Описание}"
+          </small>
+        </div>
+
+        <!-- AI Cell Settings (дополнительные настройки для AI агента) -->
+        <div v-if="requisiteDialog.data.type === 'AI_CELL'" class="flex flex-column gap-3 p-3 surface-ground border-round">
+          <div class="flex align-items-center gap-2 mb-1">
+            <i class="pi pi-cog text-primary"></i>
+            <span class="font-semibold">Настройки агента</span>
+          </div>
+
+          <div class="field-checkbox">
+            <Checkbox
+              id="aiAutoRun"
+              v-model="requisiteDialog.data.aiAutoRun"
+              :binary="true"
+            />
+            <label for="aiAutoRun" class="ml-2">Автоматически запускать при изменении входных данных</label>
+          </div>
+
+          <div class="field-checkbox">
+            <Checkbox
+              id="aiWebSearch"
+              v-model="requisiteDialog.data.aiWebSearch"
+              :binary="true"
+            />
+            <label for="aiWebSearch" class="ml-2">Включить поиск в интернете</label>
+          </div>
+
+          <div class="field">
+            <label for="aiModel">Модель AI</label>
+            <Select
+              id="aiModel"
+              v-model="requisiteDialog.data.aiModel"
+              :options="aiModels"
+              optionLabel="label"
+              optionValue="value"
+              placeholder="Выберите модель"
+              class="w-full"
+            />
+            <small class="text-color-secondary">
+              Высокая производительность = выше качество и стоимость
+            </small>
+          </div>
+        </div>
       </div>
 
       <template #footer>
@@ -735,6 +794,7 @@ const baseTypesAll = [
   { value: 'CALCULATABLE', label: 'CALCULATABLE', description: 'Вычисляемое поле (read-only, автозаполнение)', example: '[TODAY], [USER]' },
   { value: 'REPORT_COLUMN', label: 'REPORT_COLUMN', description: 'Колонка запроса', example: '', hidden: true },
   { value: 'PATH', label: 'PATH', description: 'Путь к файлу', example: '/path/to/file' },
+  { value: 'AI_CELL', label: 'AI CELL', description: 'ИИ ячейка - генерация контента через AI', example: 'AI-generated content' },
   { value: '0', label: '------------', description: 'Разделитель закладок', example: '' }
 ];
 
@@ -761,8 +821,18 @@ const typeNameToId = {
   'CALCULATABLE': 15,
   'REPORT_COLUMN': 16,
   'PATH': 17,
+  'AI_CELL': 18,
   '0': 0  // Tab delimiter
 };
+
+// AI Model options for AI_CELL type
+const aiModels = [
+  { value: 'gpt-4', label: 'GPT-4 (высокая производительность)', description: 'Наиболее продвинутая модель' },
+  { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (сбалансированная)', description: 'Хорошее качество, умеренная стоимость' },
+  { value: 'claude-3-opus', label: 'Claude 3 Opus (высокая производительность)', description: 'Высокое качество от Anthropic' },
+  { value: 'claude-3-sonnet', label: 'Claude 3 Sonnet (сбалансированная)', description: 'Баланс качества и скорости' },
+  { value: 'gemini-pro', label: 'Gemini Pro (Google)', description: 'Модель от Google' }
+];
 
 function getTypeIdFromName(typeName) {
   return typeNameToId[typeName] || typeName;
@@ -801,7 +871,12 @@ const requisiteDialog = reactive({
     nullable: true,
     multi: false,
     alias: '',
-    defaultValue: ''
+    defaultValue: '',
+    // AI Cell specific fields
+    aiInstructions: '',
+    aiAutoRun: false,
+    aiWebSearch: false,
+    aiModel: 'gpt-3.5-turbo'
   }
 });
 
@@ -1515,6 +1590,20 @@ async function saveRequisite() {
           requisiteDialog.data.defaultValue
         );
       }
+
+      // Save AI Cell attributes if AI_CELL type
+      if (response && response.id && requisiteDialog.data.type === 'AI_CELL') {
+        const aiAttrs = {
+          aiInstructions: requisiteDialog.data.aiInstructions || '',
+          aiAutoRun: requisiteDialog.data.aiAutoRun || false,
+          aiWebSearch: requisiteDialog.data.aiWebSearch || false,
+          aiModel: requisiteDialog.data.aiModel || 'gpt-3.5-turbo'
+        };
+        await integramApiClient.saveRequisiteAttributes(
+          response.id,
+          JSON.stringify(aiAttrs)
+        );
+      }
     } else {
       // Update requisite
       if (requisiteDialog.data.name) {
@@ -1529,6 +1618,20 @@ async function saveRequisite() {
         await integramApiClient.saveRequisiteDefaultValue(
           requisiteDialog.data.id,
           requisiteDialog.data.defaultValue || ''
+        );
+      }
+
+      // Update AI Cell attributes if AI_CELL type
+      if (requisiteDialog.data.type === 'AI_CELL') {
+        const aiAttrs = {
+          aiInstructions: requisiteDialog.data.aiInstructions || '',
+          aiAutoRun: requisiteDialog.data.aiAutoRun || false,
+          aiWebSearch: requisiteDialog.data.aiWebSearch || false,
+          aiModel: requisiteDialog.data.aiModel || 'gpt-3.5-turbo'
+        };
+        await integramApiClient.saveRequisiteAttributes(
+          requisiteDialog.data.id,
+          JSON.stringify(aiAttrs)
         );
       }
     }
