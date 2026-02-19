@@ -1207,6 +1207,45 @@ router.all('/:db/exit', async (req, res) => {
   return res.redirect(`/${db}`);
 });
 
+// ============================================================================
+// action=object / action=edit_obj in POST /:db (P2 Medium priority)
+// PHP: index.php lines 4056–4085
+// JS client navigates to /:db with action=object&id=<n> to view/edit an object.
+// ============================================================================
+
+/**
+ * Handle action=object and action=edit_obj in POST /:db
+ * PHP renders the object.html or edit_obj.html template for these actions.
+ * This intercepts before the generic page-renderer handles it.
+ */
+router.post('/:db', async (req, res, next) => {
+  const { db } = req.params;
+  if (!isValidDbName(db)) return next();
+
+  const action = req.body.action || req.query.action;
+
+  if (action !== 'object' && action !== 'edit_obj') {
+    return next();
+  }
+
+  const id = parseInt(req.body.id || req.query.id, 10);
+  if (!id) {
+    return res.status(200).send('Object id is empty or 0');
+  }
+
+  // Map action to template file (PHP: renders object.html or edit_obj.html)
+  const templateFile = action === 'object' ? 'templates/object.html' : 'templates/edit_obj.html';
+  const templatePath = path.join(legacyPath, templateFile);
+
+  if (fs.existsSync(templatePath)) {
+    logger.info('[Legacy action=' + action + '] Serving template', { db, id });
+    return res.sendFile(templatePath);
+  }
+
+  // Fallback: serve main page
+  return next();
+});
+
 /**
  * POST /:db — native form submission after AJAX auth
  *
@@ -1729,14 +1768,35 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       }
     }
 
+    // Handle SEARCH_* parameters - persist search criteria for dropdown lists
+    // PHP lines 8011-8017: collect SEARCH_* params that differ from PREV_SEARCH_* values
+    const searchParams = {};
+    for (const [key, value] of Object.entries(req.body)) {
+      if (key.startsWith('SEARCH_') && String(value).length > 0) {
+        const prevKey = 'PREV_' + key;
+        const prevValue = req.body[prevKey];
+        // PHP: only include if value changed from PREV_SEARCH_* (or no previous value)
+        if (prevValue === undefined || value !== prevValue) {
+          searchParams[key.substring(7)] = value; // strip 'SEARCH_' prefix
+        }
+      }
+    }
+
     logger.info('[Legacy _m_save] Object saved', { db, id: objectId, newRefs: Object.keys(newRefParams).length });
 
-    res.json({
+    const response = {
       status: 'Ok',
       id: objectId,
       val: req.body.val,
       saved1: 1,
-    });
+    };
+
+    // If SEARCH_* params are present, include them so the client can filter dropdown lists
+    if (Object.keys(searchParams).length > 0) {
+      response.search = searchParams;
+    }
+
+    res.json(response);
   } catch (error) {
     logger.error('[Legacy _m_save] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
