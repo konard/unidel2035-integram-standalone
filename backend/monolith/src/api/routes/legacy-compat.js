@@ -1017,8 +1017,22 @@ router.post('/my/register', async (req, res) => {
  * Logout endpoint
  * POST /:db/exit or GET /:db/exit
  */
-router.all('/:db/exit', (req, res) => {
+router.all('/:db/exit', async (req, res) => {
   const { db } = req.params;
+
+  // Delete token from DB (PHP: DELETE FROM $z WHERE up=user_id AND t=TOKEN)
+  const token = req.cookies[db];
+  if (token && isValidDbName(db)) {
+    try {
+      const pool = getPool();
+      await pool.query(
+        `DELETE FROM \`${db}\` WHERE t = ${TYPE.TOKEN} AND val = ?`,
+        [token]
+      );
+    } catch (err) {
+      logger.error({ error: err.message, db }, '[Legacy Exit] DB error on token delete');
+    }
+  }
 
   // Clear the session cookie
   res.clearCookie(db, { path: '/' });
@@ -1370,9 +1384,11 @@ router.post('/:db/_m_new/:up?', async (req, res) => {
       await insertRow(db, id, attrOrder, parseInt(attrTypeId, 10), String(attrValue));
     }
 
+    const pool = getPool();
+
     // Check if type has requisites (determines next_act per PHP logic)
     const [reqRows] = await pool.query(
-      `SELECT id FROM ${db} WHERE up=? AND up!=0 LIMIT 1`,
+      `SELECT id FROM \`${db}\` WHERE up=? AND up!=0 LIMIT 1`,
       [typeId]
     );
     const hasReqs = reqRows.length > 0;
@@ -1388,6 +1404,7 @@ router.post('/:db/_m_new/:up?', async (req, res) => {
       next_act,
       args,
       val: value,
+      warning: '',
     });
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy _m_new] Error');
