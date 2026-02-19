@@ -1976,6 +1976,10 @@ router.all('/:db/_d_main/:typeId', async (req, res) => {
 /**
  * terms - List all terms/types
  * GET /:db/terms
+ *
+ * PHP: index.php lines 8919–8942
+ * PHP filters types through Grant_1level($id) — shows only those the user has access to.
+ * Node.js now replicates this behavior using the grant1Level function.
  */
 router.get('/:db/terms', async (req, res) => {
   const { db } = req.params;
@@ -1986,6 +1990,33 @@ router.get('/:db/terms', async (req, res) => {
 
   try {
     const pool = getPool();
+
+    // Get user grants from token cookie if available
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let grants = {};
+    let username = '';
+
+    if (token) {
+      try {
+        // Validate token and get user role
+        const [userRows] = await pool.query(`
+          SELECT u.id, u.val AS username, role_def.id AS role_id
+          FROM ${db} tok
+          JOIN ${db} u ON tok.up = u.id
+          LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+          WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+          LIMIT 1
+        `, [token]);
+
+        if (userRows.length > 0) {
+          username = userRows[0].username;
+          grants = await getGrants(pool, db, userRows[0].role_id);
+        }
+      } catch (e) {
+        logger.warn('[Legacy terms] Failed to load grants', { error: e.message });
+      }
+    }
+
     // Match PHP terms query: all top-level objects where id!=t, val!='', t!=0
     // Left join to get the type of each requisite (child record) per PHP logic
     const [rows] = await pool.query(
@@ -2002,28 +2033,37 @@ router.get('/:db/terms', async (req, res) => {
     // - Only show types not used as requisites elsewhere
     const base = {}; // id -> t
     const typ = {};  // id -> val (types to display)
-    const req = {};  // id -> true (types used as requisites)
+    const reqMap = {};  // id -> true (types used as requisites)
 
     for (const row of rows) {
       const revBt = REV_BASE_TYPE[row.t] || null;
       if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
 
       base[row.id] = row.t;
-      if (!req[row.id]) {
+      if (!reqMap[row.id]) {
         typ[row.id] = row.val;
       }
       if (row.reqs_t) {
         delete typ[row.reqs_t];
-        req[row.reqs_t] = true;
+        reqMap[row.reqs_t] = true;
       }
     }
 
     // Build response array matching PHP: [{id, type, name}]
-    const types = Object.keys(typ).map(id => ({
-      id: Number(id),
-      type: base[id],
-      name: typ[id],
-    }));
+    // PHP: if(Grant_1level($id)) $json .= ...
+    const types = [];
+    for (const id of Object.keys(typ)) {
+      const numId = Number(id);
+      // Apply Grant_1level filtering (PHP line 8938)
+      const grantLevel = await grant1Level(pool, db, grants, numId, username);
+      if (grantLevel) {
+        types.push({
+          id: numId,
+          type: base[id],
+          name: typ[id],
+        });
+      }
+    }
 
     res.json(types);
   } catch (error) {
@@ -2089,6 +2129,16 @@ router.get('/:db/xsrf', async (req, res) => {
 /**
  * _ref_reqs - Get reference requisites for dropdown lists
  * GET /:db/_ref_reqs/:refId
+ *
+ * PHP: index.php lines 8944–9086
+ * Returns: {"<id>": "<main_val> / <req1_val> / <req2_val>", ...}
+ * Missing values shown as " / --"
+ *
+ * Supports:
+ *   ?q=<search> - Filter by value (LIKE %search%)
+ *   ?q=@<id> - Search by ID
+ *   ?r=<id> - Restrict to specific ID
+ *   ?r=<id1>,<id2> - Restrict to multiple IDs
  */
 router.get('/:db/_ref_reqs/:refId', async (req, res) => {
   const { db, refId } = req.params;
@@ -2101,46 +2151,167 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
     const pool = getPool();
     const id = parseInt(refId, 10);
     const searchQuery = req.query.q || '';
+    const restrictParam = req.query.r || '';
 
-    // Get the reference type info (to find what type of objects to list)
+    // Get the reference type info and its requisites (children)
+    // PHP: dic = row["dic"] from the reference definition
     const [refRows] = await pool.query(
-      `SELECT t, val FROM ${db} WHERE id = ?`,
+      `SELECT r.t AS dic, r.val AS attr, def_reqs.t, req_orig.t AS base,
+              CASE WHEN base.id != base.t THEN 1 ELSE 0 END AS is_ref, req.id AS req_id
+       FROM ${db} r
+       JOIN ${db} dic ON dic.id = r.t
+       JOIN ${db} par ON par.id = r.up AND par.up = 0
+       LEFT JOIN ${db} def_reqs ON def_reqs.up = r.t
+       LEFT JOIN ${db} req_orig ON req_orig.id = def_reqs.t
+       LEFT JOIN ${db} base ON base.id = req_orig.t
+       LEFT JOIN ${db} req ON req.up = dic.t AND req.t = def_reqs.t
+       WHERE r.id = ?
+       ORDER BY def_reqs.ord`,
       [id]
     );
 
     if (refRows.length === 0) {
-      return res.status(404).json({ error: 'Reference not found' });
+      // Fallback to simple query if the complex query returns nothing
+      const [simpleRows] = await pool.query(
+        `SELECT t, val FROM ${db} WHERE id = ?`,
+        [id]
+      );
+      if (simpleRows.length === 0) {
+        return res.status(404).json({ error: 'Reference not found' });
+      }
+
+      const refTypeId = simpleRows[0].t;
+      let query = `SELECT id, val FROM ${db} WHERE t = ?`;
+      const params = [refTypeId];
+
+      // Handle restrict parameter
+      if (restrictParam) {
+        const restrictIds = restrictParam.split(',').filter(v => /^\d+$/.test(v)).map(v => parseInt(v, 10));
+        if (restrictIds.length > 0) {
+          query += ` AND id IN (${restrictIds.join(',')})`;
+        }
+      }
+
+      if (searchQuery) {
+        if (searchQuery.startsWith('@')) {
+          const searchId = parseInt(searchQuery.substring(1), 10);
+          if (!isNaN(searchId)) {
+            query += ` AND id = ?`;
+            params.push(searchId);
+          }
+        } else {
+          query += ` AND val LIKE ?`;
+          params.push(`%${searchQuery}%`);
+        }
+      }
+
+      query += ` ORDER BY val LIMIT 80`;
+      const [rows] = await pool.query(query, params);
+      const result = {};
+      for (const row of rows) {
+        result[row.id] = row.val || '--';
+      }
+      return res.json(result);
     }
 
-    const refTypeId = refRows[0].t;
+    // Extract dictionary type and requisites info
+    const dic = refRows[0].dic;
+    const refReqs = [];
+    const reqIds = [];
 
-    // Get objects of that type
-    let query = `SELECT id, val FROM ${db} WHERE t = ?`;
-    const params = [refTypeId];
-
-    if (searchQuery) {
-      if (searchQuery.startsWith('@')) {
-        // Search by ID
-        const searchId = parseInt(searchQuery.substring(1), 10);
-        if (!isNaN(searchId)) {
-          query += ` AND id = ?`;
-          params.push(searchId);
-        }
-      } else {
-        query += ` AND val LIKE ?`;
-        params.push(`%${searchQuery}%`);
+    for (const row of refRows) {
+      if (row.req_id && !reqIds.includes(row.req_id)) {
+        reqIds.push(row.req_id);
+        refReqs.push({
+          reqId: row.req_id,
+          base: row.base,
+          isRef: row.is_ref === 1
+        });
       }
     }
 
-    query += ` ORDER BY val LIMIT 80`;
+    // Build the query with joins for requisite values
+    // PHP: joins requisite tables to fetch additional identifying info
+    let selectCols = 'vals.id, vals.val AS ref_val';
+    let joinClauses = '';
 
-    const [rows] = await pool.query(query, params);
+    for (let i = 0; i < refReqs.length; i++) {
+      const rq = refReqs[i];
+      const reqAlias = `a${rq.reqId}`;
+      selectCols += `, ${reqAlias}.val AS ${reqAlias}val`;
 
-    // Return as key-value pairs (PHP-compatible format)
+      if (rq.isRef) {
+        // Reference type - join through intermediate table
+        joinClauses += ` LEFT JOIN (${db} r${rq.reqId} CROSS JOIN ${db} ${reqAlias}) ON r${rq.reqId}.up = vals.id AND ${reqAlias}.id = r${rq.reqId}.t AND ${reqAlias}.t = ${rq.base}`;
+      } else {
+        // Direct requisite
+        joinClauses += ` LEFT JOIN ${db} ${reqAlias} ON ${reqAlias}.up = vals.id AND ${reqAlias}.t = ${rq.reqId}`;
+      }
+    }
+
+    // Build WHERE clause
+    let whereClause = `vals.t = ${dic}`;
+
+    // Handle restrict parameter (?r=<id> or ?r=<id1>,<id2>)
+    if (restrictParam) {
+      const restrictIds = restrictParam.split(',').filter(v => /^\d+$/.test(v)).map(v => parseInt(v, 10));
+      if (restrictIds.length === 1) {
+        whereClause += ` AND vals.id = ${restrictIds[0]}`;
+      } else if (restrictIds.length > 1) {
+        whereClause += ` AND vals.id IN (${restrictIds.join(',')})`;
+      }
+    }
+
+    // Handle search parameter
+    let searchClause = '';
+    if (searchQuery) {
+      if (searchQuery.startsWith('@')) {
+        const searchId = parseInt(searchQuery.substring(1), 10);
+        if (!isNaN(searchId)) {
+          whereClause += ` AND vals.id = ${searchId}`;
+        }
+      } else {
+        // PHP: searches across val and all requisite values using CONCAT
+        const escapedSearch = searchQuery.replace(/'/g, "''").replace(/%/g, '\\%');
+        let searchConcat = 'vals.val';
+        for (const rq of refReqs) {
+          searchConcat = `CONCAT(${searchConcat}, '/', COALESCE(a${rq.reqId}.val, ''))`;
+        }
+        searchClause = ` AND ${searchConcat} LIKE '%${escapedSearch}%'`;
+      }
+    }
+
+    // Execute the query
+    const sql = `
+      SELECT ${selectCols}
+      FROM ${db} vals
+      ${joinClauses}
+      JOIN ${db} pars ON pars.id = vals.up AND pars.up != 0
+      WHERE ${whereClause}${searchClause}
+      ORDER BY vals.val
+      LIMIT 80
+    `;
+
+    logger.debug('[Legacy _ref_reqs] Query', { db, id, sql: sql.replace(/\s+/g, ' ').trim() });
+
+    const [rows] = await pool.query(sql);
+
+    // Build result with concatenated requisite values
+    // PHP: foreach($ref_reqs as $v) $list[$row["id"]] .= isset($row[$v."val"]) ? " / ".$row[$v."val"] : " / --";
     const result = {};
     for (const row of rows) {
-      result[row.id] = row.val;
+      let displayValue = row.ref_val || '';
+
+      // Append requisite values with " / " separator
+      for (const rq of refReqs) {
+        const reqVal = row[`a${rq.reqId}val`];
+        displayValue += reqVal ? ` / ${reqVal}` : ' / --';
+      }
+
+      result[row.id] = displayValue;
     }
+
+    logger.info('[Legacy _ref_reqs] Retrieved', { db, id, count: Object.keys(result).length, hasReqs: refReqs.length > 0 });
 
     res.json(result);
   } catch (error) {
@@ -3035,10 +3206,14 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
 /**
  * jwt - JWT authentication
  * POST /:db/jwt
+ *
+ * PHP: index.php lines 7608–7616
+ * PHP accepts POST field named 'jwt', Node.js was reading 'token' - fixed to accept both
  */
 router.post('/:db/jwt', async (req, res) => {
   const { db } = req.params;
-  const { token, refresh_token } = req.body;
+  // PHP accepts 'jwt' field, also support 'token' for backwards compatibility
+  const { jwt, token, refresh_token } = req.body;
 
   if (!isValidDbName(db)) {
     return res.status(200).json([{ error: 'Invalid database'  }]);
@@ -3046,7 +3221,8 @@ router.post('/:db/jwt', async (req, res) => {
 
   try {
     // JWT validation - verify token exists in database
-    const authToken = token || req.cookies[db] || req.headers['x-authorization'];
+    // PHP: $token = $_POST["jwt"] - accept both 'jwt' and 'token' field names
+    const authToken = jwt || token || req.cookies[db] || req.headers['x-authorization'];
 
     if (!authToken) {
       return res.status(401).json({ error: 'No token provided' });
@@ -4013,6 +4189,226 @@ router.post('/:db/check_grant', async (req, res) => {
   } catch (error) {
     logger.error('[Legacy check_grant] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
+  }
+});
+
+// ============================================================================
+// Action Aliases (PHP lines 8551–8759)
+// PHP uses case fall-through for alternative action names. These aliases
+// map to their canonical implementations.
+// ============================================================================
+
+/**
+ * PHP Action Alias Mappings
+ * Format: { alias: canonical }
+ */
+const ACTION_ALIASES = {
+  // DDL aliases
+  '_setalias': '_d_alias',
+  '_setnull': '_d_null',
+  '_setmulti': '_d_multi',
+  '_setorder': '_d_ord',
+  '_moveup': '_d_up',
+  '_deleteterm': '_d_del',
+  '_deletereq': '_d_del_req',
+  '_attributes': '_d_req',
+  '_terms': '_d_new',
+  '_references': '_d_ref',
+  '_patchterm': '_d_save',
+  '_modifiers': '_d_attrs',
+};
+
+/**
+ * Alias handler middleware - redirects aliased actions to canonical routes
+ * POST /:db/<alias>/:id?
+ */
+router.post('/:db/_setalias/:reqId', (req, res, next) => {
+  req.url = req.url.replace('/_setalias/', '/_d_alias/');
+  req.params.reqId = req.params.reqId;
+  next('route');
+});
+
+router.post('/:db/_setnull/:reqId', (req, res, next) => {
+  req.url = req.url.replace('/_setnull/', '/_d_null/');
+  req.params.reqId = req.params.reqId;
+  next('route');
+});
+
+router.post('/:db/_setmulti/:reqId', (req, res, next) => {
+  req.url = req.url.replace('/_setmulti/', '/_d_multi/');
+  req.params.reqId = req.params.reqId;
+  next('route');
+});
+
+router.post('/:db/_setorder/:reqId', (req, res, next) => {
+  req.url = req.url.replace('/_setorder/', '/_d_ord/');
+  req.params.reqId = req.params.reqId;
+  next('route');
+});
+
+router.post('/:db/_moveup/:reqId', (req, res, next) => {
+  req.url = req.url.replace('/_moveup/', '/_d_up/');
+  req.params.reqId = req.params.reqId;
+  next('route');
+});
+
+router.post('/:db/_deleteterm/:typeId', (req, res, next) => {
+  req.url = req.url.replace('/_deleteterm/', '/_d_del/');
+  req.params.typeId = req.params.typeId;
+  next('route');
+});
+
+router.post('/:db/_deletereq/:reqId', (req, res, next) => {
+  req.url = req.url.replace('/_deletereq/', '/_d_del_req/');
+  req.params.reqId = req.params.reqId;
+  next('route');
+});
+
+router.post('/:db/_attributes/:typeId', (req, res, next) => {
+  req.url = req.url.replace('/_attributes/', '/_d_req/');
+  req.params.typeId = req.params.typeId;
+  next('route');
+});
+
+router.post('/:db/_terms/:parentTypeId?', (req, res, next) => {
+  req.url = req.url.replace('/_terms', '/_d_new');
+  next('route');
+});
+
+router.post('/:db/_references/:parentTypeId', (req, res, next) => {
+  req.url = req.url.replace('/_references/', '/_d_ref/');
+  req.params.parentTypeId = req.params.parentTypeId;
+  next('route');
+});
+
+router.post('/:db/_patchterm/:typeId', (req, res, next) => {
+  req.url = req.url.replace('/_patchterm/', '/_d_save/');
+  req.params.typeId = req.params.typeId;
+  next('route');
+});
+
+router.post('/:db/_modifiers/:reqId', (req, res, next) => {
+  req.url = req.url.replace('/_modifiers/', '/_d_attrs/');
+  req.params.reqId = req.params.reqId;
+  next('route');
+});
+
+// ============================================================================
+// action=report in POST /:db (P0 Critical)
+// PHP: index.php lines 3756–3870
+// JS client sends POST /:db with body {action: "report", id: <reportId>, ...}
+// ============================================================================
+
+/**
+ * Handle action=report in the generic POST /:db handler
+ * This intercepts the request before the page-renderer handles it
+ */
+router.post('/:db', async (req, res, next) => {
+  const { db } = req.params;
+  const action = req.body.action || req.query.action;
+
+  // Only handle action=report, let other requests pass through
+  if (action !== 'report') {
+    return next();
+  }
+
+  if (!isValidDbName(db)) {
+    return res.status(200).json([{ error: 'Invalid database' }]);
+  }
+
+  const reportId = parseInt(req.body.id || req.query.id, 10);
+  if (!reportId) {
+    return res.status(200).json([{ error: 'Report ID required' }]);
+  }
+
+  try {
+    const pool = getPool();
+
+    // Compile and execute the report
+    const report = await compileReport(pool, db, reportId);
+    if (!report) {
+      return res.status(404).json({ error: 'Report not found' });
+    }
+
+    // Parse filters from request
+    const filters = {};
+    const params = { ...req.query, ...req.body };
+
+    for (const col of report.columns) {
+      const colName = col.alias;
+      const filter = {};
+
+      if (params[`FR_${colName}`]) filter.from = params[`FR_${colName}`];
+      if (params[`TO_${colName}`]) filter.to = params[`TO_${colName}`];
+      if (params[`EQ_${colName}`]) filter.eq = params[`EQ_${colName}`];
+      if (params[`LIKE_${colName}`]) filter.like = params[`LIKE_${colName}`];
+
+      if (Object.keys(filter).length > 0) {
+        filters[colName] = filter;
+      }
+    }
+
+    const limit = params.LIMIT || params.limit || 100;
+    const offset = params.F || params.offset || 0;
+
+    const results = await executeReport(pool, db, report, filters, limit, offset);
+
+    const q = req.query;
+
+    // JSON_KV format: [{col_name: val, ...}, ...]
+    if (q.JSON_KV !== undefined) {
+      const rows = results.data.map(row => {
+        const obj = {};
+        for (const col of report.columns) obj[col.name] = row[col.alias] ?? '';
+        return obj;
+      });
+      return res.json(rows);
+    }
+
+    // JSON_DATA format: {col_name: first_row_value, ...}
+    if (q.JSON_DATA !== undefined) {
+      const firstRow = results.data[0] || {};
+      const obj = {};
+      for (const col of report.columns) obj[col.name] = firstRow[col.alias] ?? '';
+      return res.json(obj);
+    }
+
+    // JSON_CR format: {columns: [{id, name, type}], rows: {...}, totalCount: N}
+    if (q.JSON_CR !== undefined) {
+      const cols = report.columns.map((col, i) => ({
+        id: col.id || i,
+        name: col.name,
+        type: col.baseType || 0
+      }));
+      const rows = {};
+      results.data.forEach((row, i) => {
+        rows[i] = {};
+        for (const col of report.columns) rows[i][col.name] = row[col.alias] ?? '';
+      });
+      return res.json({ columns: cols, rows, totalCount: results.data.length });
+    }
+
+    // Default JSON format
+    if (isApiRequest(req)) {
+      const cols = report.columns.map(col => ({
+        id: col.id,
+        name: col.name,
+        type: col.baseType || 0,
+        format: col.baseOut || 'CHARS'
+      }));
+      return res.json({ columns: cols, data: results.data, rownum: results.rownum });
+    }
+
+    // Non-API fallback
+    return res.json({
+      report: { id: report.id, name: report.header, columns: report.columns },
+      data: results.data,
+      totals: results.totals,
+      rownum: results.rownum
+    });
+  } catch (error) {
+    logger.error('[Legacy action=report] Error', { error: error.message, db, reportId });
+    return res.status(200).json([{ error: error.message }]);
   }
 });
 
