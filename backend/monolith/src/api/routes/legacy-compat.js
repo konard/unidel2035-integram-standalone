@@ -927,6 +927,57 @@ router.all('/:db/exit', (req, res) => {
 });
 
 /**
+ * POST /:db — native form submission after AJAX auth
+ *
+ * PHP behaviour: after AJAX POST /:db/auth?JSON sets the token cookie,
+ * login.html does a native form.submit() with action="/:db" (method="post").
+ * PHP handles POST /:db (action="") by checking the auth cookie and serving
+ * the main page HTML directly (no redirect). Node.js replicates this.
+ */
+router.post('/:db', async (req, res, next) => {
+  const { db } = req.params;
+  if (!isValidDbName(db)) return next();
+
+  const token = req.cookies[db];
+
+  if (!token) {
+    // Not authenticated — serve login page (same as GET /:db without token)
+    const loginPage = path.join(legacyPath, 'index.html');
+    if (fs.existsSync(loginPage)) return res.sendFile(loginPage);
+    const loginHtml = path.join(legacyPath, 'login.html');
+    if (fs.existsSync(loginHtml)) return res.sendFile(loginHtml);
+    return res.redirect(302, '/' + db);
+  }
+
+  // Token present — serve main app page directly (PHP: renders main.html)
+  try {
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT user.id FROM ${db} user JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN} WHERE token.val = ? AND user.t = ${TYPE.USER} LIMIT 1`,
+      [token]
+    );
+
+    if (rows.length === 0) {
+      res.clearCookie(db, { path: '/' });
+      const loginPage = path.join(legacyPath, 'index.html');
+      if (fs.existsSync(loginPage)) return res.sendFile(loginPage);
+      return res.redirect(302, '/' + db);
+    }
+
+    const mainPage = path.join(legacyPath, 'templates/main.html');
+    if (fs.existsSync(mainPage)) return res.sendFile(mainPage);
+    const appIndex = path.join(legacyPath, 'app/index.html');
+    if (fs.existsSync(appIndex)) return res.sendFile(appIndex);
+    return res.status(404).send('Main page not found');
+
+  } catch (error) {
+    logger.error({ error: error.message, db }, '[POST /:db] Error');
+    res.clearCookie(db, { path: '/' });
+    return res.redirect(302, '/' + db);
+  }
+});
+
+/**
  * Serve login page for database access
  * GET /:db (when no token cookie is present)
  *
