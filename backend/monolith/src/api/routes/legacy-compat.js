@@ -23,9 +23,14 @@ const legacyPath = path.resolve(__dirname, '../../../../integram-server');
 router.use(cookieParser());
 
 // Parse multipart/form-data (for legacy PHP frontend)
-// Using multer to handle form submissions with file uploads
+// Using multer to handle form submissions without files.
+// Skipped for upload routes which use their own disk-storage multer.
 const upload = multer({ storage: multer.memoryStorage() });
-router.use(upload.none()); // Handle multipart forms without files
+router.use((req, res, next) => {
+  // Skip global form parser for file-upload routes; they have their own multer
+  if (/\/upload\b/.test(req.path)) return next();
+  upload.none()(req, res, next);
+});
 
 // Database connection pool (lazy initialization)
 let pool = null;
@@ -51,16 +56,27 @@ function getPool() {
   return pool;
 }
 
+// PHP SALT constant — must match integram-server/include/connection.php define("SALT", ...)
+const PHP_SALT = process.env.INTEGRAM_PHP_SALT || 'DronedocSalt2025';
+
 /**
- * PHP-compatible password hashing (SHA1 with salt)
- * Matches: sha1(Salt($username, $password))
- * Salt function: sha1($username . "INTEGRAM_SALT" . $password)
+ * PHP Salt() function equivalent
+ * PHP: function Salt($u, $val) { global $z; $u=strtoupper($u); return SALT."$u$z$val"; }
+ * When called as Salt($token, $db) with global $z = $db:
+ *   returns SALT + TOKEN.toUpperCase() + db + db
  */
-function phpCompatibleHash(username, password) {
-  const salt = process.env.INTEGRAM_SALT || 'INTEGRAM_SALT';
-  const saltedValue = username + salt + password;
-  const innerHash = crypto.createHash('sha1').update(saltedValue).digest('hex');
-  return crypto.createHash('sha1').update(innerHash).digest('hex');
+function phpSalt(token, db) {
+  return PHP_SALT + token.toUpperCase() + db + db;
+}
+
+/**
+ * PHP-compatible password hashing (single SHA1 with Salt)
+ * PHP: $pwd = sha1(Salt($u, $p))
+ * where Salt($u, $p) = SALT + strtoupper($u) + $z(db) + $p
+ */
+function phpCompatibleHash(username, password, db) {
+  const saltedValue = PHP_SALT + username.toUpperCase() + db + password;
+  return crypto.createHash('sha1').update(saltedValue).digest('hex');
 }
 
 /**
@@ -72,10 +88,25 @@ function generateToken() {
 }
 
 /**
- * Generate XSRF token
+ * Generate XSRF token matching PHP's xsrf() function exactly:
+ * PHP: function xsrf($a, $b){ return substr(sha1(Salt($a, $b)), 0, 22); }
+ * Salt($token, $db) = SALT + TOKEN.toUpperCase() + db + db
  */
 function generateXsrf(token, db) {
-  return crypto.createHash('md5').update(token + db + 'XSRF').digest('hex');
+  return crypto.createHash('sha1').update(phpSalt(token, db)).digest('hex').substring(0, 22);
+}
+
+/**
+ * Safe path resolution — prevents directory traversal including URL-encoded variants.
+ * Resolves userInput relative to base and verifies result stays within base.
+ */
+function safePath(base, userInput) {
+  const resolvedBase = path.resolve(base);
+  const resolved = path.resolve(base, userInput);
+  if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + path.sep)) {
+    throw new Error('Invalid path');
+  }
+  return resolved;
 }
 
 // PHP Type constants (matching index.php)
@@ -549,9 +580,10 @@ async function dbExists(db) {
  * - pwd: password
  * - db: database name
  *
- * Response (JSON mode):
- * - success: { token, xsrf, message }
- * - failure: { error, message }
+ * PHP response (JSON/API mode) — bare JSON, no wrapper:
+ *   {"_xsrf":"...","token":"...","id":123,"msg":""}
+ * PHP error (API mode) — HTTP 200:
+ *   [{"error":"..."}]
  */
 router.post('/:db/auth', async (req, res) => {
   const { db } = req.params;
@@ -562,17 +594,18 @@ router.post('/:db/auth', async (req, res) => {
   // Validate DB name
   if (!isValidDbName(db)) {
     if (isJSON) {
-      return res.json({ success: false, error: 'Invalid database name' });
+      return res.status(200).json([{ error: 'Invalid database name' }]);
     }
     return res.status(400).send('Invalid database');
   }
 
-  const login = req.body.login || req.body.user || '';
+  // PHP lowercases the login: $u = strtolower($_POST["login"])
+  const login = (req.body.login || req.body.user || '').toLowerCase();
   const password = req.body.pwd || req.body.password || '';
 
   if (!login || !password) {
     if (isJSON) {
-      return res.json({ success: false, error: 'Login and password required' });
+      return res.status(200).json([{ error: 'Login and password required' }]);
     }
     return res.status(400).send('Login and password required');
   }
@@ -581,7 +614,7 @@ router.post('/:db/auth', async (req, res) => {
     // Check if database exists
     if (!await dbExists(db)) {
       if (isJSON) {
-        return res.json({ success: false, error: 'Database not found' });
+        return res.status(200).json([{ error: `${db} does not exist` }]);
       }
       return res.status(404).send(`${db} does not exist`);
     }
@@ -589,7 +622,7 @@ router.post('/:db/auth', async (req, res) => {
     const pool = getPool();
 
     // Query matching PHP's auth logic
-    // Find user by login (val field) and get their password and token
+    // Find user by login (val field) and get their password hash, token and xsrf
     const query = `
       SELECT
         user.id AS uid,
@@ -612,7 +645,8 @@ router.post('/:db/auth', async (req, res) => {
     if (rows.length === 0) {
       logger.warn('[Legacy Auth] User not found', { db, login });
       if (isJSON) {
-        return res.json({ success: false, error: 'Invalid credentials' });
+        // PHP: my_die("Wrong credentials...") → HTTP 200 [{"error":"..."}]
+        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}` }]);
       }
       return res.status(401).send('Invalid credentials');
     }
@@ -620,78 +654,78 @@ router.post('/:db/auth', async (req, res) => {
     const user = rows[0];
 
     // Verify password using PHP-compatible hashing
-    const expectedHash = phpCompatibleHash(login, password);
+    // PHP: $pwd = sha1(Salt($u, $p)) where Salt = SALT + UPPER($u) + $z(db) + $p
+    const expectedHash = phpCompatibleHash(login, password, db);
 
-    console.log('[DEBUG] Password verification:', {
+    logger.debug('[Legacy Auth] Password verification', {
       db,
       login,
-      password,
-      password_hash: user.password_hash,
-      expectedHash,
-      match: user.password_hash === expectedHash
+      match: user.password_hash === expectedHash,
     });
 
     if (user.password_hash !== expectedHash) {
-      console.log('[DEBUG] Password mismatch', { db, login });
+      logger.warn('[Legacy Auth] Password mismatch', { db, login });
       if (isJSON) {
-        return res.json({ success: false, error: 'Invalid credentials' });
+        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}` }]);
       }
       return res.status(401).send('Invalid credentials');
     }
 
-    // Generate or use existing token
+    // Generate or use existing token (PHP: md5(microtime(TRUE)))
     let token = user.token;
-    let xsrf = user.xsrf;
+    // Always recompute xsrf from current token to stay in sync
+    let xsrf = generateXsrf(token || '', db);
 
     if (!token) {
       token = generateToken();
-      // Insert new token
+      xsrf = generateXsrf(token, db);
       await pool.query(
         `INSERT INTO ${db}.${db} (up, t, val) VALUES (?, ${TYPE.TOKEN}, ?)`,
         [user.uid, token]
       );
     }
 
-    if (!xsrf) {
-      xsrf = generateXsrf(token, db);
-      // Insert new xsrf
+    if (!user.xsrf) {
       await pool.query(
         `INSERT INTO ${db}.${db} (up, t, val) VALUES (?, ${TYPE.XSRF}, ?)`,
         [user.uid, xsrf]
+      );
+    } else {
+      // Update xsrf to keep it in sync with token
+      await pool.query(
+        `UPDATE ${db}.${db} SET val = ? WHERE id = ?`,
+        [xsrf, user.xsrf_id]
       );
     }
 
     logger.info('[Legacy Auth] Success', { db, login, uid: user.uid });
 
-    // Set cookie like PHP does
+    // Set cookie exactly like PHP: setcookie($z, $token, time() + COOKIES_EXPIRE, "/")
+    // Cookie name = db name (PHP: setcookie($z, ...))
     res.cookie(db, token, {
-      maxAge: 30 * 12 * 24 * 60 * 60 * 1000, // 30*12 days
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days (COOKIES_EXPIRE)
       path: '/',
-      httpOnly: false, // PHP sets this accessible to JS
+      httpOnly: false, // PHP default — accessible to JS
     });
 
     if (isJSON) {
-      return res.json({
-        success: true,
+      // PHP response: {"_xsrf":"...","token":"...","id":123,"msg":""}
+      return res.status(200).json({
+        _xsrf: xsrf,
         token,
-        xsrf,
-        message: 'Authentication successful',
-        user: {
-          id: user.uid,
-          login: user.username,
-        },
+        id: user.uid,
+        msg: '',
       });
     }
 
-    // Non-JSON mode: redirect to database
+    // Non-JSON mode: redirect to database (PHP: header("Location: ..."))
     return res.redirect(`/${db}`);
 
   } catch (error) {
-    console.log('[DEBUG] ERROR:', error.message, error.stack);
     logger.error('[Legacy Auth] Error', { error: error.message, db, login });
 
     if (isJSON) {
-      return res.json({ success: false, error: 'Authentication failed' });
+      return res.status(200).json([{ error: 'Authentication failed' }]);
     }
     return res.status(500).send('Authentication failed');
   }
@@ -2912,40 +2946,65 @@ router.all('/my/_new_db', async (req, res) => {
 // ============================================================================
 
 /**
- * File upload endpoint
+ * File upload endpoint — saves uploaded file to download/{db}/ like PHP does.
+ * PHP: move_uploaded_file($_FILES['file']['tmp_name'], "download/$z/".$filename)
  * POST /:db/upload
  */
-router.post('/:db/upload', async (req, res) => {
+function createDiskUpload(db) {
+  const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+      const uploadDir = path.join(legacyPath, 'download', db);
+      fs.mkdirSync(uploadDir, { recursive: true });
+      cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+      // Sanitize filename: strip path separators, reject traversal attempts
+      const safeName = path.basename(file.originalname).replace(/[/\\]/g, '_');
+      cb(null, safeName);
+    },
+  });
+  return multer({
+    storage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
+    fileFilter: (req, file, cb) => {
+      // Basic MIME / extension allow-list matching PHP behaviour
+      const allowed = /\.(pdf|doc|docx|xls|xlsx|csv|txt|png|jpg|jpeg|gif|zip|rar|7z|odt|ods)$/i;
+      if (!allowed.test(file.originalname)) {
+        return cb(new Error('Wrong file extension!'));
+      }
+      cb(null, true);
+    },
+  });
+}
+
+router.post('/:db/upload', (req, res, next) => {
+  const { db } = req.params;
+  if (!isValidDbName(db)) {
+    return res.status(200).json([{ error: 'Invalid database' }]);
+  }
+  // Instantiate multer with disk storage for this specific db
+  createDiskUpload(db).single('file')(req, res, (err) => {
+    if (err) {
+      logger.error('[Legacy upload] Multer error', { error: err.message, db });
+      return res.status(200).json([{ error: err.message }]);
+    }
+    next();
+  });
+}, async (req, res) => {
   const { db } = req.params;
 
-  if (!isValidDbName(db)) {
-    return res.status(400).json({ error: 'Invalid database' });
+  if (!req.file) {
+    return res.status(200).json([{ error: 'No file uploaded' }]);
   }
 
-  // Check for multipart form data
-  if (!req.files && !req.body) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
+  logger.info('[Legacy upload] File saved', { db, filename: req.file.filename, size: req.file.size });
 
-  try {
-    // Create upload directory if it doesn't exist
-    const uploadDir = path.join(legacyPath, 'download', db);
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-
-    // Handle file upload (simplified - in production use multer middleware)
-    logger.info('[Legacy upload] File upload request', { db });
-
-    res.json({
-      success: true,
-      message: 'File uploaded successfully',
-      path: `/download/${db}/`
-    });
-  } catch (error) {
-    logger.error('[Legacy upload] Error', { error: error.message, db });
-    res.status(500).json({ error: 'Upload failed' });
-  }
+  // PHP redirects back to dir_admin after upload; API clients receive confirmation
+  res.status(200).json({
+    status: 'Ok',
+    filename: req.file.filename,
+    path: `/download/${db}/`,
+  });
 });
 
 /**
@@ -2959,22 +3018,21 @@ router.get('/:db/download/:filename', async (req, res) => {
     return res.status(400).json({ error: 'Invalid database' });
   }
 
-  // Prevent directory traversal
-  if (filename.includes('..') || filename.includes('/')) {
-    return res.status(400).json({ error: 'Invalid filename' });
-  }
-
   try {
-    const filePath = path.join(legacyPath, 'download', db, filename);
+    const baseDir = path.join(legacyPath, 'download', db);
+    const filePath = safePath(baseDir, filename);
 
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
       return res.status(404).json({ error: 'File not found' });
     }
 
     logger.info('[Legacy download] File download', { db, filename });
 
-    res.download(filePath, filename);
+    res.download(filePath, path.basename(filePath));
   } catch (error) {
+    if (error.message === 'Invalid path') {
+      return res.status(400).json({ error: 'Invalid filename' });
+    }
     logger.error('[Legacy download] Error', { error: error.message, db });
     res.status(500).json({ error: 'Download failed' });
   }
@@ -2995,26 +3053,28 @@ router.get('/:db/dir_admin', async (req, res) => {
   try {
     // Determine folder to list
     const folder = download ? 'download' : 'templates';
-    let basePath = folder === 'download'
+    const basePath = folder === 'download'
       ? path.join(legacyPath, 'download', db)
       : path.join(legacyPath, 'templates', 'custom', db);
 
-    // Prevent directory traversal
-    let addPath = add_path || '';
-    if (addPath.includes('..')) {
-      addPath = '';
+    // Resolve add_path safely — safePath prevents traversal including URL-encoded variants
+    let fullPath;
+    try {
+      fullPath = safePath(basePath, add_path || '');
+    } catch {
+      return res.status(400).json({ error: 'Invalid path' });
     }
-
-    const fullPath = path.join(basePath, addPath);
 
     // Handle file download request
     if (gf) {
-      if (gf.includes('..')) {
+      let filePath;
+      try {
+        filePath = safePath(fullPath, gf);
+      } catch {
         return res.status(400).json({ error: 'Invalid filename' });
       }
-      const filePath = path.join(fullPath, gf);
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-        return res.download(filePath, gf);
+        return res.download(filePath, path.basename(filePath));
       }
       return res.status(404).json({ error: 'File not found' });
     }
