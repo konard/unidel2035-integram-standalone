@@ -5,7 +5,8 @@
   "description": "Monolithic backend for Integram - consolidates orchestrator, YouTube analytics, MCP server, and accounting services",
   "main": "src/index-minimal.js",
   "scripts": {
-    "start": "node --max-old-space-size=2048 src/index-minimal.js",
+    "start": "node scripts/start.js",
+    "start:original": "node --max-old-space-size=2048 src/index-minimal.js",
     "start:high-mem": "node --max-old-space-size=4096 src/index-minimal.js",
     "start:full": "node --max-old-space-size=2048 src/index.js",
     "dev": "node --watch --max-old-space-size=2048 src/index-minimal.js",
