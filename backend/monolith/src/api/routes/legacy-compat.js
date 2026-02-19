@@ -17,7 +17,7 @@ const router = express.Router();
 // Get the directory path for serving static files
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const legacyPath = path.resolve(__dirname, '../../../../integram-server');
+const legacyPath = path.resolve(__dirname, '../../../../../integram-server');
 
 // Parse cookies for token handling
 router.use(cookieParser());
@@ -1161,7 +1161,7 @@ router.get('/', (req, res) => {
   if (fs.existsSync(indexPage)) return res.sendFile(indexPage);
   const loginPage = path.join(legacyPath, 'login.html');
   if (fs.existsSync(loginPage)) return res.sendFile(loginPage);
-  return res.redirect('/my');
+  return res.status(404).send('Login page not found');
 });
 
 router.get('/:db', async (req, res, next) => {
