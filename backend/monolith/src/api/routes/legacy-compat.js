@@ -649,6 +649,11 @@ async function dbExists(db) {
  * - login: username
  * - pwd: password
  * - db: database name
+ * - tzone: (optional) client timezone offset for setting timezone cookie
+ * - uri: (optional) redirect URI after successful login
+ * - change: (optional) flag to indicate password change request
+ * - npw1: (optional) new password
+ * - npw2: (optional) new password confirmation
  *
  * PHP response (JSON/API mode) — bare JSON, no wrapper:
  *   {"_xsrf":"...","token":"...","id":123,"msg":""}
@@ -659,7 +664,7 @@ router.post('/:db/auth', async (req, res) => {
   const { db } = req.params;
   const isJSON = isApiRequest(req);
 
-  logger.info('[Legacy Auth] Request', { db, isJSON, body: { ...req.body, pwd: '***' } });
+  logger.info('[Legacy Auth] Request', { db, isJSON, body: { ...req.body, pwd: '***', npw1: '***', npw2: '***' } });
 
   // Validate DB name
   if (!isValidDbName(db)) {
@@ -672,6 +677,14 @@ router.post('/:db/auth', async (req, res) => {
   // PHP lowercases the login: $u = strtolower($_POST["login"])
   const login = (req.body.login || req.body.user || '').toLowerCase();
   const password = req.body.pwd || req.body.password || '';
+
+  // Extract new parameters (P1 - Auth parameters)
+  // PHP: $_POST["uri"], $_POST["tzone"], $_POST["change"], $_POST["npw1"], $_POST["npw2"]
+  const uri = req.body.uri ? String(req.body.uri).replace(/[<>"']/g, '') : `/${db}`;
+  const tzoneParam = req.body.tzone;
+  const changePassword = req.body.change !== undefined;
+  const npw1 = req.body.npw1 || '';
+  const npw2 = req.body.npw2 || '';
 
   if (!login || !password) {
     if (isJSON) {
@@ -691,13 +704,30 @@ router.post('/:db/auth', async (req, res) => {
 
     const pool = getPool();
 
+    // Handle timezone cookie (PHP lines 7623-7627)
+    // PHP: $tzone = round(((int)$_POST["tzone"] - time() - date("Z"))/1800)*1800
+    if (tzoneParam !== undefined) {
+      const clientTime = parseInt(tzoneParam, 10);
+      const serverTime = Math.floor(Date.now() / 1000);
+      const serverOffset = new Date().getTimezoneOffset() * -60; // PHP date("Z") equivalent
+      const tzone = Math.round((clientTime - serverTime - serverOffset) / 1800) * 1800;
+
+      res.cookie('tzone', String(tzone), {
+        maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days (COOKIES_EXPIRE)
+        path: '/',
+        httpOnly: false,
+      });
+    }
+
     // Query matching PHP's auth logic
     // Find user by login (val field) and get their password hash, token and xsrf
+    // PHP also gets pwd.id for password change
     const query = `
       SELECT
         user.id AS uid,
         user.val AS username,
         pwd.val AS password_hash,
+        pwd.id AS pwd_id,
         token.val AS token,
         token.id AS token_id,
         xsrf.val AS xsrf,
@@ -739,6 +769,37 @@ router.post('/:db/auth', async (req, res) => {
         return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}` }]);
       }
       return res.status(401).send('Invalid credentials');
+    }
+
+    // Handle password change (PHP lines 7660-7676)
+    let msg = '';
+    if (changePassword) {
+      if (npw1.length < 6) {
+        msg = 'Password must be at least 6 characters long [errShort]. ';
+      } else if (npw1 === password) {
+        msg = 'The new password must differ from the old one [errOld]. ';
+      } else if (npw1 !== npw2) {
+        msg = 'Please input the same password twice [errDiffer]. ';
+      } else {
+        // Update password
+        const newPwdHash = phpCompatibleHash(login, npw1, db);
+        if (user.pwd_id) {
+          await pool.query(
+            `UPDATE ${db} SET val = ? WHERE id = ?`,
+            [newPwdHash, user.pwd_id]
+          );
+          msg = 'The password has been changed';
+          logger.info('[Legacy Auth] Password changed', { db, login });
+        }
+      }
+
+      // If there's an error message in password change mode, return it
+      if (msg && msg.includes('[err')) {
+        if (isJSON) {
+          return res.status(200).json({ _xsrf: '', token: '', id: 0, msg });
+        }
+        return res.status(200).send(msg);
+      }
     }
 
     // Generate or use existing token (PHP: md5(microtime(TRUE)))
@@ -784,12 +845,17 @@ router.post('/:db/auth', async (req, res) => {
         _xsrf: xsrf,
         token,
         id: user.uid,
-        msg: '',
+        msg,
       });
     }
 
-    // Non-JSON mode: redirect to database (PHP: header("Location: ..."))
-    return res.redirect(`/${db}`);
+    // Non-JSON mode: redirect to uri (PHP: header("Location: ".$GLOBALS["GLOBAL_VARS"]["uri"]))
+    // PHP validates that URI starts with /$db
+    let redirectUri = uri;
+    if (!redirectUri.startsWith(`/${db}`)) {
+      redirectUri = `/${db}`;
+    }
+    return res.redirect(redirectUri);
 
   } catch (error) {
     logger.error('[Legacy Auth] Error', { error: error.message, db, login });
@@ -1474,9 +1540,15 @@ router.post('/:db/_m_new/:up?', async (req, res) => {
 });
 
 /**
- * _m_save - Save/update object attributes
+ * _m_save - Save/update object attributes (with copy support)
  * POST /:db/_m_save/:id
- * Parameters: val, t{id}=value (attributes to update)
+ * Parameters:
+ *   - val: object value
+ *   - t{id}=value: attributes to update
+ *   - copybtn: (query param) if present, creates a copy of the object
+ *
+ * PHP: index.php lines 7991-8163
+ * When copybtn is set, copies the object and all its requisites.
  */
 router.post('/:db/_m_save/:id', async (req, res) => {
   const { db, id } = req.params;
@@ -1486,8 +1558,81 @@ router.post('/:db/_m_save/:id', async (req, res) => {
   }
 
   try {
-    const objectId = parseInt(id, 10);
+    const pool = getPool();
+    const originalId = parseInt(id, 10);
 
+    // Check if this is a copy operation (PHP: isset($_REQUEST["copybtn"]))
+    const isCopy = req.query.copybtn !== undefined || req.body.copybtn !== undefined;
+
+    let objectId = originalId;
+
+    if (isCopy) {
+      // PHP lines 8018-8037: Copy the object
+      logger.info('[Legacy _m_save] Copying object', { db, originalId });
+
+      // Get the original object's data
+      const [objRows] = await pool.query(`
+        SELECT a.val, a.t AS typ, a.up, a.ord, typs.t AS base_typ
+        FROM ${db} typs, ${db} a
+        WHERE typs.id = a.t AND a.id = ?
+      `, [originalId]);
+
+      if (objRows.length === 0) {
+        return res.status(200).json([{ error: 'Object not found' }]);
+      }
+
+      const original = objRows[0];
+
+      // Get value from request if provided, otherwise use original
+      const newVal = req.body[`t${original.typ}`] !== undefined
+        ? req.body[`t${original.typ}`]
+        : (req.body.val !== undefined ? req.body.val : original.val);
+
+      // Calculate order for new object
+      let newOrd = 1;
+      if (original.up > 1) {
+        const [ordRows] = await pool.query(`
+          SELECT MAX(ord) AS max_ord FROM ${db}
+          WHERE up = ? AND t = ?
+        `, [original.up, original.typ]);
+        newOrd = (ordRows[0]?.max_ord || 0) + 1;
+      }
+
+      // Create the copy
+      const [insertResult] = await pool.query(`
+        INSERT INTO ${db} (up, ord, t, val)
+        VALUES (?, ?, ?, ?)
+      `, [original.up, newOrd, original.typ, newVal]);
+
+      objectId = insertResult.insertId;
+
+      // Copy all requisites (PHP: Populate_Reqs)
+      const [reqRows] = await pool.query(`
+        SELECT t, val, ord FROM ${db}
+        WHERE up = ?
+        ORDER BY ord
+      `, [originalId]);
+
+      for (const reqRow of reqRows) {
+        await pool.query(`
+          INSERT INTO ${db} (up, ord, t, val)
+          VALUES (?, ?, ?, ?)
+        `, [objectId, reqRow.ord, reqRow.t, reqRow.val]);
+      }
+
+      logger.info('[Legacy _m_save] Object copied', { db, originalId, newId: objectId });
+
+      // Return with copied1=1 flag as PHP does
+      return res.json({
+        status: 'Ok',
+        id: objectId,
+        val: newVal,
+        copied: true,
+        copied1: 1,
+      });
+    }
+
+    // Normal save (not copy)
     // Update value if provided
     if (req.body.val !== undefined) {
       await updateRowValue(db, objectId, req.body.val);
@@ -1515,6 +1660,7 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       status: 'Ok',
       id: objectId,
       val: req.body.val,
+      saved1: 1,
     });
   } catch (error) {
     logger.error('[Legacy _m_save] Error', { error: error.message, db });
@@ -4189,6 +4335,446 @@ router.post('/:db/check_grant', async (req, res) => {
   } catch (error) {
     logger.error('[Legacy check_grant] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
+  }
+});
+
+// ============================================================================
+// csv_all - Full DB export to CSV (P0 Critical)
+// PHP: index.php lines 4087–4177
+// Exports all types and their objects with requisites to CSV format
+// ============================================================================
+
+/**
+ * csv_all - Export full database to CSV
+ * GET /:db/csv_all
+ *
+ * PHP: index.php lines 4087–4177
+ * Requires EXPORT grant on root (1) or admin user.
+ * Returns a ZIP file containing CSV with all types and data.
+ */
+router.get('/:db/csv_all', async (req, res) => {
+  const { db } = req.params;
+
+  if (!isValidDbName(db)) {
+    return res.status(200).send('Invalid database');
+  }
+
+  try {
+    const pool = getPool();
+
+    // Get token and verify grants
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let username = '';
+    let grants = {};
+
+    if (token) {
+      const [userRows] = await pool.query(`
+        SELECT u.id, u.val AS username, role_def.id AS role_id
+        FROM ${db} tok
+        JOIN ${db} u ON tok.up = u.id
+        LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+        WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+        LIMIT 1
+      `, [token]);
+
+      if (userRows.length > 0) {
+        username = userRows[0].username;
+        grants = await getGrants(pool, db, userRows[0].role_id);
+      }
+    }
+
+    // Check EXPORT grant (PHP: if(!isset($GLOBALS["GRANTS"]["EXPORT"][1]) && user != admin))
+    if (!grants.EXPORT?.[1] && username.toLowerCase() !== 'admin' && username !== db) {
+      return res.status(403).send('You do not have permission to export the database');
+    }
+
+    // Get all types (PHP query from csv_all)
+    const [typeRows] = await pool.query(`
+      SELECT a.id, a.val, IF(base.t=base.id,0,1) ref,
+             IF(base.t=base.id,defs.val,base.val) req,
+             COUNT(def_reqs.id) req_req, reqs.id req_id,
+             defs.id req_t, defs.t req_base, a.t base
+      FROM ${db} a
+      LEFT JOIN ${db} reqs ON reqs.up=a.id
+      LEFT JOIN ${db} defs ON defs.id=reqs.t
+      LEFT JOIN ${db} def_reqs ON def_reqs.up=defs.id
+      LEFT JOIN ${db} base ON base.id=defs.t
+      WHERE a.up=0 AND a.id!=a.t AND a.val!='' AND a.t!=0
+      GROUP BY reqs.id
+      ORDER BY a.id, reqs.ord
+    `);
+
+    // Build type structure (similar to PHP logic)
+    const typ = {}; // id -> name
+    const base = {}; // id -> base type
+    const reqs = {}; // id -> array of requisite IDs
+    const reqSet = new Set(); // Types used as requisites
+
+    for (const row of typeRows) {
+      const revBt = REV_BASE_TYPE[row.t] || null;
+      if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
+
+      const i = row.id;
+      base[i] = row.base;
+
+      if (!reqSet.has(i) && !typ[i]) {
+        typ[i] = maskCsvDelimiters(row.val);
+        reqs[i] = [];
+      }
+
+      if (row.req) {
+        if (!reqs[i]) reqs[i] = [];
+        reqs[i].push({
+          reqId: row.req_id,
+          reqBase: row.req_base,
+          isRef: row.ref === 1
+        });
+        delete typ[row.req];
+        reqSet.add(row.req);
+        typ[i] = (typ[i] || '') + ';' + maskCsvDelimiters(row.req);
+      }
+    }
+
+    // Build CSV content
+    let csvContent = '\ufeff'; // BOM for UTF-8
+
+    for (const typeId of Object.keys(typ)) {
+      const id = parseInt(typeId, 10);
+      csvContent += typ[typeId];
+
+      // Get objects of this type
+      const [objects] = await pool.query(`
+        SELECT id, val FROM ${db}
+        WHERE t = ? AND up != 0
+        ORDER BY id
+        LIMIT 500000
+      `, [id]);
+
+      for (const obj of objects) {
+        let line = '\n' + maskCsvDelimiters(formatValView(base[id], obj.val));
+
+        // Get requisites for each object
+        if (reqs[id] && reqs[id].length > 0) {
+          for (const rq of reqs[id]) {
+            const [reqRows] = await pool.query(`
+              SELECT val FROM ${db}
+              WHERE up = ? AND t = ?
+              LIMIT 1
+            `, [obj.id, rq.reqId]);
+
+            if (reqRows.length > 0) {
+              line += ';' + maskCsvDelimiters(formatValView(rq.reqBase, reqRows[0].val));
+            } else {
+              line += ';';
+            }
+          }
+        }
+        csvContent += line;
+      }
+
+      csvContent += '\n\n';
+    }
+
+    // Create filename
+    const timestamp = new Date().toISOString().replace(/[:-]/g, '').replace('T', '_').slice(0, 15);
+    const filename = `${db}_${timestamp}.csv`;
+
+    // Set headers for CSV download
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    logger.info('[Legacy csv_all] Export completed', { db, filename });
+
+    res.send(csvContent);
+  } catch (error) {
+    logger.error('[Legacy csv_all] Error', { error: error.message, db });
+    res.status(500).send('Export failed: ' + error.message);
+  }
+});
+
+/**
+ * Helper function to escape CSV delimiters
+ * PHP: maskCsvDelimiters function
+ */
+function maskCsvDelimiters(val) {
+  if (val === null || val === undefined) return '';
+  const str = String(val);
+  // Escape semicolons and newlines for CSV
+  return str.replace(/;/g, '\\;').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+// ============================================================================
+// backup - Binary dump export (P0 Critical)
+// PHP: index.php lines 4239–4284
+// Exports all database rows in compact binary format (.dmp)
+// ============================================================================
+
+/**
+ * backup - Export database to binary dump format
+ * GET /:db/backup
+ *
+ * PHP: index.php lines 4239–4284
+ * Requires EXPORT grant on root (1) or admin user.
+ * Returns a dump file with compact row encoding.
+ */
+router.get('/:db/backup', async (req, res) => {
+  const { db } = req.params;
+
+  if (!isValidDbName(db)) {
+    return res.status(200).send('Invalid database');
+  }
+
+  try {
+    const pool = getPool();
+
+    // Get token and verify grants
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let username = '';
+    let grants = {};
+
+    if (token) {
+      const [userRows] = await pool.query(`
+        SELECT u.id, u.val AS username, role_def.id AS role_id
+        FROM ${db} tok
+        JOIN ${db} u ON tok.up = u.id
+        LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+        WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+        LIMIT 1
+      `, [token]);
+
+      if (userRows.length > 0) {
+        username = userRows[0].username;
+        grants = await getGrants(pool, db, userRows[0].role_id);
+      }
+    }
+
+    // Check EXPORT grant
+    if (!grants.EXPORT?.[1] && username.toLowerCase() !== 'admin' && username !== db) {
+      return res.status(403).send('You do not have permission to export the database');
+    }
+
+    // Export all rows in PHP's compact format
+    // PHP format: id_delta;up;t;ord;val\n
+    let dumpContent = '\ufeff'; // BOM for UTF-8
+    let lastId = 0;
+    let lastUp = '';
+    let lastT = '';
+
+    const limit = 500000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const [rows] = await pool.query(`
+        SELECT id, up, t, ord, val
+        FROM ${db}
+        WHERE id > ?
+        ORDER BY id
+        LIMIT ?
+      `, [lastId, limit]);
+
+      if (rows.length < limit) {
+        hasMore = false;
+      }
+
+      for (const row of rows) {
+        let line = '';
+
+        // Encode ID delta (PHP: if last+1 == current, use ";", else base36(delta))
+        if (lastId + 1 === row.id) {
+          line = ';';
+        } else {
+          line = (row.id - lastId).toString(36) + ';';
+        }
+        lastId = row.id;
+
+        // Encode up (PHP: if changed, base36(up);, else empty or "/" for same)
+        if (String(lastUp) !== String(row.up)) {
+          line += parseInt(row.up).toString(36) + ';';
+          lastUp = row.up;
+        } else if (line === ';') {
+          line = '/';
+        } else {
+          line += ';';
+        }
+
+        // Encode t (PHP: if changed, base36(t);, else just ;)
+        if (String(lastT) !== String(row.t)) {
+          line += parseInt(row.t).toString(36) + ';';
+          lastT = row.t;
+        } else {
+          line += ';';
+        }
+
+        // Encode ord (PHP: if ord != 1, include it)
+        if (row.ord !== 1 && row.ord !== '1') {
+          line += row.ord;
+        }
+
+        // Encode val with newline escaping
+        const escapedVal = String(row.val || '')
+          .replace(/\r/g, '&ritrr;')
+          .replace(/\n/g, '&ritrn;');
+
+        dumpContent += line + ';' + escapedVal + '\n';
+      }
+    }
+
+    // Create filename
+    const timestamp = new Date().toISOString().replace(/[:-]/g, '').replace('T', '_').slice(0, 15);
+    const filename = `${db}_${timestamp}.dmp`;
+
+    // Set headers for download
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    logger.info('[Legacy backup] Export completed', { db, filename, rows: lastId });
+
+    res.send(dumpContent);
+  } catch (error) {
+    logger.error('[Legacy backup] Error', { error: error.message, db });
+    res.status(500).send('Backup failed: ' + error.message);
+  }
+});
+
+// ============================================================================
+// restore - Import from binary dump (P0 Critical)
+// PHP: index.php lines 4178–4238
+// Parses compact dump format and generates INSERT statements
+// ============================================================================
+
+/**
+ * restore - Restore database from binary dump
+ * POST /:db/restore
+ *
+ * PHP: index.php lines 4178–4238
+ * Requires EXPORT grant on root (1) or admin user.
+ * Expects the dump content in request body or file upload.
+ * Returns INSERT SQL statements for execution.
+ */
+router.post('/:db/restore', async (req, res) => {
+  const { db } = req.params;
+
+  if (!isValidDbName(db)) {
+    return res.status(200).send('Invalid database');
+  }
+
+  try {
+    const pool = getPool();
+
+    // Get token and verify grants
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let username = '';
+    let grants = {};
+
+    if (token) {
+      const [userRows] = await pool.query(`
+        SELECT u.id, u.val AS username, role_def.id AS role_id
+        FROM ${db} tok
+        JOIN ${db} u ON tok.up = u.id
+        LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+        WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+        LIMIT 1
+      `, [token]);
+
+      if (userRows.length > 0) {
+        username = userRows[0].username;
+        grants = await getGrants(pool, db, userRows[0].role_id);
+      }
+    }
+
+    // Check EXPORT grant (same as backup for restore)
+    if (!grants.EXPORT?.[1] && username.toLowerCase() !== 'admin' && username !== db) {
+      return res.status(403).send('You do not have permission to import to the database');
+    }
+
+    // Get dump content from body
+    let dumpContent = '';
+    if (typeof req.body === 'string') {
+      dumpContent = req.body;
+    } else if (req.body.content) {
+      dumpContent = req.body.content;
+    } else if (req.body.data) {
+      dumpContent = req.body.data;
+    }
+
+    if (!dumpContent) {
+      return res.status(400).send('No backup content provided');
+    }
+
+    // Parse the dump format (PHP lines 4196–4237)
+    const lines = dumpContent.split('\n');
+    let lastId = 0;
+    let lastUp = 0;
+    let lastT = 0;
+    const values = [];
+
+    for (let line of lines) {
+      if (line.length === 0 || line.trim().length === 0) continue;
+
+      // Remove BOM if present
+      if (line.charCodeAt(0) === 0xFEFF || line.substring(0, 3) === '\xEF\xBB\xBF') {
+        line = line.substring(line.charCodeAt(0) === 0xFEFF ? 1 : 3);
+      }
+
+      // Parse ID delta
+      if (line.startsWith('/')) {
+        lastId++;
+        line = line.substring(1);
+      } else if (line.startsWith(';')) {
+        lastId++;
+        line = line.substring(1);
+      } else {
+        const delimPos = line.indexOf(';');
+        if (delimPos > 0) {
+          const idDelta = parseInt(line.substring(0, delimPos), 36);
+          lastId += idDelta;
+        }
+        line = line.substring(delimPos + 1);
+      }
+
+      // Parse up
+      let delimPos = line.indexOf(';');
+      if (delimPos > 0) {
+        lastUp = parseInt(line.substring(0, delimPos), 36);
+      }
+      line = line.substring(delimPos + 1);
+
+      // Parse t
+      delimPos = line.indexOf(';');
+      if (delimPos > 0) {
+        lastT = parseInt(line.substring(0, delimPos), 36);
+      }
+      line = line.substring(delimPos + 1);
+
+      // Parse ord
+      delimPos = line.indexOf(';');
+      let ord = 1;
+      if (delimPos > 0) {
+        ord = line.substring(0, delimPos) || 1;
+      }
+      line = line.substring(delimPos + 1);
+
+      // Val is the rest (with newline escaping removed)
+      const val = line
+        .replace(/&ritrn;/g, '\n')
+        .replace(/&ritrr;/g, '\r');
+
+      // Escape for SQL
+      const escapedVal = val.replace(/'/g, "''");
+      values.push(`(${lastId},${lastT},${lastUp},${ord},'${escapedVal}')`);
+    }
+
+    // Return INSERT statement (PHP returns this, doesn't execute directly)
+    const insertSql = `INSERT INTO \`${db}\` (\`id\`, \`t\`, \`up\`, \`ord\`, \`val\`) VALUES ${values.join(',')};`;
+
+    logger.info('[Legacy restore] Parsed backup', { db, rowCount: values.length });
+
+    // Return the SQL statement as PHP does
+    res.setHeader('Content-Type', 'text/plain');
+    res.send(insertSql);
+  } catch (error) {
+    logger.error('[Legacy restore] Error', { error: error.message, db });
+    res.status(500).send('Restore failed: ' + error.message);
   }
 });
 
