@@ -45,6 +45,8 @@ function getPool() {
       port: parseInt(process.env.INTEGRAM_DB_PORT || process.env.MYSQL_PORT || '3306'),
       user: process.env.INTEGRAM_DB_USER || process.env.MYSQL_USER || 'root',
       password: process.env.INTEGRAM_DB_PASSWORD || process.env.MYSQL_PASSWORD || '',
+      // PHP connects to single MySQL database 'integram'; tables = integram "dbs"
+      database: process.env.INTEGRAM_DB_NAME || 'integram',
       waitForConnections: true,
       connectionLimit: 10,
       queueLimit: 0,
@@ -199,7 +201,7 @@ async function getGrants(pool, db, roleId) {
         mask.val AS mask,
         exp.val AS exp,
         del.val AS del
-      FROM ${db}.${db} gr
+      FROM ${db} gr
       LEFT JOIN (${db} lev CROSS JOIN ${db} def) ON lev.up = gr.id AND def.id = lev.t AND def.t = ${TYPE.LEVEL}
       LEFT JOIN ${db} mask ON mask.up = gr.id AND mask.t = ${TYPE.MASK}
       LEFT JOIN ${db} exp ON exp.up = gr.id AND exp.t = ${TYPE.EXPORT}
@@ -281,7 +283,7 @@ async function checkGrant(pool, db, grants, id, t = 0, grant = 'WRITE', username
           COALESCE(par.id, 1) AS par_id,
           COALESCE(arr.id, -1) AS arr,
           obj.val AS ref
-        FROM ${db}.${db} obj
+        FROM ${db} obj
         LEFT JOIN ${db} par ON obj.up > 1 AND par.id = obj.up
         LEFT JOIN ${db} arr ON arr.up = par.t AND arr.t = obj.t
         WHERE obj.id = ?
@@ -295,7 +297,7 @@ async function checkGrant(pool, db, grants, id, t = 0, grant = 'WRITE', username
           COALESCE(par.id, 1) AS par_id,
           COALESCE(arr.id, -1) AS arr,
           -1 AS ref
-        FROM ${db}.${db} obj
+        FROM ${db} obj
         JOIN ${db} par ON obj.up > 1 AND (par.t = obj.up OR par.id = obj.up)
         LEFT JOIN ${db} arr ON arr.up = par.t AND arr.t = obj.t
         WHERE par.id = ? AND (obj.t = ? OR obj.id = ?)
@@ -381,7 +383,7 @@ async function grant1Level(pool, db, grants, id, username = '') {
   try {
     const query = `
       SELECT req.up
-      FROM ${db}.${db} ref
+      FROM ${db} ref
       LEFT JOIN ${db} req ON req.t = ref.id
       WHERE ref.t = ? AND ref.up = 0
     `;
@@ -561,12 +563,22 @@ function isValidDbName(db) {
 async function dbExists(db) {
   try {
     const pool = getPool();
-    logger.info('[dbExists] Checking database', { db });
-    const [rows] = await pool.query('SHOW DATABASES LIKE ?', [db]);
-    logger.info('[dbExists] Query result', { db, count: rows.length, rows });
+    // PHP stores each "db" as a TABLE inside the single 'integram' MySQL database
+    const dbName = process.env.INTEGRAM_DB_NAME || 'integram';
+    logger.info('[dbExists] checking', {
+      db, dbName,
+      host: process.env.INTEGRAM_DB_HOST,
+      user: process.env.INTEGRAM_DB_USER,
+      database: process.env.INTEGRAM_DB_NAME,
+    });
+    const [rows] = await pool.query(
+      'SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1',
+      [dbName, db]
+    );
+    logger.info('[dbExists] result', { db, found: rows.length > 0 });
     return rows.length > 0;
   } catch (error) {
-    logger.error('[dbExists] Error', { db, error: error.message });
+    logger.error('[dbExists] FAILED', { db, error: error.message, code: error.code });
     return false;
   }
 }
@@ -632,10 +644,10 @@ router.post('/:db/auth', async (req, res) => {
         token.id AS token_id,
         xsrf.val AS xsrf,
         xsrf.id AS xsrf_id
-      FROM ${db}.${db} user
-      LEFT JOIN ${db}.${db} pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
-      LEFT JOIN ${db}.${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
-      LEFT JOIN ${db}.${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
+      FROM ${db} user
+      LEFT JOIN ${db} pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
+      LEFT JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
+      LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
       WHERE user.val = ? AND user.t = ${TYPE.USER}
       LIMIT 1
     `;
@@ -680,20 +692,20 @@ router.post('/:db/auth', async (req, res) => {
       token = generateToken();
       xsrf = generateXsrf(token, db);
       await pool.query(
-        `INSERT INTO ${db}.${db} (up, t, val) VALUES (?, ${TYPE.TOKEN}, ?)`,
+        `INSERT INTO ${db} (up, t, val) VALUES (?, ${TYPE.TOKEN}, ?)`,
         [user.uid, token]
       );
     }
 
     if (!user.xsrf) {
       await pool.query(
-        `INSERT INTO ${db}.${db} (up, t, val) VALUES (?, ${TYPE.XSRF}, ?)`,
+        `INSERT INTO ${db} (up, t, val) VALUES (?, ${TYPE.XSRF}, ?)`,
         [user.uid, xsrf]
       );
     } else {
       // Update xsrf to keep it in sync with token
       await pool.query(
-        `UPDATE ${db}.${db} SET val = ? WHERE id = ?`,
+        `UPDATE ${db} SET val = ? WHERE id = ?`,
         [xsrf, user.xsrf_id]
       );
     }
@@ -756,7 +768,7 @@ router.get('/:db/validate', async (req, res) => {
         user.id AS uid,
         user.val AS username,
         xsrf.val AS xsrf
-      FROM ${db}.${db} user
+      FROM ${db} user
       JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
       LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
       WHERE token.val = ? AND user.t = ${TYPE.USER}
@@ -965,7 +977,7 @@ router.get('/:db', async (req, res, next) => {
     // Validate token
     const query = `
       SELECT user.id AS uid
-      FROM ${db}.${db} user
+      FROM ${db} user
       JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
       WHERE token.val = ? AND user.t = ${TYPE.USER}
       LIMIT 1
@@ -1105,7 +1117,7 @@ async function getNextOrder(db, parentId, typeId = null) {
  */
 async function insertRow(db, parentId, order, typeId, value) {
   const pool = getPool();
-  const query = `INSERT INTO ${db}.${db} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
+  const query = `INSERT INTO ${db} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
   const [result] = await pool.query(query, [parentId, order, typeId, value]);
   return result.insertId;
 }
@@ -1115,7 +1127,7 @@ async function insertRow(db, parentId, order, typeId, value) {
  */
 async function updateRowValue(db, id, value) {
   const pool = getPool();
-  const query = `UPDATE ${db}.${db} SET val = ? WHERE id = ?`;
+  const query = `UPDATE ${db} SET val = ? WHERE id = ?`;
   const [result] = await pool.query(query, [value, id]);
   return result.affectedRows > 0;
 }
@@ -1125,7 +1137,7 @@ async function updateRowValue(db, id, value) {
  */
 async function deleteRow(db, id) {
   const pool = getPool();
-  const query = `DELETE FROM ${db}.${db} WHERE id = ?`;
+  const query = `DELETE FROM ${db} WHERE id = ?`;
   const [result] = await pool.query(query, [id]);
   return result.affectedRows > 0;
 }
@@ -1135,7 +1147,7 @@ async function deleteRow(db, id) {
  */
 async function deleteChildren(db, parentId) {
   const pool = getPool();
-  const query = `DELETE FROM ${db}.${db} WHERE up = ?`;
+  const query = `DELETE FROM ${db} WHERE up = ?`;
   const [result] = await pool.query(query, [parentId]);
   return result.affectedRows;
 }
@@ -1354,7 +1366,7 @@ router.post('/:db/_m_move/:id', async (req, res) => {
     const newOrder = await getNextOrder(db, newParentId);
 
     const pool = getPool();
-    await pool.query(`UPDATE ${db}.${db} SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
+    await pool.query(`UPDATE ${db} SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
 
@@ -1391,7 +1403,7 @@ router.all('/:db/_dict/:typeId?', async (req, res) => {
       query = `
         SELECT t.id, t.val AS name, t.t AS base_type, t.ord,
                r.id AS req_id, r.val AS req_name, r.t AS req_type, r.ord AS req_ord
-        FROM ${db}.${db} t
+        FROM ${db} t
         LEFT JOIN ${db} r ON r.up = t.id
         WHERE t.id = ?
         ORDER BY r.ord
@@ -1567,7 +1579,7 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
       joinParts.push(`LEFT JOIN ${db} ${alias} ON ${alias}.up = obj.id AND ${alias}.t = ${req.id}`);
     }
 
-    let query = `SELECT ${selectParts.join(', ')} FROM ${db}.${db} obj ${joinParts.join(' ')} WHERE obj.t = ?`;
+    let query = `SELECT ${selectParts.join(', ')} FROM ${db} obj ${joinParts.join(' ')} WHERE obj.t = ?`;
     let countQuery = `SELECT COUNT(*) as total FROM ${db} WHERE t = ?`;
     const params = [type];
     const countParams = [type];
@@ -1975,7 +1987,7 @@ router.post('/:db/_d_save/:typeId', async (req, res) => {
     }
 
     params.push(id);
-    await pool.query(`UPDATE ${db}.${db} SET ${updates.join(', ')} WHERE id = ?`, params);
+    await pool.query(`UPDATE ${db} SET ${updates.join(', ')} WHERE id = ?`, params);
 
     logger.info('[Legacy _d_save] Type saved', { db, id, updates: req.body });
 
@@ -2096,7 +2108,7 @@ router.post('/:db/_d_alias/:reqId', async (req, res) => {
     // Update alias and rebuild value
     const newVal = buildModifiers(modifiers.name, newAlias || null, modifiers.required, modifiers.multi);
 
-    await pool.query(`UPDATE ${db}.${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
 
     logger.info('[Legacy _d_alias] Alias set', { db, id, alias: newAlias });
 
@@ -2140,7 +2152,7 @@ router.post('/:db/_d_null/:reqId', async (req, res) => {
     // Rebuild value with updated flag
     const newVal = buildModifiers(modifiers.name, modifiers.alias, newRequired, modifiers.multi);
 
-    await pool.query(`UPDATE ${db}.${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
 
     logger.info('[Legacy _d_null] NOT NULL toggled', { db, id, required: newRequired });
 
@@ -2184,7 +2196,7 @@ router.post('/:db/_d_multi/:reqId', async (req, res) => {
     // Rebuild value with updated flag
     const newVal = buildModifiers(modifiers.name, modifiers.alias, modifiers.required, newMulti);
 
-    await pool.query(`UPDATE ${db}.${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
 
     logger.info('[Legacy _d_multi] MULTI toggled', { db, id, multi: newMulti });
 
@@ -2235,7 +2247,7 @@ router.post('/:db/_d_attrs/:reqId', async (req, res) => {
     // Rebuild value
     const newVal = buildModifiers(newName, newAlias, newRequired, newMulti);
 
-    await pool.query(`UPDATE ${db}.${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
 
     logger.info('[Legacy _d_attrs] Modifiers updated', { db, id, alias: newAlias, required: newRequired, multi: newMulti });
 
@@ -2287,8 +2299,8 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
     const prevSibling = siblings[0];
 
     // Swap orders
-    await pool.query(`UPDATE ${db}.${db} SET ord = ? WHERE id = ?`, [obj.ord, prevSibling.id]);
-    await pool.query(`UPDATE ${db}.${db} SET ord = ? WHERE id = ?`, [prevSibling.ord, id]);
+    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [obj.ord, prevSibling.id]);
+    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [prevSibling.ord, id]);
 
     logger.info('[Legacy _d_up] Requisite moved up', { db, id, newOrd: prevSibling.ord });
 
@@ -2320,7 +2332,7 @@ router.post('/:db/_d_ord/:reqId', async (req, res) => {
     }
 
     const pool = getPool();
-    await pool.query(`UPDATE ${db}.${db} SET ord = ? WHERE id = ?`, [newOrd, id]);
+    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [newOrd, id]);
 
     logger.info('[Legacy _d_ord] Order set', { db, id, ord: newOrd });
 
@@ -2445,8 +2457,8 @@ router.post('/:db/_m_up/:id', async (req, res) => {
     const prevSibling = siblings[0];
 
     // Swap orders
-    await pool.query(`UPDATE ${db}.${db} SET ord = ? WHERE id = ?`, [obj.ord, prevSibling.id]);
-    await pool.query(`UPDATE ${db}.${db} SET ord = ? WHERE id = ?`, [prevSibling.ord, objectId]);
+    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [obj.ord, prevSibling.id]);
+    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [prevSibling.ord, objectId]);
 
     logger.info('[Legacy _m_up] Object moved up', { db, id: objectId, newOrd: prevSibling.ord });
 
@@ -2478,7 +2490,7 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
     }
 
     const pool = getPool();
-    await pool.query(`UPDATE ${db}.${db} SET ord = ? WHERE id = ?`, [newOrd, objectId]);
+    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [newOrd, objectId]);
 
     logger.info('[Legacy _m_ord] Order set', { db, id: objectId, ord: newOrd });
 
@@ -2532,7 +2544,7 @@ router.all('/:db/obj_meta/:id', async (req, res) => {
         COALESCE(refs.val, typs.val) AS req_val,
         refs.id AS ref_id,
         CASE WHEN arrs.id IS NOT NULL THEN typs.id ELSE NULL END AS arr_id
-      FROM ${db}.${db} obj
+      FROM ${db} obj
       LEFT JOIN ${db} req ON req.up = ?
       LEFT JOIN ${db} typs ON typs.id = req.t
       LEFT JOIN ${db} refs ON refs.id = typs.t AND refs.t != refs.id
@@ -2620,7 +2632,7 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
           COALESCE(refs.val, typs.val) AS req_val,
           refs.id AS ref_id,
           CASE WHEN arrs.id IS NOT NULL THEN typs.id ELSE NULL END AS arr_id
-        FROM ${db}.${db} obj
+        FROM ${db} obj
         LEFT JOIN ${db} req ON req.up = ?
         LEFT JOIN ${db} typs ON typs.id = req.t
         LEFT JOIN ${db} refs ON refs.id = typs.t AND refs.t != refs.id
@@ -2638,7 +2650,7 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
           COALESCE(refs.val, typs.val) AS req_val,
           refs.id AS ref_id,
           CASE WHEN arrs.id IS NOT NULL THEN typs.id ELSE NULL END AS arr_id
-        FROM ${db}.${db} obj
+        FROM ${db} obj
         LEFT JOIN ${db} req ON req.up = obj.id
         LEFT JOIN ${db} typs ON typs.id = req.t
         LEFT JOIN ${db} refs ON refs.id = typs.t AND refs.t != refs.id
@@ -2736,7 +2748,7 @@ router.post('/:db/jwt', async (req, res) => {
         xsrf.val AS xsrf,
         role.id AS role_id,
         role.val AS role_name
-      FROM ${db}.${db} user
+      FROM ${db} user
       JOIN ${db} tkn ON tkn.up = user.id AND tkn.t = ${TYPE.TOKEN}
       LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
       LEFT JOIN ${db} role ON role.up = user.id AND role.t = ${TYPE.ROLE}
@@ -3162,7 +3174,7 @@ async function compileReport(pool, db, reportId) {
     const [colRows] = await pool.query(
       `SELECT col.id, col.val, col.t, col.ord,
               typ.val AS typeName, typ.t AS baseType
-       FROM ${db}.${db} col
+       FROM ${db} col
        LEFT JOIN ${db} typ ON typ.id = col.t
        WHERE col.up = ? AND col.t = ${TYPE.REP_COLS}
        ORDER BY col.ord`,
@@ -3556,7 +3568,7 @@ router.get('/:db/grants', async (req, res) => {
     // Validate token and get user role
     const [userRows] = await pool.query(`
       SELECT u.id, u.val AS username, role_def.id AS role_id, role_def.val AS role_name
-      FROM ${db}.${db} tok
+      FROM ${db} tok
       JOIN ${db} u ON tok.up = u.id
       LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
       WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
@@ -3619,7 +3631,7 @@ router.post('/:db/check_grant', async (req, res) => {
     // Validate token and get user
     const [userRows] = await pool.query(`
       SELECT u.id, u.val AS username, role_def.id AS role_id
-      FROM ${db}.${db} tok
+      FROM ${db} tok
       JOIN ${db} u ON tok.up = u.id
       LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
       WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
