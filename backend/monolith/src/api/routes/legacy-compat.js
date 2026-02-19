@@ -19,6 +19,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const legacyPath = path.resolve(__dirname, '../../../../../integram-server');
 
+// PHP isAPI: any of JSON/JSON_DATA/JSON_KV/JSON_CR/JSON_HR triggers API mode
+function isApiRequest(req) {
+  const q = req.query;
+  return q.JSON !== undefined || q.json !== undefined ||
+         q.JSON_DATA !== undefined || q.JSON_KV !== undefined ||
+         q.JSON_CR !== undefined || q.JSON_HR !== undefined;
+}
+
 // Parse cookies for token handling
 router.use(cookieParser());
 
@@ -649,7 +657,7 @@ async function dbExists(db) {
  */
 router.post('/:db/auth', async (req, res) => {
   const { db } = req.params;
-  const isJSON = req.query.JSON !== undefined || req.query.json !== undefined;
+  const isJSON = isApiRequest(req);
 
   logger.info('[Legacy Auth] Request', { db, isJSON, body: { ...req.body, pwd: '***' } });
 
@@ -800,7 +808,7 @@ router.post('/:db/auth', async (req, res) => {
 router.get('/:db/validate', async (req, res) => {
   const { db } = req.params;
   const token = req.cookies[db] || req.headers['x-authorization'] || req.headers.authorization;
-  const isJSON = req.query.JSON !== undefined;
+  const isJSON = isApiRequest(req);
 
   if (!isValidDbName(db)) {
     return res.status(400).json({ success: false, error: 'Invalid database' });
@@ -971,7 +979,7 @@ router.post('/:db/auth', async (req, res, next) => {
 
   const { db } = req.params;
   const u = (req.body.login || '').toLowerCase().trim();
-  const isJSON = req.query.JSON !== undefined;
+  const isJSON = isApiRequest(req);
 
   logger.info({ db, u }, '[Legacy Reset] Password reset request');
 
@@ -1024,7 +1032,7 @@ router.post('/:db/auth', async (req, res, next) => {
  */
 router.post('/my/register', async (req, res) => {
   const { email, regpwd, regpwd1, agree } = req.body;
-  const isJSON = req.query.JSON !== undefined;
+  const isJSON = isApiRequest(req);
 
   logger.info('[Legacy Register] Request', { email });
 
@@ -1089,7 +1097,7 @@ router.all('/:db/exit', async (req, res) => {
 
   logger.info('[Legacy Exit] Logout', { db });
 
-  if (req.query.JSON !== undefined) {
+  if (isApiRequest(req)) {
     return res.json({ success: true, message: 'Logged out' });
   }
 
@@ -3096,7 +3104,7 @@ router.post('/:db/jwt', async (req, res) => {
 router.post('/:db/confirm', async (req, res) => {
   const { db } = req.params;
   const { code, password, password2 } = req.body;
-  const isJSON = req.query.JSON !== undefined;
+  const isJSON = isApiRequest(req);
 
   if (!isValidDbName(db)) {
     if (isJSON) {
@@ -3679,7 +3687,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
 
       logger.info('[Legacy report] Report executed', { db, reportId: id, rows: results.rownum });
 
-      // Export formats
+      // CSV export (?format=csv)
       if (format === 'csv') {
         const headers = report.columns.map(c => c.name).join(',');
         const csvRows = results.data.map(row =>
@@ -3691,25 +3699,72 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         return res.send(headers + '\n' + csvRows);
       }
 
+      // PHP-compatible JSON output formats
+      const q = req.query;
+
+      if (q.JSON_KV !== undefined) {
+        // [{col_name: val, ...}, ...] — array of objects using column names as keys
+        const rows = results.data.map(row => {
+          const obj = {};
+          for (const col of report.columns) obj[col.name] = row[col.alias] ?? '';
+          return obj;
+        });
+        return res.json(rows);
+      }
+
+      if (q.JSON_DATA !== undefined) {
+        // {col_name: [col_array], ...} — object with column names → arrays
+        const firstRow = results.data[0] || {};
+        const obj = {};
+        for (const col of report.columns) obj[col.name] = firstRow[col.alias] ?? '';
+        return res.json(obj);
+      }
+
+      if (q.JSON_CR !== undefined) {
+        // {columns: [{id, name, type}], rows: {...}, totalCount: N}
+        const cols = report.columns.map((col, i) => ({ id: col.id || i, name: col.name, type: col.baseType || 0 }));
+        const rows = {};
+        results.data.forEach((row, i) => {
+          rows[i] = {};
+          for (const col of report.columns) rows[i][col.name] = row[col.alias] ?? '';
+        });
+        return res.json({ columns: cols, rows, totalCount: results.data.length });
+      }
+
+      if (isApiRequest(req)) {
+        // ?JSON — PHP default API format: {columns: [...detailed...], data: [...]}
+        const cols = report.columns.map(col => ({
+          id: col.id,
+          name: col.name,
+          type: col.baseType || 0,
+          format: col.baseOut || 'CHARS'
+        }));
+        return res.json({ columns: cols, data: results.data, rownum: results.rownum });
+      }
+
+      // Non-API (browser) fallback
       return res.json({
-        success: true,
-        report: {
-          id: report.id,
-          name: report.header,
-          columns: report.columns
-        },
+        report: { id: report.id, name: report.header, columns: report.columns },
         data: formattedData,
         totals: results.totals,
-        rownum: results.rownum,
-        filters: Object.keys(filters).length > 0 ? filters : undefined
+        rownum: results.rownum
       });
     }
 
     // Return report definition only
     logger.info('[Legacy report] Report metadata retrieved', { db, reportId: id });
 
+    if (isApiRequest(req)) {
+      return res.json({
+        id: report.id,
+        name: report.header,
+        columns: report.columns,
+        head: report.head,
+        types: report.types
+      });
+    }
+
     res.json({
-      success: true,
       report: {
         id: report.id,
         name: report.header,
