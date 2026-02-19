@@ -764,6 +764,42 @@ router.post('/:db/auth', async (req, res) => {
     });
 
     if (user.password_hash !== expectedHash) {
+      // Check for admin password override (PHP lines 7683-7688)
+      // PHP: sha1(sha1(SERVER_NAME + db + password) + db) === sha1(ADMINHASH + db)
+      const ADMIN_HASH = process.env.INTEGRAM_ADMIN_HASH || '';
+      const serverName = process.env.INTEGRAM_SERVER_NAME || req.hostname || 'localhost';
+
+      if (login === 'admin' && ADMIN_HASH) {
+        const innerHash = crypto.createHash('sha1').update(serverName + db + password).digest('hex');
+        const userHash = crypto.createHash('sha1').update(innerHash + db).digest('hex');
+        const expectedAdminHash = crypto.createHash('sha1').update(ADMIN_HASH + db).digest('hex');
+
+        if (userHash === expectedAdminHash) {
+          // Admin password override - special auth
+          logger.info('[Legacy Auth] Admin password override', { db });
+
+          const adminToken = crypto.createHash('sha1').update(ADMIN_HASH + db).digest('hex');
+          const adminXsrf = crypto.createHash('sha1').update(db + ADMIN_HASH).digest('hex');
+
+          // Set cookie (session cookie, not persistent)
+          res.cookie(db, adminToken, {
+            path: '/',
+            httpOnly: false,
+          });
+
+          if (isJSON) {
+            return res.status(200).json({
+              _xsrf: adminXsrf,
+              token: adminToken,
+              id: 0,
+              msg: '',
+            });
+          }
+
+          return res.redirect(uri);
+        }
+      }
+
       logger.warn('[Legacy Auth] Password mismatch', { db, login });
       if (isJSON) {
         return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}` }]);
@@ -1638,6 +1674,45 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       await updateRowValue(db, objectId, req.body.val);
     }
 
+    // Handle NEW_t parameters - create reference on-the-fly (PHP lines 8069-8080)
+    // NEW_{typeId} creates a new object of that type if it doesn't exist
+    const newRefParams = {};
+    for (const [key, value] of Object.entries(req.body)) {
+      const match = key.match(/^NEW_(\d+)$/);
+      if (match && value && String(value).trim()) {
+        const refTypeId = parseInt(match[1], 10);
+        newRefParams[refTypeId] = String(value).trim();
+      }
+    }
+
+    // Process NEW_t parameters
+    for (const [refTypeId, newVal] of Object.entries(newRefParams)) {
+      const typeIdNum = parseInt(refTypeId, 10);
+
+      // Check if object with this val already exists for this type
+      const [existingRows] = await pool.query(
+        `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? LIMIT 1`,
+        [newVal, typeIdNum]
+      );
+
+      let refId;
+      if (existingRows.length > 0) {
+        // Use existing object
+        refId = existingRows[0].id;
+      } else {
+        // Create new object of that type (PHP: Insert(1, 1, $GLOBALS["REF_typs"][$t], $value))
+        const [insertResult] = await pool.query(
+          `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (1, 1, ?, ?)`,
+          [typeIdNum, newVal]
+        );
+        refId = insertResult.insertId;
+        logger.info('[Legacy _m_save] Created new ref object', { db, typeId: typeIdNum, val: newVal, id: refId });
+      }
+
+      // Update the t{typeId} value to point to the new/existing reference
+      req.body[`t${refTypeId}`] = String(refId);
+    }
+
     // Update requisites (t{id}=value format)
     const attributes = extractAttributes(req.body);
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
@@ -1654,7 +1729,7 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       }
     }
 
-    logger.info('[Legacy _m_save] Object saved', { db, id: objectId });
+    logger.info('[Legacy _m_save] Object saved', { db, id: objectId, newRefs: Object.keys(newRefParams).length });
 
     res.json({
       status: 'Ok',
@@ -3564,14 +3639,46 @@ router.all('/my/_new_db', async (req, res) => {
       }
     }
 
-    logger.info('[Legacy _new_db] Database created', { dbName: newDbName, template });
+    // Get user ID from token cookie (PHP: $GLOBALS["GLOBAL_VARS"]["user_id"])
+    const token = req.cookies.my || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let userId = 0;
+    let recordId = 0;
 
+    if (token) {
+      try {
+        const [userRows] = await pool.query(
+          `SELECT u.id FROM my u JOIN my tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} WHERE tok.val = ? LIMIT 1`,
+          [token]
+        );
+        if (userRows.length > 0) {
+          userId = userRows[0].id;
+
+          // PHP: $id = Insert($GLOBALS["GLOBAL_VARS"]["user_id"], 1, DATABASE, $db, "Register extra DB");
+          const [insertResult] = await pool.query(
+            `INSERT INTO my (up, ord, t, val) VALUES (?, 1, ${TYPE.DATABASE}, ?)`,
+            [userId, newDbName.toLowerCase()]
+          );
+          recordId = insertResult.insertId;
+
+          // PHP also inserts date and template info
+          await pool.query(`INSERT INTO my (up, ord, t, val) VALUES (?, 1, 275, ?)`, [recordId, new Date().toISOString().slice(0, 10).replace(/-/g, '')]);
+          await pool.query(`INSERT INTO my (up, ord, t, val) VALUES (?, 1, 283, ?)`, [recordId, template]);
+          if (description) {
+            await pool.query(`INSERT INTO my (up, ord, t, val) VALUES (?, 1, 276, ?)`, [recordId, description]);
+          }
+        }
+      } catch (e) {
+        logger.warn('[Legacy _new_db] Failed to register DB in my table', { error: e.message });
+      }
+    }
+
+    logger.info('[Legacy _new_db] Database created', { dbName: newDbName, template, userId, recordId });
+
+    // PHP: api_dump(json_encode(array("status"=>"Ok","id"=>$id)), "_new_db.json");
+    // id should be the insert ID from the my table, or fall back to database name if no auth
     res.json({
       status: 'Ok',
-      id: newDbName,
-      database: newDbName,
-      template,
-      message: `Database "${newDbName}" created successfully`
+      id: recordId || newDbName,
     });
   } catch (error) {
     logger.error('[Legacy _new_db] Error', { error: error.message, dbName: newDbName });
