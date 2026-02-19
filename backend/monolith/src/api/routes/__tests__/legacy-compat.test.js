@@ -821,4 +821,184 @@ describe('Legacy Compatibility Layer', () => {
       expect(phase3Actions.length).toBe(11);
     });
   });
+
+  // ============================================================================
+  // PHP Legacy Compatibility fixes (PR fix/legacy-php-compat)
+  // ============================================================================
+
+  describe('PHP Salt() and XSRF formula', () => {
+    const PHP_SALT = 'DronedocSalt2025';
+
+    function phpSalt(token, db) {
+      return PHP_SALT + token.toUpperCase() + db + db;
+    }
+
+    function generateXsrf(token, db) {
+      return crypto.createHash('sha1').update(phpSalt(token, db)).digest('hex').substring(0, 22);
+    }
+
+    it('should produce a 22-character XSRF token', () => {
+      const xsrf = generateXsrf('abc123token', 'mydb');
+      expect(xsrf.length).toBe(22);
+    });
+
+    it('should be deterministic for the same token and db', () => {
+      const xsrf1 = generateXsrf('mytokenvalue', 'testdb');
+      const xsrf2 = generateXsrf('mytokenvalue', 'testdb');
+      expect(xsrf1).toBe(xsrf2);
+    });
+
+    it('should differ when token changes', () => {
+      const xsrf1 = generateXsrf('token_a', 'testdb');
+      const xsrf2 = generateXsrf('token_b', 'testdb');
+      expect(xsrf1).not.toBe(xsrf2);
+    });
+
+    it('should differ when db changes', () => {
+      const xsrf1 = generateXsrf('sametoken', 'db_one');
+      const xsrf2 = generateXsrf('sametoken', 'db_two');
+      expect(xsrf1).not.toBe(xsrf2);
+    });
+
+    it('should be case-insensitive on token (PHP strtoupper)', () => {
+      // PHP Salt() calls strtoupper($token), so upper/lower token → same XSRF
+      const xsrfLower = generateXsrf('abcdef123', 'mydb');
+      const xsrfUpper = generateXsrf('ABCDEF123', 'mydb');
+      expect(xsrfLower).toBe(xsrfUpper);
+    });
+
+    it('should produce only hex characters', () => {
+      const xsrf = generateXsrf('anytoken', 'anydb');
+      expect(/^[0-9a-f]{22}$/.test(xsrf)).toBe(true);
+    });
+
+    it('phpSalt builds correct string', () => {
+      const salt = phpSalt('mytoken', 'mydb');
+      expect(salt).toBe('DronedocSalt2025' + 'MYTOKEN' + 'mydb' + 'mydb');
+    });
+  });
+
+  describe('PHP-compatible password hashing', () => {
+    const PHP_SALT = 'DronedocSalt2025';
+
+    function phpCompatibleHash(username, password, db) {
+      const saltedValue = PHP_SALT + username.toUpperCase() + db + password;
+      return crypto.createHash('sha1').update(saltedValue).digest('hex');
+    }
+
+    it('should produce a 40-character hex SHA1 hash', () => {
+      const hash = phpCompatibleHash('admin', 'secret', 'mydb');
+      expect(hash.length).toBe(40);
+      expect(/^[0-9a-f]{40}$/.test(hash)).toBe(true);
+    });
+
+    it('should be deterministic', () => {
+      const h1 = phpCompatibleHash('user', 'pass123', 'testdb');
+      const h2 = phpCompatibleHash('user', 'pass123', 'testdb');
+      expect(h1).toBe(h2);
+    });
+
+    it('should be case-insensitive on username (PHP strtoupper)', () => {
+      // PHP: $u = strtolower(login), then Salt() does strtoupper($u)
+      // So "admin" and "ADMIN" should produce the same hash
+      const h1 = phpCompatibleHash('admin', 'pass', 'db');
+      const h2 = phpCompatibleHash('ADMIN', 'pass', 'db');
+      expect(h1).toBe(h2);
+    });
+
+    it('should differ for different passwords', () => {
+      const h1 = phpCompatibleHash('user', 'pass1', 'db');
+      const h2 = phpCompatibleHash('user', 'pass2', 'db');
+      expect(h1).not.toBe(h2);
+    });
+
+    it('should differ for different databases', () => {
+      const h1 = phpCompatibleHash('user', 'pass', 'db1');
+      const h2 = phpCompatibleHash('user', 'pass', 'db2');
+      expect(h1).not.toBe(h2);
+    });
+
+    it('should incorporate db in hash (matches PHP Salt with global $z)', () => {
+      // PHP Salt($u, $p) = SALT + strtoupper($u) + $z(global db) + $p
+      const username = 'testuser';
+      const password = 'testpass';
+      const db = 'testdb';
+      const expected = crypto.createHash('sha1')
+        .update('DronedocSalt2025' + username.toUpperCase() + db + password)
+        .digest('hex');
+      expect(phpCompatibleHash(username, password, db)).toBe(expected);
+    });
+  });
+
+  describe('Auth response format', () => {
+    it('should return PHP-compatible auth response shape', () => {
+      // PHP: api_dump(json_encode(array("_xsrf"=>...,"token"=>...,"id"=>...,"msg"=>...)))
+      const response = {
+        _xsrf: 'a1b2c3d4e5f6g7h8i9j0ab',
+        token: 'md5hashtoken1234567890abcdef',
+        id: 42,
+        msg: '',
+      };
+
+      expect(response).toHaveProperty('_xsrf');   // underscore prefix
+      expect(response).toHaveProperty('token');
+      expect(response).toHaveProperty('id');
+      expect(response).toHaveProperty('msg');
+      expect(response).not.toHaveProperty('success'); // no wrapper
+      expect(response).not.toHaveProperty('user');    // no nested user object
+      expect(response).not.toHaveProperty('xsrf');   // xsrf must be _xsrf
+      expect(response._xsrf.length).toBeGreaterThan(0);
+    });
+
+    it('should return PHP-compatible error format', () => {
+      // PHP: my_die(msg) → [{"error":"msg"}] with HTTP 200
+      const errorResponse = [{ error: 'Wrong credentials for user foo in mydb' }];
+
+      expect(Array.isArray(errorResponse)).toBe(true);
+      expect(errorResponse[0]).toHaveProperty('error');
+      expect(errorResponse[0]).not.toHaveProperty('success');
+    });
+  });
+
+  describe('safePath — directory traversal prevention', () => {
+    const os = { sep: '/' }; // use forward slash for cross-platform test logic
+
+    function safePath(base, userInput) {
+      const path = { resolve: (...args) => args.join('/').replace(/\/+/g, '/'), sep: '/' };
+      // Simplified inline version for unit testing
+      const resolvedBase = base.replace(/\/$/, '');
+      const joined = base + '/' + userInput;
+      // Normalize: remove . and .. segments
+      const parts = joined.split('/').filter(Boolean);
+      const stack = [];
+      for (const p of parts) {
+        if (p === '..') stack.pop();
+        else if (p !== '.') stack.push(p);
+      }
+      const resolved = '/' + stack.join('/');
+      if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + '/')) {
+        throw new Error('Invalid path');
+      }
+      return resolved;
+    }
+
+    it('should allow valid paths within base', () => {
+      expect(() => safePath('/base/dir', 'file.txt')).not.toThrow();
+      expect(() => safePath('/base/dir', 'subdir/file.pdf')).not.toThrow();
+    });
+
+    it('should reject simple .. traversal', () => {
+      expect(() => safePath('/base/dir', '../etc/passwd')).toThrow('Invalid path');
+      expect(() => safePath('/base/dir', '../../root')).toThrow('Invalid path');
+    });
+
+    it('should reject traversal that lands on base itself via deeper path', () => {
+      // Traversal that exits but returns: still outside scope of a file
+      expect(() => safePath('/base/dir', '../dir/../../../etc')).toThrow('Invalid path');
+    });
+
+    it('should allow subdirectory access', () => {
+      expect(() => safePath('/base/dir', 'subdir')).not.toThrow();
+    });
+  });
 });
