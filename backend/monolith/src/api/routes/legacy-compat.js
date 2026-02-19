@@ -3129,8 +3129,7 @@ router.all('/my/_new_db', async (req, res) => {
     const [existingTables] = await pool.query(existsQuery);
 
     if (existingTables.length > 0) {
-      return res.status(200).json([{ error: `Database "${newDbName}" already exists`
-      });
+      return res.status(200).json([{ error: `Database "${newDbName}" already exists` }]);
     }
 
     // Create new database table with standard schema
