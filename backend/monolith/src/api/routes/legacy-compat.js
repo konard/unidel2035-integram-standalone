@@ -111,6 +111,56 @@ function safePath(base, userInput) {
   return resolved;
 }
 
+/**
+ * Render main.html template with PHP-style global variables.
+ * PHP replaces {_global_.xxx} placeholders before serving the template.
+ */
+async function renderMainPage(db, token) {
+  const mainPage = path.join(legacyPath, 'templates/main.html');
+  if (!fs.existsSync(mainPage)) return null;
+
+  let html = fs.readFileSync(mainPage, 'utf8');
+
+  // Fetch user data for template variables
+  let user = '', userId = 0, xsrf = '', action = '';
+  try {
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT u.id uid, u.val uname, x.val xsrf_val
+       FROM \`${db}\` u
+       JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
+       LEFT JOIN \`${db}\` x ON x.up = u.id AND x.t = ${TYPE.XSRF}
+       WHERE u.t = ${TYPE.USER} LIMIT 1`,
+      [token]
+    );
+    if (rows.length > 0) {
+      userId = rows[0].uid;
+      user   = rows[0].uname || '';
+      xsrf   = rows[0].xsrf_val || generateXsrf(token, db);
+    }
+  } catch (e) {
+    xsrf = generateXsrf(token, db);
+  }
+
+  const version = Date.now();
+
+  // Replace {_global_.xxx} placeholders
+  html = html
+    .replace(/\{_global_\.z\}/g,       db)
+    .replace(/\{_global_\.xsrf\}/g,    xsrf)
+    .replace(/\{_global_\.token\}/g,   token)
+    .replace(/\{_global_\.user_id\}/g, String(userId))
+    .replace(/\{_global_\.user\}/g,    user)
+    .replace(/\{_global_\.id\}/g,      String(userId))
+    .replace(/\{_global_\.action\}/g,  action)
+    .replace(/\{_global_\.version\}/g, String(version));
+
+  // Remove PHP template loop blocks (leave empty arrays)
+  html = html.replace(/<!--\s*Begin:[^>]*-->[^]*?<!--\s*End:[^>]*-->/g, '');
+
+  return html;
+}
+
 // PHP Type constants (matching index.php)
 const TYPE = {
   // Base types
@@ -1085,10 +1135,10 @@ router.post('/:db', async (req, res, next) => {
       return res.redirect(302, '/' + db);
     }
 
-    const mainPage = path.join(legacyPath, 'templates/main.html');
-    if (fs.existsSync(mainPage)) return res.sendFile(mainPage);
-    const appIndex = path.join(legacyPath, 'app/index.html');
-    if (fs.existsSync(appIndex)) return res.sendFile(appIndex);
+    const rendered = await renderMainPage(db, token);
+    if (rendered) {
+      return res.type('html').send(rendered);
+    }
     return res.status(404).send('Main page not found');
 
   } catch (error) {
@@ -1104,6 +1154,16 @@ router.post('/:db', async (req, res, next) => {
  *
  * This serves the login.html or index.html page from integram-server
  */
+
+// Root path — serve login page
+router.get('/', (req, res) => {
+  const indexPage = path.join(legacyPath, 'index.html');
+  if (fs.existsSync(indexPage)) return res.sendFile(indexPage);
+  const loginPage = path.join(legacyPath, 'login.html');
+  if (fs.existsSync(loginPage)) return res.sendFile(loginPage);
+  return res.redirect('/my');
+});
+
 router.get('/:db', async (req, res, next) => {
   const { db } = req.params;
 
@@ -1163,18 +1223,11 @@ router.get('/:db', async (req, res, next) => {
       return res.redirect(`/${db}`);
     }
 
-    // Valid token - serve main app page
-    const mainPage = path.join(legacyPath, 'templates/main.html');
-    if (fs.existsSync(mainPage)) {
-      return res.sendFile(mainPage);
+    // Valid token - render main page with template variables
+    const rendered = await renderMainPage(db, token);
+    if (rendered) {
+      return res.type('html').send(rendered);
     }
-
-    // Fallback to app/index.html
-    const appIndex = path.join(legacyPath, 'app/index.html');
-    if (fs.existsSync(appIndex)) {
-      return res.sendFile(appIndex);
-    }
-
     return res.status(404).send('Main page not found');
 
   } catch (error) {
