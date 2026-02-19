@@ -565,13 +565,20 @@ async function dbExists(db) {
     const pool = getPool();
     // PHP stores each "db" as a TABLE inside the single 'integram' MySQL database
     const dbName = process.env.INTEGRAM_DB_NAME || 'integram';
+    logger.info('[dbExists] checking', {
+      db, dbName,
+      host: process.env.INTEGRAM_DB_HOST,
+      user: process.env.INTEGRAM_DB_USER,
+      database: process.env.INTEGRAM_DB_NAME,
+    });
     const [rows] = await pool.query(
       'SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1',
       [dbName, db]
     );
+    logger.info('[dbExists] result', { db, found: rows.length > 0 });
     return rows.length > 0;
   } catch (error) {
-    logger.error('[dbExists] Error', { db, error: error.message });
+    logger.error('[dbExists] FAILED', { db, error: error.message, code: error.code });
     return false;
   }
 }
