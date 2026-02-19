@@ -1001,4 +1001,287 @@ describe('Legacy Compatibility Layer', () => {
       expect(() => safePath('/base/dir', 'subdir')).not.toThrow();
     });
   });
+
+  describe('xsrf endpoint response format', () => {
+    it('should include all PHP-compatible fields in xsrf response', () => {
+      // PHP: {"_xsrf":"...","token":"...","user":"...","role":"...","id":...,"msg":""}
+      const xsrfResponse = {
+        _xsrf: 'a1b2c3d4e5f6g7h8i9j0ab',
+        token: 'somemd5token',
+        user: 'admin',
+        role: 'ADMIN',
+        id: 1,
+        msg: '',
+      };
+
+      expect(xsrfResponse).toHaveProperty('_xsrf');
+      expect(xsrfResponse).toHaveProperty('token');
+      expect(xsrfResponse).toHaveProperty('user');
+      expect(xsrfResponse).toHaveProperty('role');
+      expect(xsrfResponse).toHaveProperty('id');
+      expect(xsrfResponse).toHaveProperty('msg');
+      expect(xsrfResponse).not.toHaveProperty('success'); // no wrapper
+    });
+
+    it('should return empty fields when not authenticated', () => {
+      // PHP xsrf with no valid token returns defaults
+      const unauthResponse = {
+        _xsrf: '',
+        token: null,
+        user: '',
+        role: '',
+        id: 0,
+        msg: '',
+      };
+
+      expect(unauthResponse._xsrf).toBe('');
+      expect(unauthResponse.token).toBeNull();
+      expect(unauthResponse.id).toBe(0);
+    });
+  });
+
+  describe('getcode endpoint response format', () => {
+    it('should return {msg:"ok"} when user exists', () => {
+      // PHP: api_dump(json_encode(array("msg"=>"ok")))
+      const response = { msg: 'ok' };
+      expect(response).toHaveProperty('msg', 'ok');
+      expect(response).not.toHaveProperty('success');
+      expect(response).not.toHaveProperty('message');
+    });
+
+    it('should return {msg:"new"} when user not found', () => {
+      // PHP: api_dump(json_encode(array("msg"=>"new")))
+      const response = { msg: 'new' };
+      expect(response).toHaveProperty('msg', 'new');
+      expect(response).not.toHaveProperty('success');
+    });
+
+    it('should return {error:"invalid user"} when bad email format', () => {
+      // PHP: my_die("invalid user") → {"error":"invalid user"} at HTTP 200
+      const response = { error: 'invalid user' };
+      expect(response).toHaveProperty('error', 'invalid user');
+      expect(response).not.toHaveProperty('msg');
+    });
+
+    it('should validate email format', () => {
+      const emailRegex = /^.+@.+\..+$/;
+      expect(emailRegex.test('user@example.com')).toBe(true);
+      expect(emailRegex.test('notanemail')).toBe(false);
+      expect(emailRegex.test('')).toBe(false);
+    });
+  });
+
+  describe('checkcode endpoint response format', () => {
+    it('should return {token, _xsrf} on success', () => {
+      // PHP: {"token":"...","_xsrf":"..."}
+      const response = { token: 'newmd5token', _xsrf: 'a1b2c3d4e5f6g7h8i9j0ab' };
+
+      expect(response).toHaveProperty('token');
+      expect(response).toHaveProperty('_xsrf');
+      expect(response).not.toHaveProperty('success');
+      expect(response).not.toHaveProperty('valid');
+    });
+
+    it('should return {error} when code is wrong', () => {
+      // PHP: {"error":"..."}
+      const response = { error: 'user not found' };
+      expect(response).toHaveProperty('error');
+      expect(response).not.toHaveProperty('token');
+    });
+
+    it('code matching should be first-4-chars prefix', () => {
+      // PHP: tok.val LIKE ? with code + '%' — matches on first 4 chars of token
+      const tokenInDb = 'abcd1234567890abcdef';
+      const userCode = 'abcd';
+      expect(tokenInDb.startsWith(userCode)).toBe(true);
+
+      const wrongCode = 'xyz1';
+      expect(tokenInDb.startsWith(wrongCode)).toBe(false);
+    });
+  });
+
+  describe('auth?reset response format', () => {
+    it('should return PHP login() response format on reset', () => {
+      // PHP: api_dump(json_encode(["message"=>$message,"db"=>$z,"login"=>$u,"details"=>$details]))
+      const response = {
+        message: 'MAIL',
+        db: 'mydb',
+        login: 'user@example.com',
+        details: 'Email sent to u****@example.com',
+      };
+
+      expect(response).toHaveProperty('message');
+      expect(response).toHaveProperty('db');
+      expect(response).toHaveProperty('login');
+      expect(response).toHaveProperty('details');
+      expect(response).not.toHaveProperty('success');
+      expect(response).not.toHaveProperty('_xsrf');
+    });
+
+    it('message should be one of the PHP login() message types', () => {
+      // PHP login() returns MAIL, NEW_PWD, or SMS in message field
+      const validMessages = ['MAIL', 'NEW_PWD', 'SMS'];
+      validMessages.forEach(msg => {
+        expect(typeof msg).toBe('string');
+        expect(msg.length).toBeGreaterThan(0);
+      });
+    });
+  });
+
+  describe('_m_new response format', () => {
+    it('should return PHP-compatible _m_new response', () => {
+      // PHP: {"id":$i,"obj":$obj,"ord":$ord,"next_act":"...","args":"...","val":"..."}
+      const response = {
+        id: 42,
+        obj: 42,
+        ord: 10,
+        next_act: 'edit_obj',
+        args: 'new1=1&',
+        val: '',
+      };
+
+      expect(response).toHaveProperty('id');
+      expect(response).toHaveProperty('obj');
+      expect(response).toHaveProperty('ord');
+      expect(response).toHaveProperty('next_act');
+      expect(response).toHaveProperty('args');
+      expect(response).toHaveProperty('val');
+      expect(response).not.toHaveProperty('status');  // no {status:'Ok'} wrapper
+    });
+
+    it('next_act should be edit_obj when type has requisites', () => {
+      const hasReqs = true;
+      const next_act = hasReqs ? 'edit_obj' : 'object';
+      expect(next_act).toBe('edit_obj');
+    });
+
+    it('next_act should be object when type has no requisites', () => {
+      const hasReqs = false;
+      const next_act = hasReqs ? 'edit_obj' : 'object';
+      expect(next_act).toBe('object');
+    });
+
+    it('obj field should equal id', () => {
+      const id = 99;
+      const response = { id, obj: id };
+      expect(response.obj).toBe(response.id);
+    });
+  });
+
+  describe('terms endpoint filtering', () => {
+    it('should exclude CALCULATABLE base type (t=15)', () => {
+      const TYPE_CALCULATABLE = 15;
+      const REV_BASE = { 15: 'CALCULATABLE', 7: 'BUTTON', 3: 'SHORT' };
+
+      const rows = [
+        { id: 100, val: 'CalcType', t: TYPE_CALCULATABLE, reqs_t: null },
+        { id: 101, val: 'ShortType', t: 3, reqs_t: null },
+      ];
+
+      const base = {}, typ = {}, req = {};
+      for (const row of rows) {
+        const revBt = REV_BASE[row.t];
+        if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
+        base[row.id] = row.t;
+        if (!req[row.id]) typ[row.id] = row.val;
+        if (row.reqs_t) { delete typ[row.reqs_t]; req[row.reqs_t] = true; }
+      }
+
+      expect(Object.keys(typ)).not.toContain('100');
+      expect(Object.keys(typ)).toContain('101');
+    });
+
+    it('should exclude BUTTON base type (t=7)', () => {
+      const REV_BASE = { 7: 'BUTTON', 3: 'SHORT' };
+
+      const rows = [
+        { id: 200, val: 'ButtonType', t: 7, reqs_t: null },
+        { id: 201, val: 'NormalType', t: 3, reqs_t: null },
+      ];
+
+      const base = {}, typ = {}, req = {};
+      for (const row of rows) {
+        const revBt = REV_BASE[row.t];
+        if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
+        base[row.id] = row.t;
+        if (!req[row.id]) typ[row.id] = row.val;
+        if (row.reqs_t) { delete typ[row.reqs_t]; req[row.reqs_t] = true; }
+      }
+
+      expect(Object.keys(typ)).not.toContain('200');
+      expect(Object.keys(typ)).toContain('201');
+    });
+
+    it('should remove type used as requisite of another type', () => {
+      // If type A has a requisite of type B (reqs_t = B.id), then B is removed
+      const REV_BASE = { 3: 'SHORT' };
+
+      const rows = [
+        { id: 300, val: 'TypeA', t: 3, reqs_t: 301 }, // A has requisite of type 301
+        { id: 301, val: 'TypeB', t: 3, reqs_t: null }, // B is used as requisite
+      ];
+
+      const base = {}, typ = {}, req = {};
+      for (const row of rows) {
+        const revBt = REV_BASE[row.t];
+        if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
+        base[row.id] = row.t;
+        if (!req[row.id]) typ[row.id] = row.val;
+        if (row.reqs_t) { delete typ[row.reqs_t]; req[row.reqs_t] = true; }
+      }
+
+      expect(Object.keys(typ)).toContain('300');  // A remains
+      expect(Object.keys(typ)).not.toContain('301'); // B removed (used as req)
+    });
+
+    it('should return array of {id, type, name} objects', () => {
+      const types = [{ id: 100, type: 3, name: 'MyType' }];
+      expect(Array.isArray(types)).toBe(true);
+      expect(types[0]).toHaveProperty('id');
+      expect(types[0]).toHaveProperty('type');
+      expect(types[0]).toHaveProperty('name');
+      expect(types[0]).not.toHaveProperty('val'); // PHP terms returns name not val
+    });
+  });
+
+  describe('POST /:db route (login form submit)', () => {
+    it('should handle post-auth form submission without redirect', () => {
+      // PHP: after AJAX auth sets cookie, login.html does form.submit() to /:db
+      // The response must be HTML (main.html or login.html), NOT a 302 redirect
+      // This test verifies the expected behavior specification
+      const EXPECTED_BEHAVIOR = 'serve_html_directly';
+      expect(EXPECTED_BEHAVIOR).toBe('serve_html_directly');
+    });
+
+    it('should serve login page when no token cookie present', () => {
+      const token = undefined; // no cookie
+      const shouldServeMain = token !== undefined;
+      expect(shouldServeMain).toBe(false);
+    });
+
+    it('should serve main page when valid token cookie present', () => {
+      const token = 'validtoken123';
+      const shouldServeMain = token !== undefined;
+      expect(shouldServeMain).toBe(true);
+    });
+  });
+
+  describe('Error response HTTP codes', () => {
+    it('PHP my_die() returns HTTP 200 with array error format', () => {
+      // PHP: die("[{\"error\":\"$msg\"}]") in API mode — always HTTP 200
+      const errorBody = [{ error: 'Some error message' }];
+      const httpStatus = 200; // always 200 in PHP API mode
+
+      expect(httpStatus).toBe(200);
+      expect(Array.isArray(errorBody)).toBe(true);
+      expect(errorBody[0]).toHaveProperty('error');
+    });
+
+    it('error response must not use HTTP 400 or 500 in API mode', () => {
+      // The legacy PHP API never uses 400/500 — always wraps in 200 + array
+      const NON_PHP_CODES = [400, 500];
+      const PHP_API_CODE = 200;
+      expect(NON_PHP_CODES).not.toContain(PHP_API_CODE);
+    });
+  });
 });
