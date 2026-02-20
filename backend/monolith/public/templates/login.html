@@ -9,8 +9,8 @@
   <style>
     body { background: #f5f5f5; }
     .login-card {
-      max-width: 360px;
-      margin: 100px auto 0;
+      max-width: 380px;
+      margin: 60px auto 0;
       background: #fff;
       border: 1px solid #ddd;
       border-radius: 6px;
@@ -21,6 +21,10 @@
     .logo { text-align: center; margin-bottom: 16px; }
     .logo img { width: 48px; }
     #msg { display: none; }
+    .form-mode { display: none; }
+    .form-mode.active { display: block; }
+    .mode-links { text-align: center; margin-top: 16px; font-size: 13px; }
+    .mode-links a { cursor: pointer; color: #007bff; text-decoration: underline; margin: 0 8px; }
   </style>
 </head>
 <body>
@@ -30,33 +34,85 @@
   </div>
   <h4>Integram</h4>
   <div id="msg" class="alert"></div>
-  <div class="form-group">
-    <label for="inp-db">База данных</label>
-    <input type="text" id="inp-db" class="form-control" placeholder="mydb" autocomplete="off">
+
+  <!-- ── Login form ───────────────────────────────────────── -->
+  <div id="form-login" class="form-mode active">
+    <div class="form-group">
+      <label for="inp-db">База данных</label>
+      <input type="text" id="inp-db" class="form-control" placeholder="mydb" autocomplete="off">
+    </div>
+    <div class="form-group">
+      <label for="inp-login">Логин</label>
+      <input type="text" id="inp-login" class="form-control" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label for="inp-pwd">Пароль</label>
+      <input type="password" id="inp-pwd" class="form-control" autocomplete="current-password">
+    </div>
+    <button id="btn-login" class="btn btn-primary btn-block" onclick="doLogin()">Войти</button>
+    <div class="mode-links">
+      <a onclick="showMode('reset')">Забыли пароль?</a>
+      <a onclick="showMode('reg')">Регистрация</a>
+    </div>
   </div>
-  <div class="form-group">
-    <label for="inp-login">Логин</label>
-    <input type="text" id="inp-login" class="form-control" autocomplete="username">
+
+  <!-- ── Reset password form ──────────────────────────────── -->
+  <div id="form-reset" class="form-mode">
+    <p class="text-muted small">Введите базу данных и логин — мы пришлём новый пароль.</p>
+    <div class="form-group">
+      <label for="res-db">База данных</label>
+      <input type="text" id="res-db" class="form-control">
+    </div>
+    <div class="form-group">
+      <label for="res-login">Логин / email</label>
+      <input type="text" id="res-login" class="form-control">
+    </div>
+    <button id="btn-reset" class="btn btn-primary btn-block" onclick="doReset()">Напомнить пароль</button>
+    <div class="mode-links"><a onclick="showMode('login')">← Назад</a></div>
   </div>
-  <div class="form-group">
-    <label for="inp-pwd">Пароль</label>
-    <input type="password" id="inp-pwd" class="form-control" autocomplete="current-password">
+
+  <!-- ── Registration form ────────────────────────────────── -->
+  <div id="form-reg" class="form-mode">
+    <div class="form-group">
+      <label for="reg-email">Email</label>
+      <input type="email" id="reg-email" class="form-control" placeholder="user@example.com">
+    </div>
+    <div class="form-group">
+      <label for="reg-pwd">Пароль</label>
+      <input type="password" id="reg-pwd" class="form-control" placeholder="мин. 6 символов">
+    </div>
+    <div class="form-group">
+      <label for="reg-pwd2">Повторите пароль</label>
+      <input type="password" id="reg-pwd2" class="form-control">
+    </div>
+    <button id="btn-reg" class="btn btn-primary btn-block" onclick="doRegister()">Зарегистрироваться</button>
+    <div class="mode-links"><a onclick="showMode('login')">← Назад</a></div>
   </div>
-  <button id="btn-login" class="btn btn-primary btn-block" onclick="doLogin()">Войти</button>
 </div>
 
 <script>
 (function () {
-  // Pre-fill db from URL ?db= param
   var p = new URLSearchParams(location.search);
   var dbParam = p.get('db') || localStorage.getItem('_db') || '';
   if (dbParam) document.getElementById('inp-db').value = dbParam;
 
-  // Submit on Enter
+  // Enter key submits active form
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') doLogin();
+    if (e.key !== 'Enter') return;
+    var mode = document.querySelector('.form-mode.active');
+    if (!mode) return;
+    var id = mode.id;
+    if (id === 'form-login') doLogin();
+    else if (id === 'form-reset') doReset();
+    else if (id === 'form-reg') doRegister();
   });
 })();
+
+function showMode(mode) {
+  document.querySelectorAll('.form-mode').forEach(function(el){ el.classList.remove('active'); });
+  document.getElementById('form-' + mode).classList.add('active');
+  hideMsg();
+}
 
 function showMsg(type, text) {
   var el = document.getElementById('msg');
@@ -64,7 +120,11 @@ function showMsg(type, text) {
   el.textContent = text;
   el.style.display = 'block';
 }
+function hideMsg() {
+  document.getElementById('msg').style.display = 'none';
+}
 
+// ── Login ─────────────────────────────────────────────────
 function doLogin() {
   var db    = document.getElementById('inp-db').value.trim();
   var login = document.getElementById('inp-login').value.trim();
@@ -79,35 +139,87 @@ function doLogin() {
   btn.textContent = '…';
 
   var body = 'login=' + encodeURIComponent(login) + '&pwd=' + encodeURIComponent(pwd);
-
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', '/' + db + '/auth?JSON', true);
-  xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-  xhr.onload = function () {
+  xhr('POST', '/' + db + '/auth?JSON', body, function(json) {
     btn.disabled = false;
     btn.textContent = 'Войти';
-    var json;
-    try { json = JSON.parse(xhr.responseText); } catch (e) {
-      return showMsg('danger', 'Сервер вернул неожиданный ответ');
+    if (!json || !json.token) {
+      return showMsg('danger', (json && (json.msg || (json[0] && json[0].error))) || 'Неверный логин или пароль');
     }
-    if (xhr.status !== 200 || !json.token) {
-      return showMsg('danger', json.msg || json.error || 'Неверный логин или пароль');
-    }
-    // Persist session
     localStorage.setItem('_db', db);
     localStorage.setItem(db + '_xsrf',   json._xsrf  || '');
     localStorage.setItem(db + '_token',  json.token  || '');
     localStorage.setItem(db + '_userId', json.id     || '');
-    // Set auth cookie (same as PHP: {db}={token} path=/)
+    localStorage.setItem(db + '_user',   login);         // store username for changePwd
     document.cookie = encodeURIComponent(db) + '=' + encodeURIComponent(json.token) + '; path=/';
     location.href = '/app/templates/main.html?db=' + encodeURIComponent(db);
-  };
-  xhr.onerror = function () {
+  }, function() {
     btn.disabled = false;
     btn.textContent = 'Войти';
     showMsg('danger', 'Ошибка сети');
+  });
+}
+
+// ── Reset password ────────────────────────────────────────
+function doReset() {
+  var db    = document.getElementById('res-db').value.trim();
+  var login = document.getElementById('res-login').value.trim();
+  if (!db)    return showMsg('danger', 'Укажите базу данных');
+  if (!login) return showMsg('danger', 'Укажите логин');
+
+  var btn = document.getElementById('btn-reset');
+  btn.disabled = true;
+  var body = 'login=' + encodeURIComponent(login);
+  xhr('POST', '/' + db + '/auth?JSON&reset', body, function(json) {
+    btn.disabled = false;
+    if (json && json.message && ':NEW_PWD:MAIL:SMS:'.indexOf(json.message) !== -1) {
+      showMsg('success', json.details || 'Новый пароль отправлен');
+    } else {
+      showMsg('danger', (json && json.details) || 'Ошибка сброса пароля');
+    }
+  }, function() {
+    btn.disabled = false;
+    showMsg('danger', 'Ошибка сети');
+  });
+}
+
+// ── Registration ──────────────────────────────────────────
+function doRegister() {
+  var email  = document.getElementById('reg-email').value.trim();
+  var pwd    = document.getElementById('reg-pwd').value;
+  var pwd2   = document.getElementById('reg-pwd2').value;
+
+  if (!email) return showMsg('danger', 'Укажите email');
+  if (pwd.length < 6) return showMsg('danger', 'Пароль не менее 6 символов');
+  if (pwd !== pwd2)   return showMsg('danger', 'Пароли не совпадают');
+
+  var btn = document.getElementById('btn-reg');
+  btn.disabled = true;
+  var body = 'email=' + encodeURIComponent(email) + '&regpwd=' + encodeURIComponent(pwd) + '&regpwd1=' + encodeURIComponent(pwd2);
+  xhr('POST', '/my/register?JSON', body, function(json) {
+    btn.disabled = false;
+    if (json && json.message === 'toConfirm') {
+      showMsg('success', 'Регистрация успешна! Подтвердите email.');
+    } else {
+      showMsg('danger', (json && (json.error || (json[0] && json[0].error))) || 'Ошибка регистрации');
+    }
+  }, function() {
+    btn.disabled = false;
+    showMsg('danger', 'Ошибка сети');
+  });
+}
+
+// ── XHR helper ────────────────────────────────────────────
+function xhr(method, url, body, onok, onerr) {
+  var req = new XMLHttpRequest();
+  req.open(method, url, true);
+  req.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+  req.onload = function() {
+    var json;
+    try { json = JSON.parse(req.responseText); } catch(e) {}
+    onok(json);
   };
-  xhr.send(body);
+  req.onerror = onerr;
+  req.send(body);
 }
 </script>
 </body>

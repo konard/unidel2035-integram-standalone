@@ -67,6 +67,7 @@
       </a>
       <div class="dropdown-menu dropdown-menu-right shadow" aria-labelledby="navbarDropdown2">
         <a class="dropdown-item" target="_blank" href="https://help.ideav.online/"><t9n>[RU]Помощь[EN]Help</t9n></a>
+        <a class="dropdown-item" id="lk-link" target="_blank" href="/my"><t9n>[RU]ЛК / Счет[EN]My account</t9n></a>
         <a class="dropdown-item" onclick="toggleLocale()">EN/RU</a>
         <a class="dropdown-item" onclick="$('.cp-form').css('display','table');$('.ch-toggle').show();$('.wait-toggle').hide();"><t9n>[RU]Сменить пароль[EN]Change password</t9n></a>
         <a class="dropdown-item" onclick="doExit()"><t9n>[RU]Выход[EN]Exit</t9n></a>
@@ -163,7 +164,8 @@ function changePwd() {
       changeMsg('alert-danger', t9n('[RU]Неверный пароль[EN]Wrong password'));
     }
   };
-  obj.send('change=1&login=' + encodeURIComponent(uid) +
+  var username = localStorage.getItem(db + '_user') || uid;
+  obj.send('change=1&login=' + encodeURIComponent(username) +
            '&pwd=' + encodeURIComponent($('#old-pwd').val()) +
            '&npw1=' + encodeURIComponent($('#new-pwd').val()) +
            '&npw2=' + encodeURIComponent($('#new-again').val()));
