@@ -21,11 +21,38 @@ const __dirname = path.dirname(__filename);
 const legacyPath = path.resolve(__dirname, '../../../../../integram-server');
 
 // PHP isAPI: any of JSON/JSON_DATA/JSON_KV/JSON_CR/JSON_HR triggers API mode
+// Step 4 enhancement: Also detect JSON from headers (Accept, Content-Type, X-Requested-With)
 function isApiRequest(req) {
   const q = req.query;
-  return q.JSON !== undefined || q.json !== undefined ||
-         q.JSON_DATA !== undefined || q.JSON_KV !== undefined ||
-         q.JSON_CR !== undefined || q.JSON_HR !== undefined;
+
+  // Check query params (original PHP behavior)
+  if (q.JSON !== undefined || q.json !== undefined ||
+      q.JSON_DATA !== undefined || q.JSON_KV !== undefined ||
+      q.JSON_CR !== undefined || q.JSON_HR !== undefined) {
+    return true;
+  }
+
+  // Step 4: Also detect JSON requests from headers
+  const acceptHeader = req.headers['accept'] || '';
+  const contentType = req.headers['content-type'] || '';
+  const xRequestedWith = req.headers['x-requested-with'] || '';
+
+  // Accept: application/json
+  if (acceptHeader.includes('application/json')) {
+    return true;
+  }
+
+  // Content-Type: application/json (for POST requests)
+  if (contentType.includes('application/json')) {
+    return true;
+  }
+
+  // X-Requested-With: XMLHttpRequest (AJAX requests)
+  if (xRequestedWith.toLowerCase() === 'xmlhttprequest') {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1357,7 +1384,13 @@ router.all('/:db/exit', async (req, res) => {
   const { db } = req.params;
 
   // Delete token from DB (PHP: DELETE FROM $z WHERE up=user_id AND t=TOKEN)
-  const token = req.cookies[db];
+  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
+  const authHeader = req.headers.authorization || '';
+  const xAuthHeader = req.headers['x-authorization'] || '';
+  const token = req.cookies[db] ||
+    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
+    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
+    '';
   if (token && isValidDbName(db)) {
     try {
       const pool = getPool();
@@ -1434,7 +1467,13 @@ router.post('/:db', async (req, res, next) => {
   const { db } = req.params;
   if (!isValidDbName(db)) return next();
 
-  const token = req.cookies[db];
+  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
+  const authHeader = req.headers.authorization || '';
+  const xAuthHeader = req.headers['x-authorization'] || '';
+  const token = req.cookies[db] ||
+    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
+    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
+    '';
 
   if (!token) {
     // Not authenticated — serve login page (same as GET /:db without token)
@@ -1502,12 +1541,21 @@ router.get('/:db', async (req, res, next) => {
     return next();
   }
 
-  // Check if user has a valid token cookie
-  const token = req.cookies[db];
+  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
+  const authHeader = req.headers.authorization || '';
+  const xAuthHeader = req.headers['x-authorization'] || '';
+  const token = req.cookies[db] ||
+    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
+    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
+    '';
 
   logger.info('[Legacy Page] Request', { db, hasToken: !!token });
 
   if (!token) {
+    // JSON API request without token gets 401
+    if (isApiRequest(req)) {
+      return res.status(401).json({ error: 'Unauthorized', hint: `POST /${db}/auth?JSON with login+pwd to get token` });
+    }
     // Serve login page
     const loginPage = path.join(legacyPath, 'index.html');
     if (fs.existsSync(loginPage)) {
@@ -1526,16 +1574,22 @@ router.get('/:db', async (req, res, next) => {
     // Check if database exists
     if (!await dbExists(db)) {
       res.clearCookie(db, { path: '/' });
+      if (isApiRequest(req)) {
+        return res.status(404).json({ error: 'Database not found' });
+      }
       return res.redirect(`/${db}`);
     }
 
     const pool = getPool();
 
-    // Validate token
+    // Validate token and get user info
     const query = `
-      SELECT user.id AS uid
+      SELECT user.id AS uid, user.val AS username,
+             xsrf.val AS xsrf_val, role.val AS role_val
       FROM ${db} user
       JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
+      LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
+      LEFT JOIN ${db} role ON role.up = user.id AND role.t = ${TYPE.ROLE}
       WHERE token.val = ? AND user.t = ${TYPE.USER}
       LIMIT 1
     `;
@@ -1545,7 +1599,58 @@ router.get('/:db', async (req, res, next) => {
     if (rows.length === 0) {
       // Invalid token - clear cookie and redirect to login
       res.clearCookie(db, { path: '/' });
+      if (isApiRequest(req)) {
+        return res.status(401).json({ error: 'Invalid token' });
+      }
       return res.redirect(`/${db}`);
+    }
+
+    const user = rows[0];
+
+    // ── GET /:db/?JSON → Main page API response
+    // PHP returns: {user, role, _xsrf, &main.myrolemenu, etc.}
+    if (isApiRequest(req)) {
+      // Get role menu items if user has a role
+      const menuItems = [];
+      if (user.role_val) {
+        // Get menu items for user's role (role menu is stored as children of role type)
+        const [menuRows] = await pool.query(
+          `SELECT m.id, m.val AS name, m.ord
+           FROM ${db} m
+           WHERE m.up = ? AND m.t != m.id
+           ORDER BY m.ord`,
+          [user.role_val]
+        );
+        for (const m of menuRows) {
+          menuItems.push({ id: m.id, name: m.name, ord: m.ord });
+        }
+      }
+
+      // Get available terms/types for the user
+      const [termsRows] = await pool.query(
+        `SELECT a.id, a.val AS name, a.t AS type, a.ord
+         FROM ${db} a
+         WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
+         ORDER BY a.val`
+      );
+      // Filter out CALCULATABLE and BUTTON types
+      const terms = termsRows.filter(t => {
+        const bt = REV_BASE_TYPE[t.type];
+        return bt !== 'CALCULATABLE' && bt !== 'BUTTON';
+      });
+
+      return res.json({
+        user: user.username,
+        user_id: user.uid,
+        role: user.role_val || '',
+        _xsrf: user.xsrf_val || '',
+        token: token,
+        '&main.myrolemenu': {
+          href: menuItems.map(m => String(m.id)),
+          name: menuItems.map(m => m.name),
+        },
+        terms: terms.map(t => ({ id: t.id, name: t.name, type: t.type })),
+      });
     }
 
     // Valid token - render main page with template variables
@@ -1581,7 +1686,13 @@ router.get('/:db/:page*', async (req, res, next) => {
     return next();
   }
 
-  const token = req.cookies[db];
+  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
+  const authHeader = req.headers.authorization || '';
+  const xAuthHeader = req.headers['x-authorization'] || '';
+  const token = req.cookies[db] ||
+    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
+    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
+    '';
 
   // If no token and not auth-related, redirect to login
   // JSON API requests get a 401 instead of a redirect
@@ -1696,14 +1807,41 @@ router.get('/:db/:page*', async (req, res, next) => {
           })));
         }
 
-        // Standard JSON: {"object":[...], "type":{val}, "req_type":[names], "reqs":{objId:[vals]}}
+        // Standard JSON: PHP-compatible full format
+        // Includes: object, type, base, req_base, req_base_id, req_type, reqs
         // Needed by gjsParseObject in main.js for template variable substitution
+
+        // Get type metadata with its base type
         const [[typeRow] = []] = await pool.query(
-          `SELECT id, val FROM \`${db}\` WHERE id = ?`, [subId]
+          `SELECT t.id, t.val, t.t AS base_type_id, t.up, COALESCE(bt.val, '') AS base_val
+           FROM \`${db}\` t
+           LEFT JOIN \`${db}\` bt ON bt.id = t.t
+           WHERE t.id = ?`,
+          [subId]
         );
+
+        // Get requisite definitions with base type info (PHP lines 5800-5810)
         const [reqDefStd] = await pool.query(
-          `SELECT id, val FROM \`${db}\` WHERE up = ? ORDER BY ord`, [subId]
+          `SELECT req.id, req.val, req.t AS base_typ, req.ord,
+                  COALESCE(base.t, req.t) AS resolved_base
+           FROM \`${db}\` req
+           LEFT JOIN \`${db}\` base ON base.id = req.t
+           WHERE req.up = ?
+           ORDER BY req.ord`,
+          [subId]
         );
+
+        // Build req_base and req_base_id maps (PHP GLOBAL_VARS["api"]["req_base"])
+        const req_base = {};
+        const req_base_id = {};
+        for (const rd of reqDefStd) {
+          const baseTypId = rd.resolved_base || rd.base_typ;
+          // Map base type ID to name using REV_BASE_TYPE
+          req_base[rd.id] = REV_BASE_TYPE[baseTypId] || 'SHORT';
+          req_base_id[rd.id] = String(baseTypId);
+        }
+
+        // Fetch requisite values for all objects
         const reqMapStd = {};
         if (objRows.length > 0 && reqDefStd.length > 0) {
           const objIdsStd = objRows.map(r => r.id);
@@ -1723,12 +1861,76 @@ router.get('/:db/:page*', async (req, res, next) => {
             (reqMapStd[o.id] && reqMapStd[o.id][rd.id] !== undefined) ? reqMapStd[o.id][rd.id] : ''
           );
         }
+
+        // Build PHP-compatible type object with base type name
+        const typeBaseTypeName = typeRow ? (REV_BASE_TYPE[typeRow.base_type_id] || 'SHORT') : 'SHORT';
+
         return res.json({
           object: objRows.map(r => ({ id: r.id, val: r.val, up: r.up, base: r.base, ord: r.ord })),
-          type: { id: typeRow ? typeRow.id : subId, val: typeRow ? typeRow.val : '' },
+          type: {
+            id: typeRow ? typeRow.id : subId,
+            val: typeRow ? typeRow.val : '',
+            up: typeRow ? typeRow.up : 0,
+            base: typeBaseTypeName,
+          },
+          base: {
+            id: String(typeRow ? typeRow.base_type_id : 3),
+            unique: 'unique',
+          },
           req_type: reqDefStd.map(r => r.val),
+          req_base,
+          req_base_id,
           reqs: reqsStd,
         });
+      }
+
+      // ── GET /:db/types?JSON (edit_types endpoint)
+      // PHP: index.php &edit_typs case (lines 4293-4318)
+      // Returns: {edit_types: {...}, types: {...basic_types...}, editable: 1}
+      if (page === 'types' || page === 'edit_types') {
+        // Get all types with their requisites (PHP query at line 4295-4304)
+        const [typeRows] = await pool.query(
+          `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
+                  CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END AS val,
+                  reqs.id AS req_id, reqs.t AS req_t, reqs.ord, reqs.val AS attrs, ref_typs.t AS reft
+           FROM \`${db}\` typs
+           LEFT JOIN \`${db}\` refs ON refs.id = typs.t AND refs.id != refs.t
+           LEFT JOIN \`${db}\` reqs ON reqs.up = typs.id
+           LEFT JOIN \`${db}\` req_typs ON req_typs.id = reqs.t AND req_typs.id != req_typs.t
+           LEFT JOIN \`${db}\` ref_typs ON ref_typs.id = req_typs.t AND ref_typs.id != ref_typs.t
+           WHERE typs.up = 0 AND typs.id != typs.t
+           ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`
+        );
+
+        // Build edit_types object matching PHP $blocks[$block] structure
+        const editTypes = {
+          id: [], t: [], ref_val: [], uniq: [], val: [],
+          req_id: [], req_t: [], ord: [], attrs: [], reft: []
+        };
+        for (const row of typeRows) {
+          editTypes.id.push(row.id ?? '');
+          editTypes.t.push(row.t ?? '');
+          editTypes.ref_val.push(row.ref_val ?? '');
+          editTypes.uniq.push(row.uniq ?? '');
+          editTypes.val.push((row.val ?? '').replace(/\\/g, '\\\\'));
+          editTypes.req_id.push(row.req_id ?? '');
+          editTypes.req_t.push(row.req_t ?? '');
+          editTypes.ord.push(row.ord ?? '');
+          editTypes.attrs.push((row.attrs ?? '').replace(/\\/g, '\\\\'));
+          editTypes.reft.push(row.reft ?? '');
+        }
+
+        // Build response matching PHP (line 4312-4316)
+        const response = {
+          edit_types: editTypes,
+          types: REV_BASE_TYPE, // PHP: $GLOBALS["basics"]
+        };
+
+        // TODO: Check_Types_Grant() == "WRITE" → add editable: 1
+        // For now, assume editable since user is authenticated
+        response.editable = 1;
+
+        return res.json(response);
       }
 
       // ── GET /:db/edit_obj/:id?JSON → {obj:{id,val,up,base}, req:[{id,val,ord,value}]}
@@ -3029,7 +3231,13 @@ router.get('/:db/terms', async (req, res) => {
  */
 router.get('/:db/xsrf', async (req, res) => {
   const { db } = req.params;
-  const token = req.cookies[db];
+  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
+  const authHeader = req.headers.authorization || '';
+  const xAuthHeader = req.headers['x-authorization'] || '';
+  const token = req.cookies[db] ||
+    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
+    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
+    '';
 
   if (!token || !isValidDbName(db)) {
     // No token — return minimal info (client will redirect to login)
