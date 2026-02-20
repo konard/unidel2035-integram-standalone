@@ -1966,9 +1966,11 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       const original = objRows[0];
 
       // Get value from request if provided, otherwise use original
-      const newVal = req.body[`t${original.typ}`] !== undefined
-        ? req.body[`t${original.typ}`]
-        : (req.body.val !== undefined ? req.body.val : original.val);
+      // Also check req.query: dubRecUniqNum sends &t{tid}=newValue in URL query string
+      const allSaveParams = { ...req.query, ...req.body };
+      const newVal = allSaveParams[`t${original.typ}`] !== undefined
+        ? allSaveParams[`t${original.typ}`]
+        : (allSaveParams.val !== undefined ? allSaveParams.val : original.val);
 
       // Calculate order for new object
       let newOrd = 1;
@@ -2060,8 +2062,9 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       req.body[`t${refTypeId}`] = String(refId);
     }
 
-    // Update requisites (t{id}=value format)
-    const attributes = extractAttributes(req.body);
+    // Update requisites (t{id}=value format); merge query+body so t{id}=val works in URL too
+    // (smartq.js sends &t{tid}=(timestamp) in URL query for DATETIME unique value on copy)
+    const attributes = extractAttributes({ ...req.query, ...req.body });
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
       const typeIdNum = parseInt(attrTypeId, 10);
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
@@ -2200,7 +2203,8 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
   try {
     const pool = getPool();
     const objectId = parseInt(id, 10);
-    const attributes = extractAttributes(req.body);
+    // Merge query+body: smartq.js line 959 sends &t{ref}=value in URL query string for select2 inline edit
+    const attributes = extractAttributes({ ...req.query, ...req.body });
 
     // Build file map from uploaded files (field name = t{typeId})
     const fileByField = {};
