@@ -3622,14 +3622,17 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
         // type = base type (COALESCE(refs.t, typs.t))
         // ref  = ref type ID (when typs.t points to another type)
         // ref_id = req.t (the column ID in the types table when referencing)
+        // PHP: orig = refs.id if present else req.t  (Node aliases: refs.id→ref_id, req.t→req_type)
         const reqData = {
           num: row.req_ord,
           id: row.req_id.toString(),
           val: row.req_val || '',
-          orig: row.req_type ? row.req_type.toString() : '',
+          orig: (row.ref_id || row.req_type || '').toString(),
           type: row.base_typ ? row.base_typ.toString() : '',
-          attrs: row.req_attrs || '',
         };
+        if (row.req_attrs) {
+          reqData.attrs = row.req_attrs;
+        }
 
         if (row.arr_id) {
           reqData.arr_id = row.arr_id.toString();
@@ -4385,25 +4388,27 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (q.JSON_CR !== undefined) {
-        // {columns: [{id, name, type}], rows: {...}, totalCount: N}
+        // PHP JSON_CR: columns[i].id = column DB id; rows[row_idx][col_id] = value
         const cols = report.columns.map((col, i) => ({ id: col.id || i, name: col.name, type: col.baseType || 0 }));
         const rows = {};
         results.data.forEach((row, i) => {
           rows[i] = {};
-          for (const col of report.columns) rows[i][col.name] = row[col.alias] ?? '';
+          for (const col of report.columns) rows[i][col.id] = row[col.alias] ?? '';
         });
         return res.json({ columns: cols, rows, totalCount: results.data.length });
       }
 
       if (isApiRequest(req)) {
-        // ?JSON — PHP default API format: {columns: [...detailed...], data: [...]}
+        // PHP default JSON: columns array + data as column-major array of arrays
+        // data[col_index] = [row0_val, row1_val, ...]
         const cols = report.columns.map(col => ({
           id: col.id,
           name: col.name,
           type: col.baseType || 0,
           format: col.baseOut || 'CHARS'
         }));
-        return res.json({ columns: cols, data: results.data, rownum: results.rownum });
+        const data = report.columns.map(col => results.data.map(row => row[col.alias] ?? ''));
+        return res.json({ columns: cols, data, rownum: results.rownum });
       }
 
       // Non-API (browser) fallback
@@ -5301,7 +5306,7 @@ router.post('/:db', async (req, res, next) => {
       return res.json(obj);
     }
 
-    // JSON_CR format: {columns: [{id, name, type}], rows: {...}, totalCount: N}
+    // PHP JSON_CR: rows[row_idx][col_id] = value (keyed by column DB id)
     if (q.JSON_CR !== undefined) {
       const cols = report.columns.map((col, i) => ({
         id: col.id || i,
@@ -5311,12 +5316,13 @@ router.post('/:db', async (req, res, next) => {
       const rows = {};
       results.data.forEach((row, i) => {
         rows[i] = {};
-        for (const col of report.columns) rows[i][col.name] = row[col.alias] ?? '';
+        for (const col of report.columns) rows[i][col.id] = row[col.alias] ?? '';
       });
       return res.json({ columns: cols, rows, totalCount: results.data.length });
     }
 
-    // Default JSON format
+    // PHP default JSON: data is column-major array of arrays
+    // data[col_index] = [row0_val, row1_val, ...]
     if (isApiRequest(req)) {
       const cols = report.columns.map(col => ({
         id: col.id,
@@ -5324,7 +5330,8 @@ router.post('/:db', async (req, res, next) => {
         type: col.baseType || 0,
         format: col.baseOut || 'CHARS'
       }));
-      return res.json({ columns: cols, data: results.data, rownum: results.rownum });
+      const data = report.columns.map(col => results.data.map(row => row[col.alias] ?? ''));
+      return res.json({ columns: cols, data, rownum: results.rownum });
     }
 
     // Non-API fallback
