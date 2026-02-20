@@ -39,6 +39,7 @@ router.use((req, res, next) => {
   // Skip global form parser for file-upload routes; they have their own multer
   if (/\/upload\b/.test(req.path)) return next();
   if (/\/_m_new(\/|$)/.test(req.path)) return next();
+  if (/\/_m_set(\/|$)/.test(req.path)) return next();
   upload.none()(req, res, next);
 });
 
@@ -1523,12 +1524,50 @@ router.get('/:db/:page*', async (req, res, next) => {
     try {
       const pool = getPool();
 
-      // ── GET /:db/object/:typeId?JSON → {"object":[{id,val,up,base,ord}]}
-      // ── GET /:db/object/:typeId?JSON_DATA → [{i,u,o,r:[vals]}] compact
+      // ── GET/POST /:db/object/:typeId?JSON → {"object":[{id,val,up,base,ord}]}
+      // ── GET     /:db/object/:typeId?JSON_DATA → [{i,u,o,r:[vals]}] compact
+      // Supports: LIMIT=N or LIMIT=offset,N, order_val=val, desc=1,
+      //           F_{typeId}=value (filter main val, used by dubRecUniqText)
       if (page === 'object' && subId) {
+        const allObjParams = { ...req.query, ...req.body };
+
+        // Filter by main val exact match (dubRecUniqText sends F_{tid}=value)
+        const filterVal = allObjParams[`F_${subId}`] !== undefined
+          ? String(allObjParams[`F_${subId}`]) : null;
+
+        // Order (dubRecUniqNum sends order_val=val&desc=1 to get max value)
+        const orderByVal = allObjParams.order_val === 'val';
+        const descOrder  = String(allObjParams.desc) === '1';
+
+        // LIMIT (format: "N" or "offset,N")
+        let objLimit = null, objOffset = 0;
+        const rawObjLimit = allObjParams.LIMIT || allObjParams.limit;
+        if (rawObjLimit !== undefined) {
+          const parts = String(rawObjLimit).split(',');
+          if (parts.length === 2) {
+            objOffset = parseInt(parts[0], 10) || 0;
+            objLimit  = parseInt(parts[1], 10) || 100;
+          } else {
+            objLimit = parseInt(parts[0], 10) || 100;
+          }
+        }
+
+        const objWhereParts  = ['t = ?'];
+        const objWhereParams = [subId];
+        if (filterVal !== null) {
+          objWhereParts.push('val = ?');
+          objWhereParams.push(filterVal);
+        }
+        const objOrderStr = orderByVal
+          ? `val ${descOrder ? 'DESC' : 'ASC'}`
+          : 'ord';
+        const objLimitStr = objLimit !== null
+          ? ` LIMIT ${objOffset}, ${objLimit}`
+          : '';
+
         const [objRows] = await pool.query(
-          `SELECT id, val, up, t AS base, ord FROM \`${db}\` WHERE t = ? ORDER BY ord`,
-          [subId]
+          `SELECT id, val, up, t AS base, ord FROM \`${db}\` WHERE ${objWhereParts.join(' AND ')} ORDER BY ${objOrderStr}${objLimitStr}`,
+          objWhereParams
         );
 
         if (req.query.JSON_DATA !== undefined) {
@@ -2147,9 +2186,10 @@ router.post('/:db/_m_del/:id', async (req, res) => {
 /**
  * _m_set - Set object attributes
  * POST /:db/_m_set/:id
- * Parameters: t{id}=value (attributes to set)
+ * Parameters: t{id}=value (attributes to set), or t{id}=<file> for inline file upload
+ * saveInlineFile in smartq.js uploads file as t{reqId} and reads json.args as download path
  */
-router.post('/:db/_m_set/:id', async (req, res) => {
+router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -2161,19 +2201,46 @@ router.post('/:db/_m_set/:id', async (req, res) => {
     const objectId = parseInt(id, 10);
     const attributes = extractAttributes(req.body);
 
+    // Build file map from uploaded files (field name = t{typeId})
+    const fileByField = {};
+    if (req.files && req.files.length > 0) {
+      for (const f of req.files) {
+        fileByField[f.fieldname] = f;
+        // Ensure file fields are included in attributes even if body has no text value
+        if (/^t\d+$/.test(f.fieldname) && !(parseInt(f.fieldname.substring(1), 10) in attributes)) {
+          attributes[parseInt(f.fieldname.substring(1), 10)] = '';
+        }
+      }
+    }
+
     if (Object.keys(attributes).length === 0) {
       return res.status(200).json([{ error: 'No attributes provided'  }]);
     }
 
+    let uploadedFilePath = null;
+
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
       const typeIdNum = parseInt(attrTypeId, 10);
-      const existing = await getRequisiteByType(db, objectId, typeIdNum);
+      let finalValue = String(attrValue);
 
+      // Handle inline file upload (saveInlineFile in smartq.js)
+      const uploadedFile = fileByField[`t${attrTypeId}`];
+      if (uploadedFile) {
+        const uploadDir = path.join(legacyPath, 'download', db);
+        fs.mkdirSync(uploadDir, { recursive: true });
+        const safeName = path.basename(uploadedFile.originalname).replace(/[/\\]/g, '_');
+        fs.writeFileSync(path.join(uploadDir, safeName), uploadedFile.buffer);
+        finalValue = safeName;
+        uploadedFilePath = `${db}/download/${safeName}`;
+        logger.info('[Legacy _m_set] File saved', { db, attrTypeId, safeName });
+      }
+
+      const existing = await getRequisiteByType(db, objectId, typeIdNum);
       if (existing) {
-        await updateRowValue(db, existing.id, String(attrValue));
+        await updateRowValue(db, existing.id, finalValue);
       } else {
         const attrOrder = await getNextOrder(db, objectId, typeIdNum);
-        await insertRow(db, objectId, attrOrder, typeIdNum, String(attrValue));
+        await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
       }
     }
 
@@ -2187,11 +2254,12 @@ router.post('/:db/_m_set/:id', async (req, res) => {
     logger.info('[Legacy _m_set] Attributes set', { db, id: objectId });
 
     // PHP api_dump(): {id, obj, next_act:"object", args, warnings}
+    // For file uploads: args = "{db}/download/{filename}" (saveInlineFileDone builds href="/"+json.args)
     res.json({
       id: objectId,
       obj: objType,
       next_act: 'object',
-      args: objUp > 1 ? `F_U=${objUp}` : '',
+      args: uploadedFilePath || (objUp > 1 ? `F_U=${objUp}` : ''),
       warnings: '',
     });
   } catch (error) {
@@ -4507,7 +4575,7 @@ async function compileReport(pool, db, reportId) {
  *
  * Filters: keys are column aliases or names; values are {from, to, eq, like}.
  */
-async function executeReport(pool, db, report, filters = {}, limit = 100, offset = 0) {
+async function executeReport(pool, db, report, filters = {}, limit = 100, offset = 0, orderParam = null) {
   const results = { data: [], totals: {}, rownum: 0 };
 
   try {
@@ -4542,6 +4610,14 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     const whereParams = [report.parentType];
 
     for (const [key, filter] of Object.entries(filters)) {
+      // Special key: filter by main object ID (used by dubRecDone)
+      if (key === '_id') {
+        if (filter.eq !== undefined && filter.eq !== '') {
+          whereParts.push(`a.id = ?`);
+          whereParams.push(filter.eq);
+        }
+        continue;
+      }
       const col = report.columns.find(c => c.alias === key || c.name === key);
       if (!col) continue;
       // Filter on the joined table column (or a.val for main column)
@@ -4556,12 +4632,27 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     const lim = Math.min(parseInt(limit, 10)  || 100, 10000);
     const off = Math.max(parseInt(offset, 10) || 0,   0);
 
+    // Build ORDER BY from ?ORDER=colId,-colId2 (smartq.js collectOrder())
+    // Negative colId = DESC. colId matches report.columns[].id (the DB row id of the REP_COLS entry)
+    let orderClause = 'a.ord';
+    if (orderParam) {
+      const orderParts = String(orderParam).split(',').map(part => {
+        const desc  = part.trim().startsWith('-');
+        const colId = parseInt(desc ? part.trim().slice(1) : part.trim(), 10);
+        const col   = report.columns.find(c => c.id === colId);
+        if (!col) return null;
+        const expr  = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
+        return `${expr} ${desc ? 'DESC' : 'ASC'}`;
+      }).filter(Boolean);
+      if (orderParts.length > 0) orderClause = orderParts.join(', ');
+    }
+
     const sql = [
       `SELECT ${selectParts.join(', ')}`,
       `FROM \`${db}\` a`,
       ...joinParts,
       `WHERE ${whereParts.join(' AND ')}`,
-      `ORDER BY a.ord`,
+      `ORDER BY ${orderClause}`,
       `LIMIT ${lim} OFFSET ${off}`,
     ].join('\n');
 
@@ -4638,25 +4729,28 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       const filters = {};
       const params = { ...req.query, ...req.body };
 
+      // SmartQ sends FR_${displayName} where spaces→underscores, not FR_${alias}
       for (const col of report.columns) {
-        const colName = col.alias;
+        const nameKey = col.name.replace(/ /g, '_');
         const filter = {};
 
-        if (params[`FR_${colName}`]) {
-          filter.from = params[`FR_${colName}`];
-        }
-        if (params[`TO_${colName}`]) {
-          filter.to = params[`TO_${colName}`];
-        }
-        if (params[`EQ_${colName}`]) {
-          filter.eq = params[`EQ_${colName}`];
-        }
-        if (params[`LIKE_${colName}`]) {
-          filter.like = params[`LIKE_${colName}`];
-        }
+        if (params[`FR_${nameKey}`]) { filter.from = params[`FR_${nameKey}`]; }
+        if (params[`TO_${nameKey}`]) { filter.to   = params[`TO_${nameKey}`]; }
+        if (params[`EQ_${nameKey}`]) { filter.eq   = params[`EQ_${nameKey}`]; }
+        if (params[`LIKE_${nameKey}`]) { filter.like = params[`LIKE_${nameKey}`]; }
 
         if (Object.keys(filter).length > 0) {
-          filters[colName] = filter;
+          filters[col.alias] = filter;
+        }
+      }
+
+      // ID-exact filter: dubRecDone sends FR_${colName}ID=objId to locate new record
+      for (const col of report.columns) {
+        const nameKey = col.name.replace(/ /g, '_');
+        const idVal = params[`FR_${nameKey}ID`];
+        if (idVal && !filters._id) {
+          filters._id = { eq: idVal };
+          break;
         }
       }
 
@@ -4676,7 +4770,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         offset = parseInt(params.F || params.offset || 0, 10);
       }
 
-      const results = await executeReport(pool, db, report, filters, limit, offset);
+      const orderParam = params.ORDER || params.order || null;
+      const results = await executeReport(pool, db, report, filters, limit, offset, orderParam);
 
       // Format data for display
       const formattedData = results.data.map(row => {
@@ -4694,7 +4789,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       // RECORD_COUNT: smartq.js calls ?JSON&RECORD_COUNT → {count: N}
       if (req.query.RECORD_COUNT !== undefined) {
         // Fetch all matching rows to get true count (no LIMIT)
-        const cntResults = await executeReport(pool, db, report, filters, 999999, 0);
+        const cntResults = await executeReport(pool, db, report, filters, 999999, 0, null);
         return res.json({ count: cntResults.rownum });
       }
 
