@@ -2004,10 +2004,11 @@ router.post('/:db/_m_save/:id', async (req, res) => {
 
       logger.info('[Legacy _m_save] Object copied', { db, originalId, newId: objectId });
 
-      // PHP api_dump() format for copy: next_act="object", args=F_U=<parent>
+      // PHP api_dump() format for copy: obj = new object ID (used by dubRecDone to filter report)
+      // dubRecDone sends FR_ColNameID=json.obj → filters report WHERE a.id = objectId
       return res.json({
         id: objectId,
-        obj: original.typ,
+        obj: objectId,
         next_act: 'object',
         args: original.up > 1 ? `F_U=${original.up}` : '',
         warnings: '',
@@ -2906,6 +2907,7 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
     const id = parseInt(refId, 10);
     const searchQuery = req.query.q || '';
     const restrictParam = req.query.r || '';
+    const limitParam = Math.min(parseInt(req.query.LIMIT || req.query.limit || '80', 10) || 80, 500);
 
     // Get the reference type info and its requisites (children)
     // PHP: dic = row["dic"] from the reference definition
@@ -2959,7 +2961,7 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
         }
       }
 
-      query += ` ORDER BY val LIMIT 80`;
+      query += ` ORDER BY val LIMIT ${limitParam}`;
       const [rows] = await pool.query(query, params);
       const result = {};
       for (const row of rows) {
@@ -3043,7 +3045,7 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
       JOIN ${db} pars ON pars.id = vals.up AND pars.up != 0
       WHERE ${whereClause}${searchClause}
       ORDER BY vals.val
-      LIMIT 80
+      LIMIT ${limitParam}
     `;
 
     logger.debug('[Legacy _ref_reqs] Query', { db, id, sql: sql.replace(/\s+/g, ' ').trim() });
@@ -4623,7 +4625,21 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       // Filter on the joined table column (or a.val for main column)
       const expr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
 
-      if (filter.from  !== undefined && filter.from  !== '') { whereParts.push(`${expr} >= ?`);       whereParams.push(filter.from); }
+      // SmartQ text filters: FR_ColName=%searchterm% (LIKE), numeric: FR_ColName=N (>=)
+      // Value with % → LIKE; value starting with @ → by ID; !% → NOT LIKE; else → >= (range from)
+      if (filter.from  !== undefined && filter.from  !== '') {
+        const fv = String(filter.from);
+        if (fv.startsWith('!%')) {
+          whereParts.push(`${expr} NOT LIKE ?`); whereParams.push(fv.slice(1));
+        } else if (fv.includes('%')) {
+          whereParts.push(`${expr} LIKE ?`); whereParams.push(fv);
+        } else if (fv.startsWith('@')) {
+          const fid = parseInt(fv.slice(1), 10);
+          if (!isNaN(fid)) { whereParts.push(`${expr} = ?`); whereParams.push(fid); }
+        } else {
+          whereParts.push(`${expr} >= ?`); whereParams.push(fv);
+        }
+      }
       if (filter.to    !== undefined && filter.to    !== '') { whereParts.push(`${expr} <= ?`);       whereParams.push(filter.to); }
       if (filter.eq    !== undefined && filter.eq    !== '') { whereParts.push(`${expr} = ?`);        whereParams.push(filter.eq); }
       if (filter.like  !== undefined && filter.like  !== '') { whereParts.push(`${expr} LIKE ?`);     whereParams.push(`%${filter.like}%`); }
@@ -4828,7 +4844,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
 
       if (q.JSON_CR !== undefined) {
         // PHP JSON_CR: columns[i].id = column DB id; rows[row_idx][col_id] = value
-        const cols = report.columns.map((col, i) => ({ id: col.id || i, name: col.name, type: col.baseType || 0 }));
+        const cols = report.columns.map((col, i) => ({ id: col.id || i, name: col.name, type: col.reqTypeId || 0 }));
         const rows = {};
         results.data.forEach((row, i) => {
           rows[i] = {};
@@ -4846,7 +4862,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         const cols = report.columns.map(col => ({
           id: col.id,
           name: col.name,
-          type: col.baseType || 0,
+          // type = requisite type ID (used by smartq.js as req-id for inline editing / metadata)
+          type: col.reqTypeId || 0,
           format: REV_BASE_TYPE[col.baseType] || 'CHARS',
           align: col.align || 'LEFT',
           totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
