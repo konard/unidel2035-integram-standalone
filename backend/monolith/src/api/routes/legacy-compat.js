@@ -1292,14 +1292,58 @@ router.post('/my/register', async (req, res) => {
     return res.status(400).send('Passwords do not match');
   }
 
-  // Mock successful registration
+  if (!agree) {
+    if (isJSON) return res.json([{ error: 'Please accept the terms' }]);
+    return res.status(400).send('Please accept the terms');
+  }
+
+  // PHP creates the user in the 'my' table (multi-tenant global users DB).
+  // In standalone mode we do the same if the 'my' table exists, otherwise skip.
+  try {
+    const pool = getPool();
+
+    // Check if 'my' table exists
+    const [tables] = await pool.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'my' LIMIT 1`
+    );
+
+    if (tables.length > 0) {
+      // Check uniqueness: PHP line 124
+      const [existing] = await pool.query(
+        `SELECT id FROM my WHERE val = ? AND t = ${TYPE.USER} LIMIT 1`,
+        [email.toLowerCase()]
+      );
+      if (existing.length > 0) {
+        if (isJSON) return res.json([{ error: 'This email is already registered. [errMailExists]' }]);
+        return res.status(400).send('This email is already registered.');
+      }
+
+      // PHP newUser($email, $email, "115", "", "") — inserts USER row under parent 115
+      const nextOrd = await getNextOrder('my', 115, TYPE.USER);
+      const userId = await insertRow('my', 115, nextOrd, TYPE.USER, email.toLowerCase());
+
+      // Insert raw password (PHP inserts plaintext first; on confirm, it hashes it)
+      await insertRow('my', userId, 1, TYPE.PASSWORD, regpwd);
+
+      // Confirmation token = md5("xz" + email) — no email sent in standalone mode
+      const confirmToken = crypto.createHash('md5').update(`xz${email.toLowerCase()}`).digest('hex');
+      await insertRow('my', userId, 1, TYPE.TOKEN, confirmToken);
+
+      logger.info('[Legacy Register] User created in my table', { email, userId, confirmToken });
+    } else {
+      logger.info('[Legacy Register] my table not found, skipping DB insert', { email });
+    }
+  } catch (err) {
+    logger.error('[Legacy Register] DB error', { error: err.message, email });
+    if (isJSON) return res.json([{ error: 'Registration failed: ' + err.message }]);
+    return res.status(500).send('Registration failed');
+  }
+
   logger.info('[Legacy Register] Success', { email });
 
+  // PHP calls login($db, "", "toConfirm") which returns {message:"toConfirm",...}
   if (isJSON) {
-    return res.json({
-      success: true,
-      message: 'toConfirm',
-    });
+    return res.json({ success: true, message: 'toConfirm' });
   }
 
   return res.redirect('/my');
@@ -2599,8 +2643,11 @@ router.all('/:db/_list/:typeId', async (req, res) => {
       whereParams.push(parentId);
     }
     if (search) {
-      whereParts.push('a.val LIKE ?');
-      whereParams.push(`%${search}%`);
+      // PHP also searches across requisite values with OR — match across val AND any child req val
+      whereParts.push(
+        '(a.val LIKE ? OR EXISTS (SELECT 1 FROM `' + db + '` req WHERE req.up = a.id AND req.val LIKE ?))'
+      );
+      whereParams.push(`%${search}%`, `%${search}%`);
     }
     if (colFilters[0]) {
       whereParts.push('a.val LIKE ?');
@@ -3104,6 +3151,46 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
         result[row.id] = row.val || '--';
       }
       return res.json(result);
+    }
+
+    // Check for dynamic formula (attrs block) in reference type val
+    // PHP: if removeMasks(r.val) is non-empty → it's a named block with custom SQL
+    // This requires PHP's template block execution engine, which is not available in Node.js.
+    // We detect this case and fall back to the standard query with a warning.
+    const rawAttr = refRows[0].attr || '';
+    const attrsFormula = rawAttr
+      .replace(/:ALIAS=[^:]*:/g, '')
+      .replace(/:!NULL:/g, '')
+      .replace(/:MULTI:/g, '')
+      .trim();
+
+    if (attrsFormula.length > 0) {
+      // This reference type has a custom formula/block (e.g. "&my_block" or report reference).
+      // PHP evaluates the block via Get_block_data(). Node.js doesn't support this.
+      // Return a simple fallback list using just the dictionary type.
+      logger.warn('[Legacy _ref_reqs] Dynamic formula not supported, using simple fallback', {
+        db, id, formula: attrsFormula
+      });
+      // Simple fallback: return all objects of dic type
+      const searchQ = searchQuery.startsWith('@')
+        ? null : (searchQuery ? `%${searchQuery.replace(/'/g, "''")}%` : null);
+      const searchId = searchQuery.startsWith('@') ? parseInt(searchQuery.slice(1), 10) : null;
+      const fbWhere = ['vals.t = ?', 'pars.id = vals.up', 'pars.up != 0'];
+      const fbParams = [refRows[0].dic];
+      if (searchId && !isNaN(searchId)) { fbWhere.push('vals.id = ?'); fbParams.push(searchId); }
+      else if (searchQ)                  { fbWhere.push('vals.val LIKE ?'); fbParams.push(searchQ); }
+      if (restrictParam) {
+        const rids = restrictParam.split(',').filter(v => /^\d+$/.test(v)).map(Number);
+        if (rids.length === 1)       { fbWhere.push('vals.id = ?');         fbParams.push(rids[0]); }
+        else if (rids.length > 1)    { fbWhere.push(`vals.id IN (${rids.join(',')})`); }
+      }
+      const [fbRows] = await pool.query(
+        `SELECT vals.id, vals.val FROM \`${db}\` vals JOIN \`${db}\` pars ON pars.id = vals.up WHERE ${fbWhere.join(' AND ')} ORDER BY vals.val LIMIT ${limitParam}`,
+        fbParams
+      );
+      const fbResult = {};
+      for (const r of fbRows) fbResult[r.id] = r.val || '--';
+      return res.json(fbResult);
     }
 
     // Extract dictionary type and requisites info
@@ -4485,6 +4572,44 @@ router.post('/:db/upload', (req, res, next) => {
     return res.status(200).json([{ error: 'No file uploaded' }]);
   }
 
+  // MIME-type verification using file magic bytes (PHP uses finfo_file)
+  // Read first 12 bytes to identify file type
+  const MIME_SIGNATURES = [
+    { ext: ['.pdf'],                       magic: [0x25, 0x50, 0x44, 0x46] },              // %PDF
+    { ext: ['.png'],                       magic: [0x89, 0x50, 0x4E, 0x47] },              // \x89PNG
+    { ext: ['.jpg', '.jpeg'],             magic: [0xFF, 0xD8, 0xFF] },                     // JPEG
+    { ext: ['.gif'],                       magic: [0x47, 0x49, 0x46, 0x38] },              // GIF8
+    { ext: ['.zip', '.docx', '.xlsx', '.odt', '.ods', '.rar'],
+                                           magic: [0x50, 0x4B, 0x03, 0x04] },              // PK (ZIP-based)
+    { ext: ['.rar'],                       magic: [0x52, 0x61, 0x72, 0x21] },              // Rar!
+    { ext: ['.7z'],                        magic: [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] }, // 7z
+    { ext: ['.txt', '.csv'],              magic: null },                                    // text — allow any
+    { ext: ['.doc', '.xls'],              magic: [0xD0, 0xCF, 0x11, 0xE0] },              // OLE (MS legacy)
+  ];
+
+  const fileExt = path.extname(req.file.originalname).toLowerCase();
+  const filePath = req.file.path;
+
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const headerBuf = Buffer.alloc(12);
+    fs.readSync(fd, headerBuf, 0, 12, 0);
+    fs.closeSync(fd);
+
+    const sig = MIME_SIGNATURES.find(s => s.ext.includes(fileExt));
+    if (sig && sig.magic !== null) {
+      const matches = sig.magic.every((byte, i) => headerBuf[i] === byte);
+      if (!matches) {
+        fs.unlinkSync(filePath); // Remove the invalid file
+        logger.warn('[Legacy upload] MIME mismatch', { db, filename: req.file.originalname, fileExt });
+        return res.status(200).json([{ error: `File content does not match extension ${fileExt}` }]);
+      }
+    }
+  } catch (mimeErr) {
+    logger.warn('[Legacy upload] MIME check failed', { error: mimeErr.message });
+    // Non-fatal: continue if we can't read the file header
+  }
+
   logger.info('[Legacy upload] File saved', { db, filename: req.file.filename, size: req.file.size });
 
   // PHP redirects back to dir_admin after upload; API clients receive confirmation
@@ -4539,9 +4664,10 @@ router.get('/:db/dir_admin', async (req, res) => {
   }
 
   try {
-    // Determine folder to list
-    const folder = download ? 'download' : 'templates';
-    const basePath = folder === 'download'
+    // PHP: download=1 → show download/{db}/ folder; download=0 or absent → templates/custom/{db}/
+    const useDownload = download !== undefined && download !== '0' && download !== 'false';
+    const folder = useDownload ? 'download' : 'templates';
+    const basePath = useDownload
       ? path.join(legacyPath, 'download', db)
       : path.join(legacyPath, 'templates', 'custom', db);
 
@@ -4599,7 +4725,7 @@ router.get('/:db/dir_admin', async (req, res) => {
       success: true,
       folder,
       path: fullPath,
-      add_path: addPath,
+      add_path: add_path || '',
       directories: dirs,
       files
     });
@@ -5025,6 +5151,22 @@ router.all('/:db/report/:reportId?', async (req, res) => {
           for (const col of report.columns) rows[i][col.id] = row[col.alias] ?? '';
         });
         return res.json({ columns: cols, rows, totalCount: results.data.length });
+      }
+
+      if (q.JSON_HR !== undefined) {
+        // Hierarchical format: group rows by their parent (up field).
+        // Returns {columns:[...], groups:{parentId:[{colId:val,...}]}, totalCount:N}
+        // PHP's JSON_HR was never finished (has var_dump) — this is a sensible implementation.
+        const cols = report.columns.map(col => ({ id: col.id, name: col.name, type: col.reqTypeId || 0 }));
+        const groups = {};
+        for (const row of results.data) {
+          const parentId = row.up || 0;
+          if (!groups[parentId]) groups[parentId] = [];
+          const entry = {};
+          for (const col of report.columns) entry[col.id] = row[col.alias] ?? '';
+          groups[parentId].push(entry);
+        }
+        return res.json({ columns: cols, groups, totalCount: results.data.length });
       }
 
       if (isApiRequest(req)) {
@@ -6173,6 +6315,20 @@ router.post('/:db', async (req, res, next) => {
         for (const col of report.columns) rows[i][col.id] = row[col.alias] ?? '';
       });
       return res.json({ columns: cols, rows, totalCount: results.data.length });
+    }
+
+    // Hierarchical format: group rows by parent (up field)
+    if (q.JSON_HR !== undefined) {
+      const cols = report.columns.map(col => ({ id: col.id, name: col.name, type: col.reqTypeId || 0 }));
+      const groups = {};
+      for (const row of results.data) {
+        const parentId = row.up || 0;
+        if (!groups[parentId]) groups[parentId] = [];
+        const entry = {};
+        for (const col of report.columns) entry[col.id] = row[col.alias] ?? '';
+        groups[parentId].push(entry);
+      }
+      return res.json({ columns: cols, groups, totalCount: results.data.length });
     }
 
     // PHP default JSON: row-major data[row_index][col_index], totals embedded in columns
