@@ -1585,11 +1585,11 @@ router.get('/:db', async (req, res, next) => {
     // Validate token and get user info
     const query = `
       SELECT user.id AS uid, user.val AS username,
-             xsrf.val AS xsrf_val, role.val AS role_val
-      FROM ${db} user
-      JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
-      LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
-      LEFT JOIN ${db} role ON role.up = user.id AND role.t = ${TYPE.ROLE}
+             xsrf.val AS xsrf_val, role.val AS role_val, role.id AS role_id
+      FROM \`${db}\` user
+      JOIN \`${db}\` token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
+      LEFT JOIN \`${db}\` xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
+      LEFT JOIN \`${db}\` role ON role.up = user.id AND role.t = ${TYPE.ROLE}
       WHERE token.val = ? AND user.t = ${TYPE.USER}
       LIMIT 1
     `;
@@ -1610,27 +1610,25 @@ router.get('/:db', async (req, res, next) => {
     // ── GET /:db/?JSON → Main page API response
     // PHP returns: {user, role, _xsrf, &main.myrolemenu, etc.}
     if (isApiRequest(req)) {
-      // Get role menu items if user has a role
-      const menuItems = [];
-      if (user.role_val) {
-        // Get menu items for user's role (role menu is stored as children of role type)
-        const [menuRows] = await pool.query(
-          `SELECT m.id, m.val AS name, m.ord
-           FROM ${db} m
-           WHERE m.up = ? AND m.t != m.id
-           ORDER BY m.ord`,
-          [user.role_val]
+      // Get role menu items if user has a role (GRANT rows under role)
+      let menuHrefs = [];
+      let menuNames = [];
+      if (user.role_id) {
+        const [grantRows] = await pool.query(
+          `SELECT val, ord FROM \`${db}\`
+           WHERE up = ? AND t = ${TYPE.GRANT}
+           ORDER BY ord`,
+          [user.role_id]
         );
-        for (const m of menuRows) {
-          menuItems.push({ id: m.id, name: m.name, ord: m.ord });
-        }
+        menuHrefs = grantRows.map(g => g.val);
+        menuNames = grantRows.map(g => g.val);
       }
 
       // Get available terms/types for the user
       const [termsRows] = await pool.query(
         `SELECT a.id, a.val AS name, a.t AS type, a.ord
-         FROM ${db} a
-         WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
+         FROM \`${db}\` a
+         WHERE a.up <= 1 AND a.id != a.t AND a.val != '' AND a.t != 0
          ORDER BY a.val`
       );
       // Filter out CALCULATABLE and BUTTON types
@@ -1646,8 +1644,8 @@ router.get('/:db', async (req, res, next) => {
         _xsrf: user.xsrf_val || '',
         token: token,
         '&main.myrolemenu': {
-          href: menuItems.map(m => String(m.id)),
-          name: menuItems.map(m => m.name),
+          href: menuHrefs,
+          name: menuNames,
         },
         terms: terms.map(t => ({ id: t.id, name: t.name, type: t.type })),
       });
@@ -1808,80 +1806,306 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
 
         // Standard JSON: PHP-compatible full format
-        // Includes: object, type, base, req_base, req_base_id, req_type, reqs
-        // Needed by gjsParseObject in main.js for template variable substitution
+        // Matches PHP index.php object API response builder exactly.
 
-        // Get type metadata with its base type
+        // ── 1. Type metadata ────────────────────────────────────────────────
         const [[typeRow] = []] = await pool.query(
-          `SELECT t.id, t.val, t.t AS base_type_id, t.up, COALESCE(bt.val, '') AS base_val
+          `SELECT t.id, t.val, t.t AS base_type_id, t.up, t.ord AS type_ord
            FROM \`${db}\` t
-           LEFT JOIN \`${db}\` bt ON bt.id = t.t
            WHERE t.id = ?`,
           [subId]
         );
 
-        // Get requisite definitions with base type info (PHP lines 5800-5810)
+        // ── 2. Req field definitions with PHP-compatible key computation ───
+        // Key rule (from DB analysis):
+        //   If type_def is a root-level user type (up<=1, id!=t): key = req.t
+        //   Otherwise (base/internal type):                        key = req.id
+        // type_def.val = the req name (e.g. "Panel", "Description")
+        // req.val      = the attrs string (e.g. ":ALIAS=Имя:")
         const [reqDefStd] = await pool.query(
-          `SELECT req.id, req.val, req.t AS base_typ, req.ord,
-                  COALESCE(base.t, req.t) AS resolved_base
+          `SELECT req.id AS req_id,
+                  req.t  AS req_t,
+                  req.val AS req_attrs_val,
+                  req.ord,
+                  type_def.val  AS type_name,
+                  type_def.up   AS type_up,
+                  type_def.t    AS type_def_t,
+                  COALESCE(type_def.t, req.t) AS resolved_base,
+                  CASE
+                    WHEN type_def.id IS NOT NULL
+                         AND type_def.id != type_def.t
+                         AND type_def.up <= 1
+                    THEN req.t
+                    ELSE req.id
+                  END AS req_key
            FROM \`${db}\` req
-           LEFT JOIN \`${db}\` base ON base.id = req.t
+           LEFT JOIN \`${db}\` type_def ON type_def.id = req.t
            WHERE req.up = ?
            ORDER BY req.ord`,
           [subId]
         );
 
-        // Build req_base and req_base_id maps (PHP GLOBAL_VARS["api"]["req_base"])
-        const req_base = {};
+        // ── 3. Build req_base / req_base_id / req_type / req_order / req_attrs ──
+        const req_base    = {};
         const req_base_id = {};
+        const req_type    = {};
+        const req_attrs   = {};
+        const req_order   = [];
         for (const rd of reqDefStd) {
-          const baseTypId = rd.resolved_base || rd.base_typ;
-          // Map base type ID to name using REV_BASE_TYPE
-          req_base[rd.id] = REV_BASE_TYPE[baseTypId] || 'SHORT';
-          req_base_id[rd.id] = String(baseTypId);
+          const k        = String(rd.req_key);
+          const baseTypId = rd.resolved_base || rd.req_t;
+          req_base[k]    = REV_BASE_TYPE[baseTypId] || 'SHORT';
+          req_base_id[k] = String(baseTypId);
+          req_type[k]    = rd.type_name || String(rd.req_t);
+          req_attrs[k]   = rd.req_attrs_val || '';
+          req_order.push(k);
         }
 
-        // Fetch requisite values for all objects
-        const reqMapStd = {};
-        if (objRows.length > 0 && reqDefStd.length > 0) {
-          const objIdsStd = objRows.map(r => r.id);
-          const phStd = objIdsStd.map(() => '?').join(',');
-          const [reqValsStd] = await pool.query(
-            `SELECT up, t, val FROM \`${db}\` WHERE up IN (${phStd}) ORDER BY up, ord`,
-            objIdsStd
+        // ── 4. arr_type: first child row ID for each user-type req ─────────
+        const userTypeReqs = reqDefStd.filter(rd =>
+          rd.type_def_t !== null && rd.req_t !== rd.resolved_base  // req.t is a user type
+        );
+        const arr_type = {};
+        const ref_type = {};
+        if (userTypeReqs.length > 0) {
+          const userTypeIds = userTypeReqs.map(rd => rd.req_t);
+          const phUT = userTypeIds.map(() => '?').join(',');
+          // First child of each user type (gives arr_type value)
+          const [arrRows] = await pool.query(
+            `SELECT c.up AS parent_id, c.id AS child_id
+             FROM \`${db}\` c
+             WHERE c.up IN (${phUT}) AND c.id != c.t
+             ORDER BY c.up, c.ord`,
+            userTypeIds
           );
-          for (const rv of reqValsStd) {
-            if (!reqMapStd[rv.up]) reqMapStd[rv.up] = {};
-            reqMapStd[rv.up][rv.t] = rv.val;
+          const firstChildMap = {};
+          for (const r of arrRows) {
+            if (firstChildMap[r.parent_id] === undefined) {
+              firstChildMap[r.parent_id] = r.child_id;
+            }
+          }
+          for (const rd of userTypeReqs) {
+            const k = String(rd.req_key);
+            const firstChild = firstChildMap[rd.req_t];
+            if (firstChild !== undefined) arr_type[k] = String(firstChild);
+            // ref_type: req.t when it is a user type (not base)
+            ref_type[k] = String(rd.req_t);
           }
         }
-        const reqsStd = {};
-        for (const o of objRows) {
-          reqsStd[o.id] = reqDefStd.map(rd =>
-            (reqMapStd[o.id] && reqMapStd[o.id][rd.id] !== undefined) ? reqMapStd[o.id][rd.id] : ''
-          );
+
+        // ── 5. Fetch req values for objects (reqs map) ─────────────────────
+        // PHP reqs = {objId: {reqKey: value}}
+        // Data rows: {up=objId, t=reqKey (=req.t for user types, req.id for base types)}
+        const reqKeyByReqT  = {};  // req.t → req_key
+        const reqKeyByReqId = {};  // req.id → req_key (for base-type reqs)
+        for (const rd of reqDefStd) {
+          const k = String(rd.req_key);
+          reqKeyByReqT[rd.req_t]   = k;
+          reqKeyByReqId[rd.req_id] = k;
         }
 
-        // Build PHP-compatible type object with base type name
-        const typeBaseTypeName = typeRow ? (REV_BASE_TYPE[typeRow.base_type_id] || 'SHORT') : 'SHORT';
+        const reqsStd = {};
+        if (objRows.length > 0 && reqDefStd.length > 0) {
+          const objIds = objRows.map(r => r.id);
+          const ph     = objIds.map(() => '?').join(',');
+          const [reqVals] = await pool.query(
+            `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`,
+            objIds
+          );
+          // Index by (up, t)
+          const rawMap = {};
+          for (const rv of reqVals) {
+            if (!rawMap[rv.up]) rawMap[rv.up] = {};
+            rawMap[rv.up][rv.t] = rv.val;
+          }
+          for (const o of objRows) {
+            const entry = {};
+            for (const rd of reqDefStd) {
+              const k = String(rd.req_key);
+              // Try req_key first (matches t=reqKey for user-type data rows)
+              const val = rawMap[o.id]?.[rd.req_key] ??
+                          rawMap[o.id]?.[rd.req_t]   ??
+                          rawMap[o.id]?.[rd.req_id]  ??
+                          undefined;
+              if (val !== undefined && val !== '') entry[k] = val;
+            }
+            if (Object.keys(entry).length > 0) reqsStd[o.id] = entry;
+          }
+        }
 
-        return res.json({
-          object: objRows.map(r => ({ id: r.id, val: r.val, up: r.up, base: r.base, ord: r.ord })),
-          type: {
-            id: typeRow ? typeRow.id : subId,
-            val: typeRow ? typeRow.val : '',
-            up: typeRow ? typeRow.up : 0,
-            base: typeBaseTypeName,
+        // ── 6. &main.myrolemenu ─────────────────────────────────────────────
+        // Try to get role menu from DB via token; fall back to empty.
+        let mainMyrolemenu = { href: [], name: [] };
+        try {
+          if (token) {
+            const [uRows] = await pool.query(
+              `SELECT u.id AS uid, r.id AS role_row_id, r.val AS role_name
+               FROM \`${db}\` u
+               JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
+               LEFT JOIN \`${db}\` r ON r.up = u.id AND r.t = ${TYPE.ROLE}
+               WHERE u.t = ${TYPE.USER} LIMIT 1`,
+              [token]
+            );
+            if (uRows.length > 0) {
+              const roleRowId = uRows[0].role_row_id;
+              if (roleRowId) {
+                // Grants are GRANT-type (t=5) rows under the role row
+                const [grantRows] = await pool.query(
+                  `SELECT val, ord FROM \`${db}\`
+                   WHERE up = ? AND t = ${TYPE.GRANT}
+                   ORDER BY ord`,
+                  [roleRowId]
+                );
+                if (grantRows.length > 0) {
+                  mainMyrolemenu = {
+                    href: grantRows.map(g => g.val),
+                    name: grantRows.map(g => g.val),
+                  };
+                }
+              }
+            }
+          }
+        } catch (_e) { /* ignore myrolemenu errors */ }
+
+        // ── 7. Build response ───────────────────────────────────────────────
+        const typeBaseTypeName = typeRow
+          ? (REV_BASE_TYPE[typeRow.base_type_id] || 'SHORT')
+          : 'SHORT';
+        const typeUnique = (typeRow && typeRow.type_ord && String(typeRow.type_ord) !== '0')
+          ? 'unique' : '';
+        const typeId  = typeRow ? typeRow.id  : subId;
+        const typeVal = typeRow ? typeRow.val  : '';
+        const typeUp  = typeRow ? typeRow.up   : 0;
+
+        // Filter params for uni_obj
+        const fuParam = allObjParams.F_U !== undefined ? String(allObjParams.F_U) : '';
+        const filterStr = fuParam ? `&F_U=${fuParam}` : '';
+
+        const hasReqs = reqDefStd.length > 0;
+
+        // uni_obj_head: one entry per req field, in req_order
+        const uniObjHead = hasReqs ? (() => {
+          const head = {
+            ref: [], multi: [], array: [], mandatory: [], grant: [],
+            arr_type: [], ref_type: [], typ: [], base_typ: [], id: [], filter: [], val: []
+          };
+          for (const rd of reqDefStd) {
+            const k     = String(rd.req_key);
+            const isArr = arr_type[k] !== undefined;
+            const isRef = ref_type[k] !== undefined;
+            head.ref.push(isRef ? 't-ref' : '');
+            head.multi.push('');
+            head.array.push(isArr ? 'arr' : '');
+            head.mandatory.push('');
+            head.grant.push('');
+            head.arr_type.push(isArr ? `arr-type="${k}"` : '');
+            head.ref_type.push(isRef ? `ref-type="${ref_type[k]}"` : '');
+            head.typ.push(String(rd.req_id));   // head.typ = actual row ID
+            head.base_typ.push(String(rd.resolved_base || rd.req_t));
+            head.id.push(String(typeId));
+            head.filter.push('');
+            head.val.push(rd.type_name || String(rd.req_t));
+          }
+          return head;
+        })() : null;
+
+        // uni_obj_all: all objects in simple id/align/val form
+        const uniObjAll = {
+          id:    objRows.map(r => String(r.id)),
+          align: objRows.map(() => 'LEFT'),
+          val:   objRows.map(r => r.val || ''),
+        };
+
+        // &object_reqs and view_reqs: first req value displayed per object
+        const objReqs = {};
+        const viewReqsAlign = [];
+        const viewReqsBase  = [];
+        const viewReqsVal   = [];
+        if (hasReqs && Object.keys(reqsStd).length > 0) {
+          const firstReqKey = req_order[0];
+          for (const o of objRows) {
+            if (reqsStd[o.id] && reqsStd[o.id][firstReqKey] !== undefined) {
+              const v = String(reqsStd[o.id][firstReqKey]);
+              objReqs[o.id] = [v];
+              viewReqsAlign.push('LEFT');
+              viewReqsBase.push(req_base[firstReqKey] || 'SHORT');
+              viewReqsVal.push(v);
+            }
+          }
+        }
+        const hasObjReqs = Object.keys(objReqs).length > 0;
+
+        const response = {
+          '&main.myrolemenu': mainMyrolemenu,
+          '&main.a': { '_parent_.title': [typeVal] },
+          type: { id: typeId, up: typeUp, val: typeVal, base: typeBaseTypeName },
+          base: { id: String(typeRow ? typeRow.base_type_id : 3), unique: typeUnique },
+          '&main.a.&uni_obj': {
+            create_granted: ['block'],
+            id:       [String(typeId)],
+            f_u:      [fuParam],
+            up:       [String(typeUp)],
+            unique:   [typeUnique],
+            base_typ: [String(typeRow ? typeRow.base_type_id : 3)],
+            filter:   [filterStr, filterStr],
+            val:      [typeVal],
+            typ:      [String(typeId)],
+            f_i:      [''],
+            lnx:      ['0'],
           },
-          base: {
-            id: String(typeRow ? typeRow.base_type_id : 3),
-            unique: 'unique',
+          '&main.a.&uni_obj.&delete': { ok: [''] },
+          '&main.a.&uni_obj.&export': { ok: [''] },
+          '&main.a.&uni_obj.&new_req': {
+            new_req: [''],
+            '_parent_.typ': [String(typeId)],
+            '_parent_.val': [typeVal],
           },
-          req_type: reqDefStd.map(r => r.val),
-          req_base,
-          req_base_id,
-          reqs: reqsStd,
-        });
+        };
+
+        if (hasReqs) {
+          response['req_base']    = req_base;
+          response['req_base_id'] = req_base_id;
+          response['req_attrs']   = req_attrs;
+          response['req_type']    = req_type;
+          if (Object.keys(arr_type).length > 0) response['arr_type'] = arr_type;
+          response['req_order']   = req_order;
+          if (Object.keys(ref_type).length > 0) response['ref_type'] = ref_type;
+          response['&main.a.&uni_obj.&uni_obj_head'] = uniObjHead;
+        }
+
+        response['&main.a.&uni_obj.&filter_val_rcm'] = {
+          f_typ:  [`F_${typeId}`],
+          filter: [''],
+        };
+
+        if (hasReqs) {
+          response['&main.a.&uni_obj.&uni_obj_head_filter'] = {
+            typ: req_order,
+          };
+          response['&main.a.&uni_obj.&uni_obj_head_filter.&filter_req_rcm'] = {
+            f_typ:         req_order.map(k => `F_${k}`),
+            '_parent_.ref': req_order.map(k => k),
+            filter:        req_order.map(() => ''),
+            '_parent_.dd': req_order.map(() => ''),
+          };
+        }
+
+        response['object']                             = objRows.map(r => ({ id: r.id, val: r.val, up: r.up, base: r.base }));
+        response['&main.a.&uni_obj.&uni_obj_all']      = uniObjAll;
+
+        if (hasReqs && Object.keys(reqsStd).length > 0) {
+          response['reqs'] = reqsStd;
+        }
+        if (hasObjReqs) {
+          response['&object_reqs'] = objReqs;
+          response['&main.a.&uni_obj.&uni_obj_all.&uni_object_view_reqs'] = {
+            align: viewReqsAlign,
+            base:  viewReqsBase,
+            val:   viewReqsVal,
+          };
+        }
+
+        return res.json(response);
       }
 
       // ── GET /:db/types?JSON (edit_types endpoint)
