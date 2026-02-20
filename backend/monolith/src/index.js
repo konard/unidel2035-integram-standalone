@@ -1003,8 +1003,14 @@ class IntegramBackend {
     this.app.use('/templates', express.static(path.join(legacyStaticPath, 'templates')));
     this.app.use('/ace', express.static(path.join(legacyStaticPath, 'ace')));
     this.app.use('/app', express.static(path.join(legacyStaticPath, 'app')));
+
+    // Serve public directory (integram-client.html and other public assets)
+    const publicPath = path.resolve(__dirname, '../../../../public');
+    this.app.use(express.static(publicPath));
+
     console.log('✅ [MONOLITH] Legacy static files served from', legacyStaticPath);
     console.log('   Static paths: /css, /js, /i, /templates, /ace, /app');
+    console.log('✅ [MONOLITH] Public files served from', publicPath);
 
     // ========================================
     // Root Endpoint - API Documentation
