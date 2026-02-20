@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Legacy API — полный тест-клиент</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <style>
+    body { background:#1a1a2e; color:#e0e0e0; font-size:14px; }
+    .sidebar { width:220px; min-height:100vh; background:#16213e; padding:0; flex-shrink:0; }
+    .sidebar .nav-link { color:#aaa; padding:6px 16px; font-size:13px; border-radius:0; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { background:#0f3460; color:#e94560; }
+    .sidebar .nav-header { font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#555; padding:12px 16px 4px; }
+    .main { flex:1; padding:16px; overflow-y:auto; }
+    .panel { display:none; }
+    .panel.active { display:block; }
+    .panel-title { font-size:16px; font-weight:600; color:#e94560; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:16px; }
+    .form-control, .form-select { background:#0f3460; border:1px solid #1a4a8a; color:#e0e0e0; font-size:13px; }
+    .form-control:focus, .form-select:focus { background:#0f3460; border-color:#e94560; color:#e0e0e0; box-shadow:none; }
+    .form-control::placeholder { color:#555; }
+    .btn-primary { background:#e94560; border-color:#e94560; }
+    .btn-primary:hover { background:#c73652; border-color:#c73652; }
+    .btn-secondary { background:#16213e; border-color:#333; color:#aaa; }
+    .btn-secondary:hover { background:#0f3460; color:#e0e0e0; }
+    .btn-danger { background:#8b0000; border-color:#8b0000; }
+    pre.result { background:#0d0d1a; border:1px solid #222; color:#a8ff78; padding:10px; border-radius:4px; font-size:12px; max-height:300px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; margin:0; }
+    .session-bar { background:#0f3460; padding:6px 16px; font-size:12px; color:#aaa; display:flex; gap:20px; align-items:center; flex-wrap:wrap; border-bottom:1px solid #1a4a8a; }
+    .session-bar b { color:#a8ff78; }
+    .log-row td { font-size:11px; border-color:#222 !important; vertical-align:middle; color:#aaa; }
+    .log-row:hover td { background:#0f3460 !important; cursor:pointer; }
+    .ok { color:#a8ff78; }
+    .err { color:#e94560; }
+    .warn { color:#ffd700; }
+    table.data-table { font-size:12px; }
+    table.data-table th { background:#0f3460; color:#aaa; font-weight:500; }
+    table.data-table td { border-color:#222; color:#ccc; }
+    .badge-type { background:#16213e; color:#aaa; font-size:10px; border:1px solid #333; }
+    label.form-label { color:#888; font-size:12px; margin-bottom:2px; }
+    hr { border-color:#222; }
+    .card { background:#16213e; border-color:#222; }
+    .card-header { background:#0f3460; border-color:#222; color:#aaa; font-size:13px; }
+    .input-group-text { background:#0a2040; border-color:#1a4a8a; color:#666; font-size:12px; }
+    .tab-pane { padding-top:12px; }
+    .nav-tabs { border-bottom:1px solid #333; }
+    .nav-tabs .nav-link { color:#666; border:none; padding:6px 12px; font-size:12px; }
+    .nav-tabs .nav-link.active { color:#e94560; background:#16213e; border-bottom:2px solid #e94560; }
+  </style>
+</head>
+<body>
+<div class="d-flex">
+
+  <!-- ═══════════════════════════════════════════════ SIDEBAR ═══ -->
+  <div class="sidebar">
+    <div style="padding:14px 16px 6px; font-weight:700; color:#e94560; font-size:15px;">⚡ Legacy API</div>
+
+    <div class="nav-header">Сессия</div>
+    <a class="nav-link" onclick="show('auth')">Auth / Login</a>
+    <a class="nav-link" onclick="show('session')">XSRF / Session</a>
+    <a class="nav-link" onclick="show('newdb')">My — новая БД</a>
+
+    <div class="nav-header">Данные</div>
+    <a class="nav-link" onclick="show('terms')">Terms — типы</a>
+    <a class="nav-link" onclick="show('list')">List — объекты</a>
+    <a class="nav-link" onclick="show('object')">Object — CRUD</a>
+    <a class="nav-link" onclick="show('meta')">Metadata</a>
+    <a class="nav-link" onclick="show('objmeta')">Obj Meta</a>
+    <a class="nav-link" onclick="show('dict')">Dict</a>
+    <a class="nav-link" onclick="show('list_join')">List Join</a>
+    <a class="nav-link" onclick="show('ref_reqs')">Ref Reqs</a>
+    <a class="nav-link" onclick="show('connect')">Connect</a>
+
+    <div class="nav-header">Структура (DDL)</div>
+    <a class="nav-link" onclick="show('d_main')">_d_main</a>
+    <a class="nav-link" onclick="show('ddl_type')">Тип — CRUD</a>
+    <a class="nav-link" onclick="show('ddl_req')">Реквизит</a>
+
+    <div class="nav-header">Отчёты</div>
+    <a class="nav-link" onclick="show('report')">Report — список</a>
+    <a class="nav-link" onclick="show('report_run')">Report — запуск</a>
+    <a class="nav-link" onclick="show('export')">Export CSV</a>
+
+    <div class="nav-header">Файлы</div>
+    <a class="nav-link" onclick="show('upload')">Upload</a>
+    <a class="nav-link" onclick="show('files')">Dir Admin</a>
+
+    <div class="nav-header">Права</div>
+    <a class="nav-link" onclick="show('grants')">Grants</a>
+    <a class="nav-link" onclick="show('check_grant')">Check Grant</a>
+
+    <div class="nav-header">Бэкап</div>
+    <a class="nav-link" onclick="show('backup')">Backup / Restore</a>
+    <a class="nav-link" onclick="show('csv_all')">CSV All</a>
+
+    <div class="nav-header">SQL / Debug</div>
+    <a class="nav-link" onclick="show('sql')">Raw SQL</a>
+    <a class="nav-link" onclick="show('log')">Request Log</a>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ MAIN ═══ -->
+  <div class="main">
+
+    <!-- SESSION BAR -->
+    <div class="session-bar mb-3" id="session-bar">
+      <span>DB: <b id="s-db">—</b></span>
+      <span>User: <b id="s-user">—</b></span>
+      <span>Token: <b id="s-token">—</b></span>
+      <span>XSRF: <b id="s-xsrf">—</b></span>
+      <span id="s-role" style="display:none">Role: <b id="s-roleval">—</b></span>
+    </div>
+
+    <!-- ─────────── AUTH ─────────── -->
+    <div id="panel-auth" class="panel active">
+      <div class="panel-title">Auth — POST /:db/auth</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">DB</label><input id="a-db" class="form-control" placeholder="my" value="my"></div>
+        <div class="col-3"><label class="form-label">Login</label><input id="a-login" class="form-control" placeholder="admin"></div>
+        <div class="col-3"><label class="form-label">Password</label><input id="a-pwd" class="form-control" type="password" placeholder="••••••"></div>
+        <div class="col-3 d-flex align-items-end gap-2">
+          <button class="btn btn-primary btn-sm" onclick="doAuth()">Login</button>
+          <button class="btn btn-secondary btn-sm" onclick="doExit()">Logout</button>
+        </div>
+      </div>
+      <hr>
+      <div class="panel-title" style="font-size:13px">Register — POST /my/register</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><input id="reg-login" class="form-control form-control-sm" placeholder="username"></div>
+        <div class="col-3"><input id="reg-pwd" class="form-control form-control-sm" type="password" placeholder="password"></div>
+        <div class="col-3"><input id="reg-email" class="form-control form-control-sm" placeholder="email (optional)"></div>
+        <div class="col-3"><button class="btn btn-sm btn-secondary" onclick="doRegister()">Register</button></div>
+      </div>
+      <pre class="result mt-2" id="r-auth">—</pre>
+    </div>
+
+    <!-- ─────────── SESSION ─────────── -->
+    <div id="panel-session" class="panel">
+      <div class="panel-title">XSRF — GET /:db/xsrf</div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doXsrf()">Refresh XSRF</button>
+      <hr>
+      <div class="panel-title" style="font-size:13px">Validate — GET /:db/validate</div>
+      <button class="btn btn-secondary btn-sm mb-2" onclick="doValidate()">Validate Token</button>
+      <pre class="result" id="r-session">—</pre>
+    </div>
+
+    <!-- ─────────── NEW DB ─────────── -->
+    <div id="panel-newdb" class="panel">
+      <div class="panel-title">My — POST /my/_new_db</div>
+      <div class="row g-2 mb-2">
+        <div class="col-4"><label class="form-label">DB name</label><input id="ndb-name" class="form-control form-control-sm" placeholder="mydb"></div>
+        <div class="col-4"><label class="form-label">Template</label><input id="ndb-tpl" class="form-control form-control-sm" placeholder="empty"></div>
+        <div class="col-4"><label class="form-label">Description</label><input id="ndb-desc" class="form-control form-control-sm"></div>
+      </div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doNewDb()">Create DB</button>
+      <pre class="result" id="r-newdb">—</pre>
+    </div>
+
+    <!-- ─────────── TERMS ─────────── -->
+    <div id="panel-terms" class="panel">
+      <div class="panel-title">Terms — GET /:db/terms</div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doTerms()">Load Types</button>
+      <div id="terms-table"></div>
+      <pre class="result mt-2" id="r-terms">—</pre>
+    </div>
+
+    <!-- ─────────── LIST ─────────── -->
+    <div id="panel-list" class="panel">
+      <div class="panel-title">List — GET /:db/_list/:typeId</div>
+      <div class="row g-2 mb-2">
+        <div class="col-2"><label class="form-label">Type ID</label><input id="lst-type" class="form-control form-control-sm"></div>
+        <div class="col-2"><label class="form-label">Parent (up)</label><input id="lst-up" class="form-control form-control-sm" value="0"></div>
+        <div class="col-2"><label class="form-label">Limit</label><input id="lst-limit" class="form-control form-control-sm" value="50"></div>
+        <div class="col-2"><label class="form-label">Offset (F)</label><input id="lst-offset" class="form-control form-control-sm" value="0"></div>
+        <div class="col-2"><label class="form-label">Search (q)</label><input id="lst-q" class="form-control form-control-sm"></div>
+        <div class="col-2 d-flex align-items-end">
+          <button class="btn btn-primary btn-sm" onclick="doList()">Load</button>
+        </div>
+      </div>
+      <div id="list-table"></div>
+      <pre class="result mt-2" id="r-list">—</pre>
+    </div>
+
+    <!-- ─────────── OBJECT CRUD ─────────── -->
+    <div id="panel-object" class="panel">
+      <div class="panel-title">Object CRUD</div>
+      <ul class="nav nav-tabs mb-0" id="obj-tabs">
+        <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-mnew">_m_new</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-msave">_m_save</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-mdel">_m_del</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-mset">_m_set</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-mmove">_m_move</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-mup">_m_up</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-mord">_m_ord</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-mid">_m_id</a></li>
+      </ul>
+      <div class="tab-content">
+        <div class="tab-pane active" id="tab-mnew">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Parent (up)</label><input id="mn-up" class="form-control form-control-sm" value="1"></div>
+            <div class="col-3"><label class="form-label">Type ID (t)</label><input id="mn-t" class="form-control form-control-sm"></div>
+            <div class="col-4"><label class="form-label">Value (val)</label><input id="mn-val" class="form-control form-control-sm"></div>
+            <div class="col-2 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doMNew()">Create</button></div>
+          </div>
+          <div class="mt-2"><label class="form-label">Extra attrs (JSON: {"t201":"val","t202":"val"})</label><input id="mn-attrs" class="form-control form-control-sm" placeholder='{"t201":"value"}'></div>
+        </div>
+        <div class="tab-pane" id="tab-msave">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Object ID</label><input id="ms-id" class="form-control form-control-sm"></div>
+            <div class="col-4"><label class="form-label">New value (val)</label><input id="ms-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doMSave()">Save</button><button class="btn btn-secondary btn-sm ms-1" onclick="doMCopy()">Copy</button></div>
+          </div>
+          <div class="mt-2"><label class="form-label">Attrs JSON</label><input id="ms-attrs" class="form-control form-control-sm" placeholder='{"t201":"value"}'></div>
+        </div>
+        <div class="tab-pane" id="tab-mdel">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Object ID</label><input id="md-id" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">Cascade</label><select id="md-cascade" class="form-select form-select-sm"><option value="0">No</option><option value="1">Yes</option></select></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-danger btn-sm" onclick="doMDel()">Delete</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-mset">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Object ID</label><input id="mset-id" class="form-control form-control-sm"></div>
+            <div class="col-4"><label class="form-label">New value</label><input id="mset-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doMSet()">Set Val</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-mmove">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Object ID</label><input id="mmove-id" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">New parent (up)</label><input id="mmove-up" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doMMove()">Move</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-mup">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Object ID</label><input id="mup-id" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doMUp()">Move Up ↑</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-mord">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Object ID</label><input id="mord-id" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">New ord</label><input id="mord-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doMOrd()">Set Order</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-mid">
+          <div class="row g-2">
+            <div class="col-3"><label class="form-label">Old ID</label><input id="mid-old" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">New ID</label><input id="mid-new" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-danger btn-sm" onclick="doMId()">Rename ID</button></div>
+          </div>
+        </div>
+      </div>
+      <pre class="result mt-2" id="r-object">—</pre>
+    </div>
+
+    <!-- ─────────── METADATA ─────────── -->
+    <div id="panel-meta" class="panel">
+      <div class="panel-title">Metadata — GET /:db/metadata/:typeId</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Type ID (blank = all)</label><input id="meta-id" class="form-control form-control-sm"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doMeta()">Fetch</button></div>
+      </div>
+      <div id="meta-table"></div>
+      <pre class="result mt-2" id="r-meta">—</pre>
+    </div>
+
+    <!-- ─────────── OBJ META ─────────── -->
+    <div id="panel-objmeta" class="panel">
+      <div class="panel-title">Obj Meta — GET /:db/obj_meta/:id</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Object ID</label><input id="om-id" class="form-control form-control-sm"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doObjMeta()">Fetch</button></div>
+      </div>
+      <pre class="result" id="r-objmeta">—</pre>
+    </div>
+
+    <!-- ─────────── DICT ─────────── -->
+    <div id="panel-dict" class="panel">
+      <div class="panel-title">Dict — GET /:db/_dict/:typeId?</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Type ID (blank = all)</label><input id="dict-id" class="form-control form-control-sm"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDict()">Fetch</button></div>
+      </div>
+      <pre class="result" id="r-dict">—</pre>
+    </div>
+
+    <!-- ─────────── LIST JOIN ─────────── -->
+    <div id="panel-list_join" class="panel">
+      <div class="panel-title">List Join — GET /:db/_list_join/:typeId</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Type ID</label><input id="lj-type" class="form-control form-control-sm"></div>
+        <div class="col-2"><label class="form-label">Limit</label><input id="lj-limit" class="form-control form-control-sm" value="50"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doListJoin()">Load</button></div>
+      </div>
+      <pre class="result" id="r-list_join">—</pre>
+    </div>
+
+    <!-- ─────────── REF REQS ─────────── -->
+    <div id="panel-ref_reqs" class="panel">
+      <div class="panel-title">Ref Reqs — GET /:db/_ref_reqs/:refId</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Ref ID</label><input id="rr-id" class="form-control form-control-sm"></div>
+        <div class="col-3"><label class="form-label">Search (q)</label><input id="rr-q" class="form-control form-control-sm"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doRefReqs()">Fetch</button></div>
+      </div>
+      <pre class="result" id="r-ref_reqs">—</pre>
+    </div>
+
+    <!-- ─────────── CONNECT ─────────── -->
+    <div id="panel-connect" class="panel">
+      <div class="panel-title">Connect — GET /:db/_connect</div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doConnect()">Check Connect</button>
+      <pre class="result" id="r-connect">—</pre>
+    </div>
+
+    <!-- ─────────── D_MAIN ─────────── -->
+    <div id="panel-d_main" class="panel">
+      <div class="panel-title">_d_main — GET /:db/_d_main/:typeId</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Type ID</label><input id="dm-id" class="form-control form-control-sm"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDMain()">Fetch</button></div>
+      </div>
+      <pre class="result" id="r-d_main">—</pre>
+    </div>
+
+    <!-- ─────────── DDL TYPE ─────────── -->
+    <div id="panel-ddl_type" class="panel">
+      <div class="panel-title">Type DDL</div>
+      <ul class="nav nav-tabs mb-0">
+        <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-dnew">_d_new</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dsave">_d_save</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-ddel">_d_del</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dref">_d_ref</a></li>
+      </ul>
+      <div class="tab-content">
+        <div class="tab-pane active" id="tab-dnew">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Parent type (blank = root)</label><input id="dn-parent" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">Name (val)</label><input id="dn-val" class="form-control form-control-sm"></div>
+            <div class="col-2"><label class="form-label">Base type (t)</label><input id="dn-t" class="form-control form-control-sm" value="8" placeholder="8=CHARS"></div>
+            <div class="col-2 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDNew()">Create Type</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dsave">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Type ID</label><input id="ds-id" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">New name (val)</label><input id="ds-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDSave()">Save Type</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-ddel">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Type ID</label><input id="dd-id" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-danger btn-sm" onclick="doDDel()">Delete Type</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dref">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Parent type ID</label><input id="dref-parent" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">Ref type ID (val)</label><input id="dref-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDRef()">Add Reference</button></div>
+          </div>
+        </div>
+      </div>
+      <pre class="result mt-2" id="r-ddl_type">—</pre>
+    </div>
+
+    <!-- ─────────── DDL REQ ─────────── -->
+    <div id="panel-ddl_req" class="panel">
+      <div class="panel-title">Requisite DDL</div>
+      <ul class="nav nav-tabs mb-0">
+        <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-dreq">_d_req</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dalias">_d_alias</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dnull">_d_null</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dmulti">_d_multi</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dattrs">_d_attrs</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dup">_d_up</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-dord">_d_ord</a></li>
+        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-ddelreq">_d_del_req</a></li>
+      </ul>
+      <div class="tab-content">
+        <div class="tab-pane active" id="tab-dreq">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Type ID</label><input id="dreq-type" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">Req type (t)</label><input id="dreq-t" class="form-control form-control-sm" placeholder="8=CHARS"></div>
+            <div class="col-3"><label class="form-label">Name (val)</label><input id="dreq-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDReq()">Add Req</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dalias">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Req ID</label><input id="dal-id" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">Alias</label><input id="dal-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDAl()">Set Alias</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dnull">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Req ID</label><input id="dnull-id" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDNull()">Toggle NULL</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dmulti">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Req ID</label><input id="dmulti-id" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDMulti()">Toggle Multi</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dattrs">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Req ID</label><input id="dattrs-id" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">Attrs JSON</label><input id="dattrs-val" class="form-control form-control-sm" placeholder='{"mask":"dd.mm.yyyy"}'></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDAtt()">Set Attrs</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dup">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Req ID</label><input id="dup-id" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDUp()">Move Up ↑</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-dord">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Req ID</label><input id="dord-id" class="form-control form-control-sm"></div>
+            <div class="col-3"><label class="form-label">New ord</label><input id="dord-val" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doDOrd()">Set Order</button></div>
+          </div>
+        </div>
+        <div class="tab-pane" id="tab-ddelreq">
+          <div class="row g-2 mt-1">
+            <div class="col-3"><label class="form-label">Req ID</label><input id="ddelr-id" class="form-control form-control-sm"></div>
+            <div class="col-3 d-flex align-items-end"><button class="btn btn-danger btn-sm" onclick="doDDelR()">Delete Req</button></div>
+          </div>
+        </div>
+      </div>
+      <pre class="result mt-2" id="r-ddl_req">—</pre>
+    </div>
+
+    <!-- ─────────── REPORT LIST ─────────── -->
+    <div id="panel-report" class="panel">
+      <div class="panel-title">Reports — GET /:db/report</div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doReportList()">Load Reports</button>
+      <div id="report-list-table"></div>
+      <pre class="result mt-2" id="r-report">—</pre>
+    </div>
+
+    <!-- ─────────── REPORT RUN ─────────── -->
+    <div id="panel-report_run" class="panel">
+      <div class="panel-title">Report Run — POST /:db/report/:id?execute</div>
+      <div class="row g-2 mb-2">
+        <div class="col-2"><label class="form-label">Report ID</label><input id="rr-rid" class="form-control form-control-sm"></div>
+        <div class="col-2"><label class="form-label">Limit</label><input id="rr-limit" class="form-control form-control-sm" value="100"></div>
+        <div class="col-2"><label class="form-label">Offset</label><input id="rr-offset" class="form-control form-control-sm" value="0"></div>
+        <div class="col-2"><label class="form-label">Format</label>
+          <select id="rr-format" class="form-select form-select-sm">
+            <option value="">Default</option>
+            <option value="JSON_KV">JSON_KV</option>
+            <option value="JSON_CR">JSON_CR</option>
+            <option value="csv">CSV</option>
+          </select>
+        </div>
+        <div class="col-4 d-flex align-items-end gap-1">
+          <button class="btn btn-primary btn-sm" onclick="doReportRun()">Run</button>
+          <button class="btn btn-secondary btn-sm" onclick="doReportMeta()">Metadata only</button>
+        </div>
+      </div>
+      <div class="mb-2"><label class="form-label">Filters JSON ({"col_alias":{"from":"","to":"","eq":"","like":""}})</label>
+        <input id="rr-filters" class="form-control form-control-sm" placeholder='{"c501":{"like":"smith"}}'>
+      </div>
+      <div id="report-run-table"></div>
+      <pre class="result mt-2" id="r-report_run">—</pre>
+    </div>
+
+    <!-- ─────────── EXPORT ─────────── -->
+    <div id="panel-export" class="panel">
+      <div class="panel-title">Export — GET /:db/export/:typeId</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Type ID</label><input id="exp-type" class="form-control form-control-sm"></div>
+        <div class="col-3"><label class="form-label">Format</label>
+          <select id="exp-format" class="form-select form-select-sm">
+            <option value="csv">CSV</option>
+            <option value="json">JSON</option>
+          </select>
+        </div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doExport()">Export</button></div>
+      </div>
+      <pre class="result" id="r-export">—</pre>
+    </div>
+
+    <!-- ─────────── UPLOAD ─────────── -->
+    <div id="panel-upload" class="panel">
+      <div class="panel-title">Upload — POST /:db/upload</div>
+      <div class="row g-2 mb-2">
+        <div class="col-12"><label class="form-label">File</label><input id="up-file" type="file" class="form-control form-control-sm"></div>
+      </div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doUpload()">Upload</button>
+      <hr>
+      <div class="panel-title" style="font-size:13px">Download — GET /:db/download/:filename</div>
+      <div class="row g-2 mb-2">
+        <div class="col-5"><label class="form-label">Filename</label><input id="dl-file" class="form-control form-control-sm" placeholder="file.pdf"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-secondary btn-sm" onclick="doDownload()">Download</button></div>
+      </div>
+      <pre class="result" id="r-upload">—</pre>
+    </div>
+
+    <!-- ─────────── DIR ADMIN ─────────── -->
+    <div id="panel-files" class="panel">
+      <div class="panel-title">Dir Admin — GET /:db/dir_admin</div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doDirAdmin()">Load Files</button>
+      <pre class="result" id="r-files">—</pre>
+    </div>
+
+    <!-- ─────────── GRANTS ─────────── -->
+    <div id="panel-grants" class="panel">
+      <div class="panel-title">Grants — GET /:db/grants</div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doGrants()">Load Grants</button>
+      <hr>
+      <div class="panel-title" style="font-size:13px">Check Grant — POST /:db/check_grant</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Object ID</label><input id="cg-id" class="form-control form-control-sm"></div>
+        <div class="col-3"><label class="form-label">Grant level</label>
+          <select id="cg-grant" class="form-select form-select-sm">
+            <option>VIEW</option><option>EDIT</option><option>DELETE</option><option>EXPORT</option>
+          </select>
+        </div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doCheckGrant()">Check</button></div>
+      </div>
+      <pre class="result" id="r-grants">—</pre>
+    </div>
+
+    <!-- ─────────── CHECK GRANT ─────────── -->
+    <div id="panel-check_grant" class="panel">
+      <div class="panel-title">Check Grant — POST /:db/check_grant</div>
+      <div class="row g-2 mb-2">
+        <div class="col-3"><label class="form-label">Object ID</label><input id="cg2-id" class="form-control form-control-sm"></div>
+        <div class="col-3"><label class="form-label">Grant</label><input id="cg2-grant" class="form-control form-control-sm" value="EXPORT"></div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doCheckGrant2()">Check</button></div>
+      </div>
+      <pre class="result" id="r-check_grant">—</pre>
+    </div>
+
+    <!-- ─────────── BACKUP ─────────── -->
+    <div id="panel-backup" class="panel">
+      <div class="panel-title">Backup — GET /:db/backup → .dmp.zip</div>
+      <button class="btn btn-primary btn-sm mb-3" onclick="doBackup()">Download Backup</button>
+      <hr>
+      <div class="panel-title" style="font-size:13px">Restore — POST /:db/restore</div>
+      <div class="row g-2 mb-2">
+        <div class="col-12"><label class="form-label">Dump content (paste .dmp text here)</label>
+          <textarea id="rst-content" class="form-control form-control-sm" rows="4" placeholder="Paste .dmp file content..."></textarea>
+        </div>
+      </div>
+      <button class="btn btn-danger btn-sm mb-2" onclick="doRestore()">Generate INSERT SQL</button>
+      <pre class="result" id="r-backup">—</pre>
+    </div>
+
+    <!-- ─────────── CSV ALL ─────────── -->
+    <div id="panel-csv_all" class="panel">
+      <div class="panel-title">CSV All — GET /:db/csv_all → .csv.zip</div>
+      <button class="btn btn-primary btn-sm mb-2" onclick="doCsvAll()">Download CSV All</button>
+      <pre class="result" id="r-csv_all">—</pre>
+    </div>
+
+    <!-- ─────────── RAW SQL ─────────── -->
+    <div id="panel-sql" class="panel">
+      <div class="panel-title">Raw — POST /:db (action=sql) / прямой запрос к API</div>
+      <div class="row g-2 mb-2">
+        <div class="col-2"><label class="form-label">Endpoint path</label><input id="sql-path" class="form-control form-control-sm" placeholder="/:db/_list/100"></div>
+        <div class="col-1"><label class="form-label">Method</label>
+          <select id="sql-method" class="form-select form-select-sm">
+            <option>GET</option><option>POST</option>
+          </select>
+        </div>
+        <div class="col-3 d-flex align-items-end"><button class="btn btn-primary btn-sm" onclick="doRaw()">Send</button></div>
+      </div>
+      <div class="mb-2"><label class="form-label">Body (JSON or form, POST only)</label>
+        <textarea id="sql-body" class="form-control form-control-sm" rows="3" placeholder='{"action":"sql","q":"SELECT id,val FROM db LIMIT 10"}'></textarea>
+      </div>
+      <div class="mb-2"><label class="form-label">Query params (?key=val&key2=val2)</label>
+        <input id="sql-qs" class="form-control form-control-sm" placeholder="JSON&LIMIT=20">
+      </div>
+      <pre class="result" id="r-sql">—</pre>
+    </div>
+
+    <!-- ─────────── LOG ─────────── -->
+    <div id="panel-log" class="panel">
+      <div class="panel-title d-flex justify-content-between">
+        Request Log
+        <button class="btn btn-sm btn-secondary" onclick="clearLog()">Clear</button>
+      </div>
+      <table class="table table-sm table-dark table-hover">
+        <thead><tr><th>Method</th><th>URL</th><th>Status</th><th>Time</th></tr></thead>
+        <tbody id="log-body"></tbody>
+      </table>
+      <div class="panel-title mt-3" style="font-size:13px">Last Response</div>
+      <pre class="result" id="r-log">—</pre>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /flex -->
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ─── Session ──────────────────────────────────────────────────────────────────
+const S = { db:'', token:'', xsrf:'', user:'' };
+const LOGS = [];
+
+function getDb(){ return S.db || document.getElementById('a-db')?.value?.trim() || 'my'; }
+
+function setResult(id, text){
+  const el = document.getElementById(id);
+  if(el) el.textContent = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
+  document.getElementById('r-log').textContent = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
+}
+
+function updateBar(){
+  document.getElementById('s-db').textContent    = S.db    || '—';
+  document.getElementById('s-user').textContent  = S.user  || '—';
+  document.getElementById('s-token').textContent = S.token ? S.token.slice(0,14)+'…' : '—';
+  document.getElementById('s-xsrf').textContent  = S.xsrf  ? S.xsrf.slice(0,14)+'…'  : '—';
+}
+
+// ─── Navigation ───────────────────────────────────────────────────────────────
+function show(name){
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+  const panel = document.getElementById('panel-'+name);
+  if(panel) panel.classList.add('active');
+  event?.target?.classList?.add('active');
+}
+
+// ─── HTTP core ────────────────────────────────────────────────────────────────
+async function call(method, path, body=null, qs=''){
+  const db = getDb();
+  const url = path.replace(':db', db) + (qs ? (path.includes('?')?'&':'?')+qs : '');
+  const t0 = performance.now();
+  const opts = { method, credentials:'include', headers:{} };
+  if(body && method==='POST'){
+    opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    opts.body = typeof body === 'string' ? body : new URLSearchParams(body).toString();
+  }
+  if(method==='POST' && S.xsrf) opts.headers['X-XSRF-TOKEN'] = S.xsrf;
+
+  let status=0, data=null, text='';
+  try{
+    const r = await fetch(url, opts);
+    status = r.status;
+    const ct = r.headers.get('content-type')||'';
+    if(ct.includes('json')){
+      data = await r.json();
+      text = JSON.stringify(data, null, 2);
+    } else if(ct.includes('zip')||ct.includes('octet')){
+      const blob = await r.blob();
+      const cd = r.headers.get('content-disposition')||'';
+      const fn = (cd.match(/filename="?([^"]+)"?/)||[])[1] || 'download';
+      const a = Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:fn});
+      a.click(); URL.revokeObjectURL(a.href);
+      text = `[Downloaded: ${fn} — ${blob.size} bytes]`;
+    } else {
+      text = await r.text();
+      data = text;
+    }
+  }catch(e){ text='Fetch error: '+e.message; }
+  addLog(method, url, status, Math.round(performance.now()-t0));
+  return {status, data, text};
+}
+
+function addLog(m,u,s,ms){
+  LOGS.unshift({m,u,s,ms});
+  if(LOGS.length>50) LOGS.pop();
+  const tbody = document.getElementById('log-body');
+  if(tbody) tbody.innerHTML = LOGS.map(l=>`
+    <tr class="log-row">
+      <td class="${l.s>=200&&l.s<300?'ok':l.s>=300&&l.s<400?'warn':'err'}">${l.m}</td>
+      <td class="text-truncate" style="max-width:350px" title="${l.u}">${l.u}</td>
+      <td class="${l.s>=200&&l.s<300?'ok':l.s>=300&&l.s<400?'warn':'err'}">${l.s}</td>
+      <td>${l.ms}ms</td>
+    </tr>`).join('');
+}
+function clearLog(){ LOGS.length=0; document.getElementById('log-body').innerHTML=''; }
+
+function renderTable(data, id){
+  const el = document.getElementById(id);
+  if(!el) return;
+  if(!Array.isArray(data)||data.length===0){ el.innerHTML=''; return; }
+  const keys = Object.keys(data[0]);
+  el.innerHTML = `<div class="table-responsive"><table class="table table-sm table-dark data-table">
+    <thead><tr>${keys.map(k=>`<th>${k}</th>`).join('')}</tr></thead>
+    <tbody>${data.map(row=>`<tr>${keys.map(k=>`<td>${row[k]??''}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+async function doAuth(){
+  const db=document.getElementById('a-db').value.trim();
+  const login=document.getElementById('a-login').value.trim();
+  const pwd=document.getElementById('a-pwd').value;
+  const {data,text} = await call('POST',`/${db}/auth`+`?JSON`,{login,pwd},'');
+  setResult('r-auth', text);
+  if(data&&!Array.isArray(data)&&data.token){
+    S.db=db; S.token=data.token; S.xsrf=data._xsrf||''; S.user=login;
+    updateBar();
+  }
+}
+async function doExit(){
+  const {text} = await call('GET','/:db/exit?JSON');
+  S.token=S.xsrf=S.user=''; updateBar(); setResult('r-auth',text);
+}
+async function doRegister(){
+  const login=document.getElementById('reg-login').value.trim();
+  const pwd=document.getElementById('reg-pwd').value;
+  const email=document.getElementById('reg-email').value.trim();
+  const {text} = await call('POST','/my/register',{login,pwd,email});
+  setResult('r-auth',text);
+}
+
+// ─── Session ──────────────────────────────────────────────────────────────────
+async function doXsrf(){
+  const {data,text} = await call('GET','/:db/xsrf?JSON');
+  setResult('r-session',text);
+  if(data&&data._xsrf){ S.xsrf=data._xsrf; if(data.token) S.token=data.token; updateBar(); }
+}
+async function doValidate(){
+  const {text} = await call('GET','/:db/validate?JSON');
+  setResult('r-session',text);
+}
+async function doNewDb(){
+  const db=document.getElementById('ndb-name').value.trim();
+  const template=document.getElementById('ndb-tpl').value.trim()||'empty';
+  const descr=document.getElementById('ndb-desc').value.trim();
+  const {text} = await call('POST','/my/_new_db',{db,template,descr});
+  setResult('r-newdb',text);
+}
+
+// ─── Terms ────────────────────────────────────────────────────────────────────
+async function doTerms(){
+  const {data,text} = await call('GET','/:db/terms?JSON');
+  setResult('r-terms',text);
+  renderTable(Array.isArray(data)?data:[], 'terms-table');
+}
+
+// ─── List ─────────────────────────────────────────────────────────────────────
+async function doList(){
+  const t=document.getElementById('lst-type').value.trim();
+  if(!t){alert('Enter type ID'); return;}
+  const up=document.getElementById('lst-up').value||'0';
+  const lim=document.getElementById('lst-limit').value||'50';
+  const off=document.getElementById('lst-offset').value||'0';
+  const q=document.getElementById('lst-q').value;
+  const qs=`JSON&up=${up}&LIMIT=${lim}&F=${off}`+(q?`&q=${encodeURIComponent(q)}`:'');
+  const {data,text} = await call('GET',`/:db/_list/${t}`,'',qs);
+  setResult('r-list',text);
+  renderTable(Array.isArray(data)?data:[], 'list-table');
+}
+
+// ─── Object CRUD ──────────────────────────────────────────────────────────────
+async function doMNew(){
+  const up=document.getElementById('mn-up').value||'1';
+  const t=document.getElementById('mn-t').value.trim();
+  if(!t){alert('Enter type ID'); return;}
+  const val=document.getElementById('mn-val').value;
+  const body={t,val};
+  try{ Object.assign(body, JSON.parse(document.getElementById('mn-attrs').value||'{}')); }catch(e){}
+  const {text} = await call('POST',`/:db/_m_new/${up}?JSON`,body);
+  setResult('r-object',text);
+}
+async function doMSave(){
+  const id=document.getElementById('ms-id').value.trim();
+  if(!id){alert('Enter object ID'); return;}
+  const val=document.getElementById('ms-val').value;
+  const body={val};
+  try{ Object.assign(body, JSON.parse(document.getElementById('ms-attrs').value||'{}')); }catch(e){}
+  const {text} = await call('POST',`/:db/_m_save/${id}?JSON`,body);
+  setResult('r-object',text);
+}
+async function doMCopy(){
+  const id=document.getElementById('ms-id').value.trim();
+  if(!id){alert('Enter object ID'); return;}
+  const {text} = await call('POST',`/:db/_m_save/${id}?JSON&copybtn`,{});
+  setResult('r-object',text);
+}
+async function doMDel(){
+  const id=document.getElementById('md-id').value.trim();
+  if(!id){alert('Enter object ID'); return;}
+  if(!confirm(`Delete ${id}?`)) return;
+  const cascade=document.getElementById('md-cascade').value;
+  const {text} = await call('POST',`/:db/_m_del/${id}?JSON`,{cascade});
+  setResult('r-object',text);
+}
+async function doMSet(){
+  const id=document.getElementById('mset-id').value.trim();
+  const val=document.getElementById('mset-val').value;
+  const {text} = await call('POST',`/:db/_m_set/${id}?JSON`,{val});
+  setResult('r-object',text);
+}
+async function doMMove(){
+  const id=document.getElementById('mmove-id').value.trim();
+  const up=document.getElementById('mmove-up').value.trim();
+  const {text} = await call('POST',`/:db/_m_move/${id}?JSON`,{up});
+  setResult('r-object',text);
+}
+async function doMUp(){
+  const id=document.getElementById('mup-id').value.trim();
+  const {text} = await call('POST',`/:db/_m_up/${id}?JSON`,{});
+  setResult('r-object',text);
+}
+async function doMOrd(){
+  const id=document.getElementById('mord-id').value.trim();
+  const ord=document.getElementById('mord-val').value;
+  const {text} = await call('POST',`/:db/_m_ord/${id}?JSON`,{ord});
+  setResult('r-object',text);
+}
+async function doMId(){
+  const oldId=document.getElementById('mid-old').value.trim();
+  const newId=document.getElementById('mid-new').value.trim();
+  if(!oldId||!newId){alert('Enter both IDs'); return;}
+  if(!confirm(`Rename ${oldId}→${newId}?`)) return;
+  const {text} = await call('POST',`/:db/_m_id/${oldId}?JSON`,{new_id:newId});
+  setResult('r-object',text);
+}
+
+// ─── Metadata ─────────────────────────────────────────────────────────────────
+async function doMeta(){
+  const id=document.getElementById('meta-id').value.trim();
+  const path=id ? `/:db/metadata/${id}` : '/:db/metadata';
+  const {data,text} = await call('GET',path+'?JSON');
+  setResult('r-meta',text);
+  const arr = Array.isArray(data)?data:(data&&data.id?[data]:[]);
+  if(arr.length>0){
+    renderTable(arr.map(t=>({id:t.id,up:t.up,type:t.type,val:t.val,reqs:(t.reqs||[]).length+' reqs'})),'meta-table');
+  }
+}
+async function doObjMeta(){
+  const id=document.getElementById('om-id').value.trim();
+  if(!id){alert('Enter object ID'); return;}
+  const {text} = await call('GET',`/:db/obj_meta/${id}?JSON`);
+  setResult('r-objmeta',text);
+}
+async function doDict(){
+  const id=document.getElementById('dict-id').value.trim();
+  const path=id ? `/:db/_dict/${id}` : '/:db/_dict';
+  const {text} = await call('GET',path+'?JSON');
+  setResult('r-dict',text);
+}
+async function doListJoin(){
+  const t=document.getElementById('lj-type').value.trim();
+  if(!t){alert('Enter type ID'); return;}
+  const lim=document.getElementById('lj-limit').value||'50';
+  const {text} = await call('GET',`/:db/_list_join/${t}?JSON&LIMIT=${lim}`);
+  setResult('r-list_join',text);
+}
+async function doRefReqs(){
+  const id=document.getElementById('rr-id').value.trim();
+  if(!id){alert('Enter ref ID'); return;}
+  const q=document.getElementById('rr-q').value;
+  const qs=`JSON`+(q?`&q=${encodeURIComponent(q)}`:'');
+  const {text} = await call('GET',`/:db/_ref_reqs/${id}`,null,qs);
+  setResult('r-ref_reqs',text);
+}
+async function doConnect(){
+  const {text} = await call('GET','/:db/_connect?JSON');
+  setResult('r-connect',text);
+}
+async function doDMain(){
+  const id=document.getElementById('dm-id').value.trim();
+  if(!id){alert('Enter type ID'); return;}
+  const {text} = await call('GET',`/:db/_d_main/${id}?JSON`);
+  setResult('r-d_main',text);
+}
+
+// ─── DDL Type ─────────────────────────────────────────────────────────────────
+async function doDNew(){
+  const parent=document.getElementById('dn-parent').value.trim();
+  const val=document.getElementById('dn-val').value.trim();
+  const t=document.getElementById('dn-t').value||'8';
+  const url = parent ? `/:db/_d_new/${parent}?JSON` : '/:db/_d_new?JSON';
+  const {text} = await call('POST',url,{val,t});
+  setResult('r-ddl_type',text);
+}
+async function doDSave(){
+  const id=document.getElementById('ds-id').value.trim();
+  const val=document.getElementById('ds-val').value;
+  const {text} = await call('POST',`/:db/_d_save/${id}?JSON`,{val});
+  setResult('r-ddl_type',text);
+}
+async function doDDel(){
+  const id=document.getElementById('dd-id').value.trim();
+  if(!confirm(`Delete type ${id}?`)) return;
+  const {text} = await call('POST',`/:db/_d_del/${id}?JSON`,{});
+  setResult('r-ddl_type',text);
+}
+async function doDRef(){
+  const parent=document.getElementById('dref-parent').value.trim();
+  const val=document.getElementById('dref-val').value.trim();
+  const {text} = await call('POST',`/:db/_d_ref/${parent}?JSON`,{val});
+  setResult('r-ddl_type',text);
+}
+
+// ─── DDL Req ──────────────────────────────────────────────────────────────────
+async function doDReq(){
+  const type=document.getElementById('dreq-type').value.trim();
+  const t=document.getElementById('dreq-t').value;
+  const val=document.getElementById('dreq-val').value;
+  const {text} = await call('POST',`/:db/_d_req/${type}?JSON`,{t,val});
+  setResult('r-ddl_req',text);
+}
+async function doDAl(){
+  const id=document.getElementById('dal-id').value.trim();
+  const val=document.getElementById('dal-val').value;
+  const {text} = await call('POST',`/:db/_d_alias/${id}?JSON`,{val});
+  setResult('r-ddl_req',text);
+}
+async function doDNull(){
+  const id=document.getElementById('dnull-id').value.trim();
+  const {text} = await call('POST',`/:db/_d_null/${id}?JSON`,{});
+  setResult('r-ddl_req',text);
+}
+async function doDMulti(){
+  const id=document.getElementById('dmulti-id').value.trim();
+  const {text} = await call('POST',`/:db/_d_multi/${id}?JSON`,{});
+  setResult('r-ddl_req',text);
+}
+async function doDAtt(){
+  const id=document.getElementById('dattrs-id').value.trim();
+  const val=document.getElementById('dattrs-val').value;
+  const {text} = await call('POST',`/:db/_d_attrs/${id}?JSON`,{val});
+  setResult('r-ddl_req',text);
+}
+async function doDUp(){
+  const id=document.getElementById('dup-id').value.trim();
+  const {text} = await call('POST',`/:db/_d_up/${id}?JSON`,{});
+  setResult('r-ddl_req',text);
+}
+async function doDOrd(){
+  const id=document.getElementById('dord-id').value.trim();
+  const val=document.getElementById('dord-val').value;
+  const {text} = await call('POST',`/:db/_d_ord/${id}?JSON`,{val});
+  setResult('r-ddl_req',text);
+}
+async function doDDelR(){
+  const id=document.getElementById('ddelr-id').value.trim();
+  if(!confirm(`Delete req ${id}?`)) return;
+  const {text} = await call('POST',`/:db/_d_del_req/${id}?JSON`,{});
+  setResult('r-ddl_req',text);
+}
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+async function doReportList(){
+  const {data,text} = await call('GET','/:db/report?JSON');
+  setResult('r-report',text);
+  const arr = data?.reports || (Array.isArray(data)?data:[]);
+  renderTable(arr, 'report-list-table');
+}
+async function doReportMeta(){
+  const id=document.getElementById('rr-rid').value.trim();
+  if(!id){alert('Enter report ID'); return;}
+  const {text} = await call('GET',`/:db/report/${id}?JSON`);
+  setResult('r-report_run',text);
+}
+async function doReportRun(){
+  const id=document.getElementById('rr-rid').value.trim();
+  if(!id){alert('Enter report ID'); return;}
+  const lim=document.getElementById('rr-limit').value||'100';
+  const off=document.getElementById('rr-offset').value||'0';
+  const fmt=document.getElementById('rr-format').value;
+  let filters={};
+  try{ filters=JSON.parse(document.getElementById('rr-filters').value||'{}'); }catch(e){}
+  const body={LIMIT:lim, F:off, ...Object.entries(filters).reduce((a,[k,v])=>{
+    if(v.from) a[`FR_${k}`]=v.from;
+    if(v.to)   a[`TO_${k}`]=v.to;
+    if(v.eq)   a[`EQ_${k}`]=v.eq;
+    if(v.like) a[`LIKE_${k}`]=v.like;
+    return a;
+  },{})};
+  const qs = 'JSON'+(fmt&&fmt!=='csv'?'&'+fmt:'');
+  const url = `/:db/report/${id}?execute` + (fmt==='csv'?'&format=csv':'');
+  const {data,text} = await call('POST',url,body,qs);
+  setResult('r-report_run',text);
+  const rows = data?.data || (Array.isArray(data)?data:[]);
+  if(rows.length>0) renderTable(rows,'report-run-table');
+}
+
+// ─── Export ───────────────────────────────────────────────────────────────────
+async function doExport(){
+  const t=document.getElementById('exp-type').value.trim();
+  if(!t){alert('Enter type ID'); return;}
+  const fmt=document.getElementById('exp-format').value;
+  const {text} = await call('GET',`/:db/export/${t}?format=${fmt}`);
+  setResult('r-export',text);
+}
+
+// ─── Upload / Download ────────────────────────────────────────────────────────
+async function doUpload(){
+  const fileEl=document.getElementById('up-file');
+  if(!fileEl.files[0]){alert('Select a file'); return;}
+  const fd=new FormData();
+  fd.append('file', fileEl.files[0]);
+  const db=getDb();
+  const t0=performance.now();
+  try{
+    const r=await fetch(`/${db}/upload`,{method:'POST',credentials:'include',body:fd});
+    const data=await r.json().catch(()=>({}));
+    addLog('POST',`/${db}/upload`,r.status,Math.round(performance.now()-t0));
+    setResult('r-upload',JSON.stringify(data,null,2));
+  }catch(e){ setResult('r-upload','Error: '+e.message); }
+}
+async function doDownload(){
+  const fn=document.getElementById('dl-file').value.trim();
+  if(!fn){alert('Enter filename'); return;}
+  const {text} = await call('GET',`/:db/download/${fn}`);
+  setResult('r-upload',text);
+}
+async function doDirAdmin(){
+  const {text} = await call('GET','/:db/dir_admin?JSON');
+  setResult('r-files',text);
+}
+
+// ─── Grants ───────────────────────────────────────────────────────────────────
+async function doGrants(){
+  const {text} = await call('GET','/:db/grants?JSON');
+  setResult('r-grants',text);
+}
+async function doCheckGrant(){
+  const id=document.getElementById('cg-id').value.trim();
+  const grant=document.getElementById('cg-grant').value;
+  const {text} = await call('POST','/:db/check_grant?JSON',{id,grant});
+  setResult('r-grants',text);
+}
+async function doCheckGrant2(){
+  const id=document.getElementById('cg2-id').value.trim();
+  const grant=document.getElementById('cg2-grant').value;
+  const {text} = await call('POST','/:db/check_grant?JSON',{id,grant});
+  setResult('r-check_grant',text);
+}
+
+// ─── Backup / Restore ────────────────────────────────────────────────────────
+async function doBackup(){
+  const db=getDb(); const t0=performance.now();
+  try{
+    const r=await fetch(`/${db}/backup`,{credentials:'include'});
+    addLog('GET',`/${db}/backup`,r.status,Math.round(performance.now()-t0));
+    if(r.status!==200){ setResult('r-backup',await r.text()); return; }
+    const blob=await r.blob();
+    const cd=r.headers.get('content-disposition')||'';
+    const fn=(cd.match(/filename="?([^"]+)"?/)||[])[1]||`${db}_backup.dmp.zip`;
+    const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:fn});
+    a.click(); URL.revokeObjectURL(a.href);
+    setResult('r-backup',`Downloaded: ${fn} (${blob.size} bytes)`);
+  }catch(e){ setResult('r-backup','Error: '+e.message); }
+}
+async function doRestore(){
+  const content=document.getElementById('rst-content').value;
+  if(!content){alert('Paste dump content'); return;}
+  const {text} = await call('POST','/:db/restore',{content});
+  setResult('r-backup',text);
+}
+async function doCsvAll(){
+  const db=getDb(); const t0=performance.now();
+  try{
+    const r=await fetch(`/${db}/csv_all`,{credentials:'include'});
+    addLog('GET',`/${db}/csv_all`,r.status,Math.round(performance.now()-t0));
+    if(r.status!==200){ setResult('r-csv_all',await r.text()); return; }
+    const blob=await r.blob();
+    const cd=r.headers.get('content-disposition')||'';
+    const fn=(cd.match(/filename="?([^"]+)"?/)||[])[1]||`${db}_all.csv.zip`;
+    const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob),download:fn});
+    a.click(); URL.revokeObjectURL(a.href);
+    setResult('r-csv_all',`Downloaded: ${fn} (${blob.size} bytes)`);
+  }catch(e){ setResult('r-csv_all','Error: '+e.message); }
+}
+
+// ─── Raw request ──────────────────────────────────────────────────────────────
+async function doRaw(){
+  const db=getDb();
+  let path=document.getElementById('sql-path').value.trim();
+  path=path.replace(':db',db).replace('{db}',db);
+  const method=document.getElementById('sql-method').value;
+  const qs=document.getElementById('sql-qs').value.trim();
+  let body=null;
+  if(method==='POST'){
+    const raw=document.getElementById('sql-body').value.trim();
+    try{ body=JSON.parse(raw); }catch(e){ body=raw; }
+  }
+  const {text} = await call(method, path, body, qs);
+  setResult('r-sql',text);
+}
+
+// boot
+updateBar();
+</script>
+</body>
+</html>

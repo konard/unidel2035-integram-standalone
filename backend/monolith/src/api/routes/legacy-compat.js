@@ -5,6 +5,7 @@
 import express from 'express';
 import mysql from 'mysql2/promise';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -37,6 +38,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 router.use((req, res, next) => {
   // Skip global form parser for file-upload routes; they have their own multer
   if (/\/upload\b/.test(req.path)) return next();
+  if (/\/_m_new(\/|$)/.test(req.path)) return next();
   upload.none()(req, res, next);
 });
 
@@ -1652,8 +1654,15 @@ async function getRequisiteByType(db, parentId, typeId) {
  * _m_new - Create new object
  * POST /:db/_m_new/:up
  * Parameters: up (parent ID), t (type ID), val, t{id}=value (attributes)
+ * Supports file uploads for FILE-type requisites (multer memoryStorage).
  */
-router.post('/:db/_m_new/:up?', async (req, res) => {
+router.post('/:db/_m_new/:up?', (req, res, next) => {
+  // Use upload.any() so FILE-type requisites can be uploaded alongside text fields
+  upload.any()(req, res, (err) => {
+    if (err) logger.warn('[Legacy _m_new] Multer error', { error: err.message });
+    next();
+  });
+}, async (req, res) => {
   const { db, up } = req.params;
 
   if (!isValidDbName(db)) {
@@ -1677,11 +1686,31 @@ router.post('/:db/_m_new/:up?', async (req, res) => {
 
     logger.info('[Legacy _m_new] Object created', { db, id, typeId, parentId });
 
+    // Build a map of uploaded files by field name (t{id} format)
+    const fileByField = {};
+    if (req.files && req.files.length > 0) {
+      for (const f of req.files) fileByField[f.fieldname] = f;
+    }
+
     // Save requisites (t{id}=value format)
     const attributes = extractAttributes(req.body);
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
-      const attrOrder = await getNextOrder(db, id, parseInt(attrTypeId, 10));
-      await insertRow(db, id, attrOrder, parseInt(attrTypeId, 10), String(attrValue));
+      const attrTypeIdNum = parseInt(attrTypeId, 10);
+      let finalValue = String(attrValue);
+
+      // If a file was uploaded for this requisite, persist it and use the filename
+      const uploadedFile = fileByField[`t${attrTypeId}`];
+      if (uploadedFile) {
+        const uploadDir = path.join(legacyPath, 'download', db);
+        fs.mkdirSync(uploadDir, { recursive: true });
+        const safeName = path.basename(uploadedFile.originalname).replace(/[/\\]/g, '_');
+        fs.writeFileSync(path.join(uploadDir, safeName), uploadedFile.buffer);
+        finalValue = safeName;
+        logger.info('[Legacy _m_new] File saved for requisite', { db, attrTypeId, safeName });
+      }
+
+      const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+      await insertRow(db, id, attrOrder, attrTypeIdNum, finalValue);
     }
 
     const pool = getPool();
@@ -1856,13 +1885,29 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       const typeIdNum = parseInt(attrTypeId, 10);
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
 
+      let finalValue = String(attrValue);
+
+      // PHP PASSWORD hash edge case: when saving a PASSWORD-type requisite,
+      // use t{USER} from POST body as username if present, else read from DB.
+      if (typeIdNum === TYPE.PASSWORD) {
+        let username = req.body[`t${TYPE.USER}`];
+        if (!username) {
+          // Fall back to current object's val (it IS the user object)
+          const [uRows] = await pool.query(
+            `SELECT val FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
+          );
+          username = uRows.length > 0 ? uRows[0].val : '';
+        }
+        finalValue = phpCompatibleHash(username, attrValue, db);
+      }
+
       if (existing) {
         // Update existing requisite
-        await updateRowValue(db, existing.id, String(attrValue));
+        await updateRowValue(db, existing.id, finalValue);
       } else {
         // Create new requisite
         const attrOrder = await getNextOrder(db, objectId, typeIdNum);
-        await insertRow(db, objectId, attrOrder, typeIdNum, String(attrValue));
+        await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
       }
     }
 
@@ -3448,10 +3493,57 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
 router.post('/:db/_m_id/:id', async (req, res) => {
   const { db, id } = req.params;
 
-  // ID changes are dangerous - usually not allowed
-  logger.warn('[Legacy _m_id] ID change attempted (not implemented)', { db, id });
+  if (!isValidDbName(db)) {
+    return res.status(200).json([{ error: 'Invalid database' }]);
+  }
 
-  res.status(200).json([{ error: 'ID change is not supported for data integrity reasons' }]);
+  try {
+    const pool = getPool();
+    const oldId = parseInt(id, 10);
+    const newId = parseInt(req.body.new_id || req.query.new_id, 10);
+
+    if (!newId || newId <= 0) {
+      return res.status(200).json([{ error: 'new_id must be a positive integer' }]);
+    }
+    if (oldId === newId) {
+      return res.status(200).json([{ error: 'new_id must differ from current id' }]);
+    }
+
+    // Check that the old object exists and get its parent
+    const [objRows] = await pool.query(
+      `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [oldId]
+    );
+    if (objRows.length === 0) {
+      return res.status(200).json([{ error: 'Object not found' }]);
+    }
+    const up = objRows[0].up;
+
+    // Check that new_id is not already in use
+    const [existRows] = await pool.query(
+      `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [newId]
+    );
+    if (existRows.length > 0) {
+      return res.status(200).json([{ error: `ID ${newId} is already in use` }]);
+    }
+
+    // PHP: 3 UPDATEs to rename the id everywhere it appears
+    await pool.query(`UPDATE \`${db}\` SET id = ? WHERE id = ?`, [newId, oldId]);
+    await pool.query(`UPDATE \`${db}\` SET up = ? WHERE up = ?`, [newId, oldId]);
+    await pool.query(`UPDATE \`${db}\` SET t  = ? WHERE t  = ?`, [newId, oldId]);
+
+    logger.info('[Legacy _m_id] ID changed', { db, oldId, newId, up });
+
+    res.status(200).json({
+      id: newId,
+      obj: newId,
+      next_act: 'object',
+      args: up > 1 ? `F_U=${up}` : '',
+      warnings: '',
+    });
+  } catch (error) {
+    logger.error('[Legacy _m_id] Error', { error: error.message, db });
+    res.status(200).json([{ error: error.message }]);
+  }
 });
 
 // ============================================================================
@@ -4109,8 +4201,15 @@ router.get('/:db/dir_admin', async (req, res) => {
 // ============================================================================
 
 /**
- * Compile a report - get columns, joins, and prepare query
- * Matches PHP's Compile_Report() function
+ * Compile a report — load columns, joins, and metadata.
+ *
+ * PHP data model for reports:
+ *   REPORT row:   {id=R, up=ParentTypeId, t=22, val='Report Name'}
+ *   REP_COLS row: {id=C, up=R, t=28, val='<reqTypeId>', ord=N}
+ *     val = the REQUISITE ROW ID (or parent type ID for the main value column)
+ *     JOIN on: LEFT JOIN db c_C ON c_C.up=a.id AND c_C.t=val
+ *   REP_JOIN row: {id=J, up=R, t=44, val='<typeId>', ord=N}
+ *     Defines an additional join expression
  */
 async function compileReport(pool, db, reportId) {
   const report = {
@@ -4124,65 +4223,81 @@ async function compileReport(pool, db, reportId) {
     joins: [],
     filters: {},
     totals: {},
-    rownum: 0
+    rownum: 0,
+    parentType: 0,
   };
 
   try {
-    // Get report definition
+    // Get report definition row
     const [reportRows] = await pool.query(
-      `SELECT id, val, t, up FROM ${db} WHERE id = ?`,
+      `SELECT id, val, t, up FROM \`${db}\` WHERE id = ?`,
       [reportId]
     );
 
-    if (reportRows.length === 0) {
-      return null;
-    }
+    if (reportRows.length === 0) return null;
 
-    report.header = reportRows[0].val;
-    report.parentType = reportRows[0].up;
+    report.header     = reportRows[0].val;
+    // PHP: report.up = type this report is "about" (its parent type)
+    report.parentType = parseInt(reportRows[0].up, 10) || 0;
 
-    // Get report columns (REP_COLS type)
+    // Get REP_COLS rows.
+    // val = requisite type ID (the JOIN key); we look up its display name from the type row.
     const [colRows] = await pool.query(
-      `SELECT col.id, col.val, col.t, col.ord,
-              typ.val AS typeName, typ.t AS baseType
-       FROM ${db} col
-       LEFT JOIN ${db} typ ON typ.id = col.t
+      `SELECT
+         col.id,
+         col.val  AS req_type_raw,
+         col.ord,
+         typ.val  AS col_name,
+         typ.t    AS col_base_t
+       FROM \`${db}\` col
+       LEFT JOIN \`${db}\` typ ON typ.id = CAST(col.val AS UNSIGNED)
        WHERE col.up = ? AND col.t = ${TYPE.REP_COLS}
        ORDER BY col.ord`,
       [reportId]
     );
 
     for (const col of colRows) {
-      const colName = col.val.replace(/ /g, '_');
-      report.head.push(col.val);
-      report.names[report.head.length - 1] = colName;
-      report.types[report.head.length - 1] = col.t;
-      report.baseOut[report.head.length - 1] = col.baseType || TYPE.CHARS;
+      const reqTypeId = parseInt(col.req_type_raw, 10);
+      // Label: prefer the looked-up type name, fall back to raw val
+      const colLabel  = col.col_name || col.req_type_raw || String(reqTypeId);
+      const alias     = `c${col.id}`;
+
+      report.head.push(colLabel);
+      report.names[report.head.length - 1]   = alias;
+      report.types[report.head.length - 1]   = reqTypeId;
+      report.baseOut[report.head.length - 1] = col.col_base_t || TYPE.CHARS;
+
       report.columns.push({
-        id: col.id,
-        name: col.val,
-        alias: colName,
-        type: col.t,
-        baseType: col.baseType,
-        order: col.ord
+        id:         col.id,
+        name:       colLabel,
+        alias,
+        reqTypeId,          // ← which type to LEFT JOIN on
+        isMainCol:  reqTypeId === report.parentType,  // main object's own val
+        baseType:   col.col_base_t || TYPE.CHARS,
+        order:      col.ord,
       });
     }
 
-    // Get report joins (REP_JOIN type)
+    // Get REP_JOIN rows (explicit additional joins)
     const [joinRows] = await pool.query(
-      `SELECT id, val, t FROM ${db} WHERE up = ? AND t = ${TYPE.REP_JOIN}`,
+      `SELECT id, val, t FROM \`${db}\` WHERE up = ? AND t = ${TYPE.REP_JOIN}`,
       [reportId]
     );
 
     for (const join of joinRows) {
       report.joins.push({
-        id: join.id,
-        table: join.val,
-        type: join.t
+        id:     join.id,
+        typeId: parseInt(join.val, 10) || 0,
+        t:      join.t,
       });
     }
 
-    logger.debug('[Report] Compiled report', { db, reportId, columns: report.columns.length, joins: report.joins.length });
+    logger.debug('[Report] Compiled report', {
+      db, reportId,
+      parentType: report.parentType,
+      columns: report.columns.length,
+      joins: report.joins.length,
+    });
 
   } catch (error) {
     logger.error('[Report] Error compiling report', { error: error.message, db, reportId });
@@ -4193,69 +4308,92 @@ async function compileReport(pool, db, reportId) {
 }
 
 /**
- * Execute report query with filters
+ * Execute report with proper LEFT JOINs per column.
+ *
+ * PHP equivalent: builds one LEFT JOIN per REP_COLS column joining the db
+ * table to itself on (child.up = main.id AND child.t = reqTypeId).
+ *
+ * Filters: keys are column aliases or names; values are {from, to, eq, like}.
  */
 async function executeReport(pool, db, report, filters = {}, limit = 100, offset = 0) {
-  const results = {
-    data: [],
-    totals: {},
-    rownum: 0
-  };
+  const results = { data: [], totals: {}, rownum: 0 };
 
   try {
-    // Build WHERE clause from filters
-    const whereClauses = [];
-    const whereParams = [];
-
-    for (const [colName, filter] of Object.entries(filters)) {
-      if (filter.from !== undefined && filter.from !== '') {
-        whereClauses.push(`${colName} >= ?`);
-        whereParams.push(filter.from);
-      }
-      if (filter.to !== undefined && filter.to !== '') {
-        whereClauses.push(`${colName} <= ?`);
-        whereParams.push(filter.to);
-      }
-      if (filter.eq !== undefined && filter.eq !== '') {
-        whereClauses.push(`${colName} = ?`);
-        whereParams.push(filter.eq);
-      }
-      if (filter.like !== undefined && filter.like !== '') {
-        whereClauses.push(`${colName} LIKE ?`);
-        whereParams.push(`%${filter.like}%`);
-      }
+    if (!report.parentType || report.parentType <= 0) {
+      logger.warn('[Report] No parentType — cannot build query', { reportId: report.id });
+      return results;
     }
 
-    // Build query - simplified version for general type listing
-    let query = `SELECT id, val, up, t, ord FROM ${db}`;
+    // ── SELECT ────────────────────────────────────────────────────────────
+    // Always include the main object id and val
+    const selectParts = ['a.id', 'a.val AS main_val', 'a.up', 'a.ord'];
+    const joinParts   = [];
 
-    if (report.parentType && report.parentType > 0) {
-      whereClauses.push('t = ?');
-      whereParams.push(report.parentType);
-    }
-
-    if (whereClauses.length > 0) {
-      query += ' WHERE ' + whereClauses.join(' AND ');
-    }
-
-    query += ' ORDER BY ord';
-    query += ` LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
-
-    const [rows] = await pool.query(query, whereParams);
-
-    results.data = rows;
-    results.rownum = rows.length;
-
-    // Calculate totals for numeric columns
     for (const col of report.columns) {
-      const baseType = REV_BASE_TYPE[col.baseType];
-      if (baseType === 'NUMBER' || baseType === 'SIGNED') {
+      if (!col.reqTypeId || isNaN(col.reqTypeId)) continue;
+
+      if (col.isMainCol) {
+        // This column IS the main type itself → map to a.val, no extra join
+        selectParts.push(`a.val AS \`${col.alias}\``);
+      } else {
+        // LEFT JOIN for each requisite column
+        selectParts.push(`\`${col.alias}\`.val AS \`${col.alias}\``);
+        joinParts.push(
+          `LEFT JOIN \`${db}\` \`${col.alias}\`` +
+          ` ON \`${col.alias}\`.up = a.id AND \`${col.alias}\`.t = ${col.reqTypeId}`
+        );
+      }
+    }
+
+    // ── WHERE ─────────────────────────────────────────────────────────────
+    const whereParts  = ['a.t = ?', 'a.up != 0'];
+    const whereParams = [report.parentType];
+
+    for (const [key, filter] of Object.entries(filters)) {
+      const col = report.columns.find(c => c.alias === key || c.name === key);
+      if (!col) continue;
+      // Filter on the joined table column (or a.val for main column)
+      const expr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
+
+      if (filter.from  !== undefined && filter.from  !== '') { whereParts.push(`${expr} >= ?`);       whereParams.push(filter.from); }
+      if (filter.to    !== undefined && filter.to    !== '') { whereParts.push(`${expr} <= ?`);       whereParams.push(filter.to); }
+      if (filter.eq    !== undefined && filter.eq    !== '') { whereParts.push(`${expr} = ?`);        whereParams.push(filter.eq); }
+      if (filter.like  !== undefined && filter.like  !== '') { whereParts.push(`${expr} LIKE ?`);     whereParams.push(`%${filter.like}%`); }
+    }
+
+    const lim = Math.min(parseInt(limit, 10)  || 100, 10000);
+    const off = Math.max(parseInt(offset, 10) || 0,   0);
+
+    const sql = [
+      `SELECT ${selectParts.join(', ')}`,
+      `FROM \`${db}\` a`,
+      ...joinParts,
+      `WHERE ${whereParts.join(' AND ')}`,
+      `ORDER BY a.ord`,
+      `LIMIT ${lim} OFFSET ${off}`,
+    ].join('\n');
+
+    logger.debug('[Report] SQL', { sql });
+
+    const [rows] = await pool.query(sql, whereParams);
+
+    // ── Map rows → named output ───────────────────────────────────────────
+    results.data = rows.map(row => {
+      const out = { id: row.id, val: row.main_val };
+      for (const col of report.columns) {
+        out[col.alias] = row[col.alias] ?? '';
+      }
+      return out;
+    });
+
+    results.rownum = results.data.length;
+
+    // ── Totals for numeric columns ─────────────────────────────────────────
+    for (const col of report.columns) {
+      const bt = REV_BASE_TYPE[col.baseType];
+      if (bt === 'NUMBER' || bt === 'SIGNED') {
         let total = 0;
-        for (const row of rows) {
-          if (row[col.alias]) {
-            total += parseFloat(row[col.alias]) || 0;
-          }
-        }
+        for (const row of results.data) total += parseFloat(row[col.alias]) || 0;
         results.totals[col.alias] = total;
       }
     }
@@ -4405,7 +4543,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
           id: col.id,
           name: col.name,
           type: col.baseType || 0,
-          format: col.baseOut || 'CHARS'
+          format: REV_BASE_TYPE[col.baseType] || 'CHARS'
         }));
         const data = report.columns.map(col => results.data.map(row => row[col.alias] ?? ''));
         return res.json({ columns: cols, data, rownum: results.rownum });
@@ -4822,17 +4960,20 @@ router.get('/:db/csv_all', async (req, res) => {
       csvContent += '\n\n';
     }
 
-    // Create filename
+    // Create filename and wrap in ZIP
     const timestamp = new Date().toISOString().replace(/[:-]/g, '').replace('T', '_').slice(0, 15);
-    const filename = `${db}_${timestamp}.csv`;
+    const csvFilename = `${db}_${timestamp}.csv`;
+    const zipFilename = `${csvFilename}.zip`;
+    const zipBuffer = buildZip(csvFilename, csvContent);
 
-    // Set headers for CSV download
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // Set headers for ZIP download
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    res.setHeader('Content-Length', zipBuffer.length);
 
-    logger.info('[Legacy csv_all] Export completed', { db, filename });
+    logger.info('[Legacy csv_all] Export completed', { db, filename: zipFilename });
 
-    res.send(csvContent);
+    res.send(zipBuffer);
   } catch (error) {
     logger.error('[Legacy csv_all] Error', { error: error.message, db });
     res.status(500).send('Export failed: ' + error.message);
@@ -4848,6 +4989,97 @@ function maskCsvDelimiters(val) {
   const str = String(val);
   // Escape semicolons and newlines for CSV
   return str.replace(/;/g, '\\;').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+// ============================================================================
+// Minimal ZIP builder (no external dependencies — uses Node built-in zlib)
+// Produces a valid ZIP with a single deflated entry.
+// ============================================================================
+
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) crc = CRC32_TABLE[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+/**
+ * Build a minimal valid ZIP file containing one entry.
+ * @param {string} entryName - filename inside the ZIP
+ * @param {Buffer|string} content - file content
+ * @returns {Buffer}
+ */
+function buildZip(entryName, content) {
+  const buf = Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8');
+  const compressed = zlib.deflateRawSync(buf);
+  const fileCrc = crc32(buf);
+  const nameBuf = Buffer.from(entryName, 'utf8');
+
+  const now = new Date();
+  const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+
+  // Local file header (30 bytes + filename)
+  const lfh = Buffer.alloc(30 + nameBuf.length);
+  lfh.writeUInt32LE(0x04034b50, 0);
+  lfh.writeUInt16LE(20, 4);
+  lfh.writeUInt16LE(0, 6);
+  lfh.writeUInt16LE(8, 8);          // method: deflate
+  lfh.writeUInt16LE(dosTime, 10);
+  lfh.writeUInt16LE(dosDate, 12);
+  lfh.writeUInt32LE(fileCrc, 14);
+  lfh.writeUInt32LE(compressed.length, 18);
+  lfh.writeUInt32LE(buf.length, 22);
+  lfh.writeUInt16LE(nameBuf.length, 26);
+  lfh.writeUInt16LE(0, 28);
+  nameBuf.copy(lfh, 30);
+
+  const dataOffset = 0;
+
+  // Central directory header (46 bytes + filename)
+  const cdh = Buffer.alloc(46 + nameBuf.length);
+  cdh.writeUInt32LE(0x02014b50, 0);
+  cdh.writeUInt16LE(20, 4);
+  cdh.writeUInt16LE(20, 6);
+  cdh.writeUInt16LE(0, 8);
+  cdh.writeUInt16LE(8, 10);
+  cdh.writeUInt16LE(dosTime, 12);
+  cdh.writeUInt16LE(dosDate, 14);
+  cdh.writeUInt32LE(fileCrc, 16);
+  cdh.writeUInt32LE(compressed.length, 20);
+  cdh.writeUInt32LE(buf.length, 24);
+  cdh.writeUInt16LE(nameBuf.length, 28);
+  cdh.writeUInt16LE(0, 30);
+  cdh.writeUInt16LE(0, 32);
+  cdh.writeUInt16LE(0, 34);
+  cdh.writeUInt16LE(0, 36);
+  cdh.writeUInt32LE(0, 38);
+  cdh.writeUInt32LE(dataOffset, 42);
+  nameBuf.copy(cdh, 46);
+
+  const cdOffset = lfh.length + compressed.length;
+
+  // End of central directory (22 bytes)
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(cdh.length, 12);
+  eocd.writeUInt32LE(cdOffset, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([lfh, compressed, cdh, eocd]);
 }
 
 // ============================================================================
@@ -4966,17 +5198,20 @@ router.get('/:db/backup', async (req, res) => {
       }
     }
 
-    // Create filename
+    // Create filename and wrap in ZIP
     const timestamp = new Date().toISOString().replace(/[:-]/g, '').replace('T', '_').slice(0, 15);
-    const filename = `${db}_${timestamp}.dmp`;
+    const dmpFilename = `${db}_${timestamp}.dmp`;
+    const zipFilename = `${dmpFilename}.zip`;
+    const zipBuffer = buildZip(dmpFilename, dumpContent);
 
-    // Set headers for download
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // Set headers for ZIP download
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    res.setHeader('Content-Length', zipBuffer.length);
 
-    logger.info('[Legacy backup] Export completed', { db, filename, rows: lastId });
+    logger.info('[Legacy backup] Export completed', { db, filename: zipFilename, rows: lastId });
 
-    res.send(dumpContent);
+    res.send(zipBuffer);
   } catch (error) {
     logger.error('[Legacy backup] Error', { error: error.message, db });
     res.status(500).send('Backup failed: ' + error.message);
