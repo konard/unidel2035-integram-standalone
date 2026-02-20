@@ -28,6 +28,37 @@ function isApiRequest(req) {
          q.JSON_CR !== undefined || q.JSON_HR !== undefined;
 }
 
+/**
+ * PHP-compatible mutation response helper.
+ * – JSON API requests (?JSON / ?JSON_DATA etc.): return JSON
+ * – Plain form POSTs: redirect to next_act URL (mirrors PHP index.php lines 9169-9180)
+ *
+ * @param {object} req
+ * @param {object} res
+ * @param {string} db   - database name (for redirect URL)
+ * @param {object} data - { id, obj, next_act, args, warnings, [extra] }
+ */
+function legacyRespond(req, res, db, data) {
+  const { id, obj, next_act, args, warnings, ...extra } = data;
+
+  if (isApiRequest(req)) {
+    return res.json({ id, obj, next_act, args: args || '', warnings: warnings || '', ...extra });
+  }
+
+  // Non-JSON: PHP redirects to /{db}/{next_act}/{id}?{args}#{obj}
+  // The form may override next_act via the request parameter
+  const reqNextAct = req.body?.next_act || req.query?.next_act;
+  const effectiveNextAct = reqNextAct || next_act || '';
+
+  if (effectiveNextAct === 'nul') return res.send('');
+
+  // Build redirect URL: /{db}/{next_act}/{id}[?args][#obj]
+  const idPart  = id  ? `/${id}`   : '';
+  const argPart = args && String(args).length ? `?${args}` : '';
+  const hashPart = obj != null ? `#${obj}` : '';
+  return res.redirect(`/${db}/${effectiveNextAct}${idPart}${argPart}${hashPart}`);
+}
+
 // Parse cookies for token handling
 router.use(cookieParser());
 
@@ -1535,6 +1566,10 @@ router.get('/:db/:page*', async (req, res, next) => {
         const filterVal = allObjParams[`F_${subId}`] !== undefined
           ? String(allObjParams[`F_${subId}`]) : null;
 
+        // Filter by parent (F_U=parentId) — used by doEditArr and object panel filters
+        const filterUp = allObjParams.F_U !== undefined
+          ? parseInt(allObjParams.F_U, 10) : null;
+
         // Order (dubRecUniqNum sends order_val=val&desc=1 to get max value)
         const orderByVal = allObjParams.order_val === 'val';
         const descOrder  = String(allObjParams.desc) === '1';
@@ -1557,6 +1592,10 @@ router.get('/:db/:page*', async (req, res, next) => {
         if (filterVal !== null) {
           objWhereParts.push('val = ?');
           objWhereParams.push(filterVal);
+        }
+        if (filterUp !== null && !isNaN(filterUp)) {
+          objWhereParts.push('up = ?');
+          objWhereParams.push(filterUp);
         }
         const objOrderStr = orderByVal
           ? `val ${descOrder ? 'DESC' : 'ASC'}`
@@ -1927,12 +1966,12 @@ router.post('/:db/_m_new/:up?', (req, res, next) => {
     const next_act = hasReqs ? 'edit_obj' : 'object';
     const args = hasReqs ? String(id) : (parentId > 1 ? `F_U=${parentId}` : '');
 
-    return res.status(200).json({
+    return legacyRespond(req, res, db, {
       id,
       obj: typeId,
-      ord: order,
       next_act,
       args,
+      ord: order,
       val: value,
       warning: '',
     });
@@ -1976,7 +2015,7 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       // Get the original object's data
       const [objRows] = await pool.query(`
         SELECT a.val, a.t AS typ, a.up, a.ord, typs.t AS base_typ
-        FROM ${db} typs, ${db} a
+        FROM \`${db}\` typs, \`${db}\` a
         WHERE typs.id = a.t AND a.id = ?
       `, [originalId]);
 
@@ -1997,7 +2036,7 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       let newOrd = 1;
       if (original.up > 1) {
         const [ordRows] = await pool.query(`
-          SELECT MAX(ord) AS max_ord FROM ${db}
+          SELECT MAX(ord) AS max_ord FROM \`${db}\`
           WHERE up = ? AND t = ?
         `, [original.up, original.typ]);
         newOrd = (ordRows[0]?.max_ord || 0) + 1;
@@ -2005,36 +2044,55 @@ router.post('/:db/_m_save/:id', async (req, res) => {
 
       // Create the copy
       const [insertResult] = await pool.query(`
-        INSERT INTO ${db} (up, ord, t, val)
+        INSERT INTO \`${db}\` (up, ord, t, val)
         VALUES (?, ?, ?, ?)
       `, [original.up, newOrd, original.typ, newVal]);
 
       objectId = insertResult.insertId;
 
       // Copy all requisites (PHP: Populate_Reqs)
+      // JOIN the type definition to detect FILE-type requisites (base type t = TYPE.FILE)
       const [reqRows] = await pool.query(`
-        SELECT t, val, ord FROM ${db}
-        WHERE up = ?
-        ORDER BY ord
+        SELECT r.t, r.val, r.ord, typ.t AS base_t FROM \`${db}\` r
+        LEFT JOIN \`${db}\` typ ON typ.id = r.t
+        WHERE r.up = ?
+        ORDER BY r.ord
       `, [originalId]);
 
+      const uploadDir = path.join(legacyPath, 'download', db);
       for (const reqRow of reqRows) {
+        let copiedVal = reqRow.val;
+        // For FILE-type requisites, physically copy the file to avoid shared reference
+        if (reqRow.base_t === TYPE.FILE && reqRow.val && reqRow.val.length > 0) {
+          const srcFile = path.join(uploadDir, path.basename(reqRow.val));
+          if (fs.existsSync(srcFile)) {
+            const ext = path.extname(reqRow.val);
+            const newName = `copy_${Date.now()}_${path.basename(reqRow.val, ext)}${ext}`;
+            const dstFile = path.join(uploadDir, newName);
+            try {
+              fs.mkdirSync(uploadDir, { recursive: true });
+              fs.copyFileSync(srcFile, dstFile);
+              copiedVal = newName;
+            } catch (copyErr) {
+              logger.warn('[Legacy _m_save] File copy failed, sharing reference', { srcFile, error: copyErr.message });
+            }
+          }
+        }
         await pool.query(`
-          INSERT INTO ${db} (up, ord, t, val)
+          INSERT INTO \`${db}\` (up, ord, t, val)
           VALUES (?, ?, ?, ?)
-        `, [objectId, reqRow.ord, reqRow.t, reqRow.val]);
+        `, [objectId, reqRow.ord, reqRow.t, copiedVal]);
       }
 
       logger.info('[Legacy _m_save] Object copied', { db, originalId, newId: objectId });
 
       // PHP api_dump() format for copy: obj = new object ID (used by dubRecDone to filter report)
       // dubRecDone sends FR_ColNameID=json.obj → filters report WHERE a.id = objectId
-      return res.json({
+      return legacyRespond(req, res, db, {
         id: objectId,
         obj: objectId,
         next_act: 'object',
         args: original.up > 1 ? `F_U=${original.up}` : '',
-        warnings: '',
       });
     }
 
@@ -2166,7 +2224,7 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       response.search = searchParams;
     }
 
-    res.json(response);
+    legacyRespond(req, res, db, response);
   } catch (error) {
     logger.error('[Legacy _m_save] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -2187,32 +2245,75 @@ router.post('/:db/_m_del/:id', async (req, res) => {
   try {
     const pool = getPool();
     const objectId = parseInt(id, 10);
-    const cascade = req.body.cascade === '1' || req.body.cascade === true;
 
-    // Fetch type_id BEFORE deleting (needed for PHP api_dump() response)
-    const [objInfo] = await pool.query(
-      `SELECT t, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
-    );
-    const objType = objInfo.length > 0 ? objInfo[0].t : 0;
-    const objUp   = objInfo.length > 0 ? objInfo[0].up : 0;
-
-    // Delete children first if cascade
-    if (cascade) {
-      await deleteChildren(db, objectId);
+    if (!objectId) {
+      return res.status(200).json([{ error: `Wrong id: ${id}` }]);
     }
 
-    // Delete the object
+    // PHP: SELECT count(r.id), obj.up, obj.ord, obj.t, obj.val, par.up pup, type.up tup
+    //      FROM $z obj
+    //        LEFT JOIN $z type ON type.id=obj.t
+    //        LEFT JOIN $z r ON r.t=obj.id
+    //        JOIN $z par ON par.id=obj.up
+    //      WHERE obj.id=$id
+    const [[row]] = await pool.query(
+      `SELECT COUNT(r.id) AS refCount, obj.up, obj.ord, obj.t, obj.val,
+              par.up AS pup, type.up AS tup
+       FROM \`${db}\` obj
+       LEFT JOIN \`${db}\` type ON type.id = obj.t
+       LEFT JOIN \`${db}\` r ON r.t = obj.id
+       JOIN \`${db}\` par ON par.id = obj.up
+       WHERE obj.id = ?`,
+      [objectId]
+    );
+
+    if (!row || row.pup == null) {
+      return res.status(200).json([{ error: 'Object not found' }]);
+    }
+
+    // PHP: if pup==0 → can't delete metadata
+    if (String(row.pup) === '0') {
+      return res.status(200).json([{ error: `You can't delete metadata (type ${objectId})!` }]);
+    }
+
+    // PHP: if refCount > 0 → can't delete (has references)
+    const cascade = req.body.cascade === '1' || req.body.cascade === true ||
+                    req.query.forced !== undefined;
+    if (!cascade && row.refCount > 0) {
+      return res.status(200).json([{ error: `You can't delete an object that has links to it (total: ${row.refCount})!` }]);
+    }
+
+    // PHP: adjust peer orders for array or multiselect elements
+    if (row.up > 1) {
+      if (String(row.tup) === '0') {
+        // Array element: shift down following peers of same type in same parent
+        await pool.query(
+          `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`,
+          [row.up, row.t, row.ord]
+        );
+      } else if (!isNaN(Number(row.val)) && Number(row.val) > 0) {
+        // Reference/multiselect element: shift down following by val+ord
+        await pool.query(
+          `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND val = ? AND ord > ?`,
+          [row.up, row.val, row.ord]
+        );
+      }
+    }
+
+    // Delete recursively (PHP BatchDelete)
+    await deleteChildren(db, objectId);
     await deleteRow(db, objectId);
 
-    logger.info('[Legacy _m_del] Object deleted', { db, id: objectId, cascade });
+    logger.info('[Legacy _m_del] Object deleted', { db, id: objectId });
 
-    // PHP api_dump(): {id:type_id, obj:deleted_id, next_act:"object", args, warnings}
-    res.json({
+    // PHP: $id = row.t (type), $obj = objectId, next_act = "object"
+    const objType = row.t;
+    const objUp   = row.up;
+    legacyRespond(req, res, db, {
       id: objType,
       obj: objectId,
       next_act: 'object',
       args: objUp > 1 ? `F_U=${objUp}` : '',
-      warnings: '',
     });
   } catch (error) {
     logger.error('[Legacy _m_del] Error', { error: error.message, db });
@@ -2293,12 +2394,11 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
 
     // PHP api_dump(): {id, obj, next_act:"object", args, warnings}
     // For file uploads: args = "{db}/download/{filename}" (saveInlineFileDone builds href="/"+json.args)
-    res.json({
+    legacyRespond(req, res, db, {
       id: objectId,
       obj: objType,
       next_act: 'object',
       args: uploadedFilePath || (objUp > 1 ? `F_U=${objUp}` : ''),
-      warnings: '',
     });
   } catch (error) {
     logger.error('[Legacy _m_set] Error', { error: error.message, db });
@@ -2336,12 +2436,11 @@ router.post('/:db/_m_move/:id', async (req, res) => {
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
 
     // PHP api_dump(): {id, obj:new_parent_id, next_act:"object", args, warnings}
-    res.json({
+    legacyRespond(req, res, db, {
       id: objectId,
       obj: newParentId,
       next_act: 'object',
       args: newParentId > 1 ? `F_U=${newParentId}` : '',
-      warnings: '',
     });
   } catch (error) {
     logger.error('[Legacy _m_move] Error', { error: error.message, db });
@@ -3213,13 +3312,7 @@ router.post('/:db/_d_new/:parentTypeId?', async (req, res) => {
     logger.info('[Legacy _d_new] Type created', { db, id, name, baseType, parentId });
 
     // PHP api_dump(): {id, obj:new_type_id, next_act:"edit_types", args, warnings}
-    res.json({
-      id,
-      obj: id,
-      next_act: 'edit_types',
-      args: '',
-      warnings: '',
-    });
+    legacyRespond(req, res, db, { id, obj: id, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_new] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3271,13 +3364,7 @@ router.post('/:db/_d_save/:typeId', async (req, res) => {
     logger.info('[Legacy _d_save] Type saved', { db, id, updates: req.body });
 
     // PHP api_dump(): {id, obj, next_act:"edit_types", args, warnings}
-    res.json({
-      id,
-      obj: id,
-      next_act: 'edit_types',
-      args: '',
-      warnings: '',
-    });
+    legacyRespond(req, res, db, { id, obj: id, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_save] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3310,7 +3397,7 @@ router.post('/:db/_d_del/:typeId', async (req, res) => {
     logger.info('[Legacy _d_del] Type deleted', { db, id, cascade });
 
     // PHP api_dump(): {id:0, obj:0, next_act:"terms", args:"", warnings:""}
-    res.json({ id: 0, obj: 0, next_act: 'terms', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id: 0, obj: 0, next_act: 'terms', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_del] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3400,7 +3487,7 @@ router.post('/:db/_d_alias/:reqId', async (req, res) => {
     logger.info('[Legacy _d_alias] Alias set', { db, id, alias: newAlias });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    res.json({ id, obj: obj.up, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_alias] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3445,7 +3532,7 @@ router.post('/:db/_d_null/:reqId', async (req, res) => {
     logger.info('[Legacy _d_null] NOT NULL toggled', { db, id, required: newRequired });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    res.json({ id, obj: obj.up, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_null] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3490,7 +3577,7 @@ router.post('/:db/_d_multi/:reqId', async (req, res) => {
     logger.info('[Legacy _d_multi] MULTI toggled', { db, id, multi: newMulti });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    res.json({ id, obj: obj.up, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_multi] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3542,7 +3629,7 @@ router.post('/:db/_d_attrs/:reqId', async (req, res) => {
     logger.info('[Legacy _d_attrs] Modifiers updated', { db, id, alias: newAlias, required: newRequired, multi: newMulti });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    res.json({ id, obj: obj.up, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_attrs] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3578,7 +3665,7 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
 
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
-      return res.json({ id, obj: obj.up, next_act: 'edit_types', args: '', warnings: '' });
+      return legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: '' });
     }
 
     const prevSibling = siblings[0];
@@ -3590,7 +3677,7 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
     logger.info('[Legacy _d_up] Requisite moved up', { db, id, newOrd: prevSibling.ord });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    res.json({ id, obj: obj.up, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_up] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3628,7 +3715,7 @@ router.post('/:db/_d_ord/:reqId', async (req, res) => {
     logger.info('[Legacy _d_ord] Order set', { db, id, ord: newOrd });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    res.json({ id, obj: parentId, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id, obj: parentId, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3665,7 +3752,7 @@ router.post('/:db/_d_del_req/:reqId', async (req, res) => {
     logger.info('[Legacy _d_del_req] Requisite deleted', { db, id, cascade });
 
     // PHP api_dump(): {id:type_id, obj:type_id, next_act:"edit_types", args, warnings}
-    res.json({ id: typeId, obj: typeId, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id: typeId, obj: typeId, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_del_req] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3703,7 +3790,7 @@ router.post('/:db/_d_ref/:parentTypeId', async (req, res) => {
     logger.info('[Legacy _d_ref] Reference created', { db, id, parentId, refTypeId, name });
 
     // PHP api_dump(): {id, obj:parent_type_id, next_act:"edit_types", args, warnings}
-    res.json({ id, obj: parentId, next_act: 'edit_types', args: '', warnings: '' });
+    legacyRespond(req, res, db, { id, obj: parentId, next_act: 'edit_types', args: '' });
   } catch (error) {
     logger.error('[Legacy _d_ref] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3743,7 +3830,7 @@ router.post('/:db/_m_up/:id', async (req, res) => {
 
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
-      return res.json({ id: objectId, obj: obj.up, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '', warnings: '' });
+      return legacyRespond(req, res, db, { id: objectId, obj: obj.up, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
     }
 
     const prevSibling = siblings[0];
@@ -3755,7 +3842,7 @@ router.post('/:db/_m_up/:id', async (req, res) => {
     logger.info('[Legacy _m_up] Object moved up', { db, id: objectId, newOrd: prevSibling.ord });
 
     // PHP api_dump(): {id, obj:parent_id, next_act:"object", args, warnings}
-    res.json({ id: objectId, obj: obj.up, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '', warnings: '' });
+    legacyRespond(req, res, db, { id: objectId, obj: obj.up, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
   } catch (error) {
     logger.error('[Legacy _m_up] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -3765,7 +3852,7 @@ router.post('/:db/_m_up/:id', async (req, res) => {
 /**
  * _m_ord - Set order for object
  * POST /:db/_m_ord/:id
- * Parameters: ord (new order value)
+ * Parameters: order (new order value, in query string: ?JSON&order=N)
  */
 router.post('/:db/_m_ord/:id', async (req, res) => {
   const { db, id } = req.params;
@@ -3776,24 +3863,51 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
 
   try {
     const objectId = parseInt(id, 10);
-    const newOrd = parseInt(req.body.ord, 10);
+    // PHP uses $_REQUEST["order"] — comes from query string ?JSON&order=N
+    const newOrd = parseInt(req.query.order ?? req.body.order ?? req.body.ord, 10);
 
-    if (isNaN(newOrd)) {
-      return res.status(200).json([{ error: 'Order (ord) is required'  }]);
+    if (isNaN(newOrd) || newOrd < 1) {
+      return res.status(200).json([{ error: 'order must be a positive integer'  }]);
     }
 
     const pool = getPool();
 
-    // Fetch parent for PHP api_dump() response
-    const obj = await getObjectById(db, objectId);
-    const parentId = obj ? obj.up : 0;
+    // PHP: SELECT obj.ord, obj.up FROM $z obj, $z par
+    //      WHERE obj.id=$id AND par.id=obj.up AND par.up!=0
+    // (par.up!=0 ensures object is a data record, not a root type)
+    const [[row]] = await pool.query(
+      `SELECT obj.ord, obj.up FROM \`${db}\` obj
+       JOIN \`${db}\` par ON par.id = obj.up AND par.up != 0
+       WHERE obj.id = ?`,
+      [objectId]
+    );
 
-    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [newOrd, objectId]);
+    if (!row) {
+      return res.status(200).json([{ error: `Id=${objectId} not found` }]);
+    }
+
+    const parentId = row.up;
+    const oldOrd   = row.ord;
+
+    if (String(newOrd) !== String(oldOrd)) {
+      // PHP: UPDATE $z SET ord=(CASE WHEN id=$rid THEN LEAST($newOrd, max_ord)
+      //                             ELSE ord+SIGN($ord-$newOrd) END)
+      //      WHERE up=$parentId AND ord BETWEEN LEAST($ord,$newOrd) AND GREATEST($ord,$newOrd)
+      await pool.query(
+        `UPDATE \`${db}\`
+         SET ord = CASE
+           WHEN id = ? THEN LEAST(?, (SELECT maxo FROM (SELECT MAX(ord) AS maxo FROM \`${db}\` WHERE up = ?) AS t))
+           ELSE ord + SIGN(? - ?)
+         END
+         WHERE up = ? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`,
+        [objectId, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd]
+      );
+    }
 
     logger.info('[Legacy _m_ord] Order set', { db, id: objectId, ord: newOrd });
 
     // PHP api_dump(): {id, obj:parent_id, next_act:"object", args, warnings}
-    res.json({ id: objectId, obj: parentId, next_act: 'object', args: parentId > 1 ? `F_U=${parentId}` : '', warnings: '' });
+    legacyRespond(req, res, db, { id: objectId, obj: parentId, next_act: 'object', args: parentId > 1 ? `F_U=${parentId}` : '' });
   } catch (error) {
     logger.error('[Legacy _m_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -4643,6 +4757,20 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
           ` ON \`${col.alias}\`.up = a.id AND \`${col.alias}\`.t = ${col.reqTypeId}`
         );
       }
+    }
+
+    // ── REP_JOIN rows (additional explicit JOINs defined on the report) ───
+    // Each REP_JOIN row: val = typeId, means LEFT JOIN db rj{n} ON rj{n}.t = typeId AND rj{n}.up = a.id
+    if (report.joins && report.joins.length > 0) {
+      report.joins.forEach((j, idx) => {
+        if (!j.typeId || isNaN(j.typeId)) return;
+        const alias = `rj${idx}`;
+        selectParts.push(`${alias}.val AS \`__rj${idx}\``);
+        joinParts.push(
+          `LEFT JOIN \`${db}\` ${alias}` +
+          ` ON ${alias}.up = a.id AND ${alias}.t = ${j.typeId}`
+        );
+      });
     }
 
     // ── WHERE ─────────────────────────────────────────────────────────────
@@ -5722,7 +5850,7 @@ router.post('/:db/restore', (req, res, next) => {
       return res.status(403).json({ error: 'You do not have permission to import to the database' });
     }
 
-    // Get dump content: file upload (ZIP) > body.content > body.data
+    // Get dump content: file upload (ZIP) > backup_file param > body.content > body.data
     let dumpContent = '';
     if (req.file) {
       // Extract .dmp text from uploaded ZIP
@@ -5730,6 +5858,27 @@ router.post('/:db/restore', (req, res, next) => {
       const dmpEntry = entries.find(e => e.name.endsWith('.dmp')) || entries[0];
       if (!dmpEntry) return res.status(400).json({ error: 'No .dmp file found in ZIP' });
       dumpContent = dmpEntry.content.toString('utf8');
+    } else if (req.body?.backup_file || req.query?.backup_file) {
+      // PHP: ?backup_file=path reads a ZIP from the filesystem
+      // Restrict to the db's download directory (no path traversal)
+      const backupFileName = path.basename(req.body.backup_file || req.query.backup_file);
+      const backupDir = path.join(legacyPath, 'download', db);
+      const backupFilePath = path.join(backupDir, backupFileName);
+      if (!backupFilePath.startsWith(backupDir + path.sep) && backupFilePath !== backupDir) {
+        return res.status(400).json({ error: 'Invalid backup_file path' });
+      }
+      if (!fs.existsSync(backupFilePath)) {
+        return res.status(400).json({ error: 'Backup file not found' });
+      }
+      const fileBuffer = fs.readFileSync(backupFilePath);
+      if (backupFileName.endsWith('.zip')) {
+        const entries = readZip(fileBuffer);
+        const dmpEntry = entries.find(e => e.name.endsWith('.dmp')) || entries[0];
+        if (!dmpEntry) return res.status(400).json({ error: 'No .dmp file found in ZIP' });
+        dumpContent = dmpEntry.content.toString('utf8');
+      } else {
+        dumpContent = fileBuffer.toString('utf8');
+      }
     } else if (typeof req.body === 'string') {
       dumpContent = req.body;
     } else if (req.body?.content) {

@@ -76,6 +76,8 @@ if (fs.existsSync(PUBLIC_PATH)) {
 
 const { default: legacyRouter } = await import('../src/api/routes/legacy-compat.js');
 app.use('/', legacyRouter);
+// Also handle /api/:db/... prefix used by myform.html save() and app.js ig.newApi()
+app.use('/api', legacyRouter);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 
