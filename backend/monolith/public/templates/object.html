@@ -241,6 +241,14 @@ function init() {
     });
 }
 
+// ── Strip PHP directives from column val to get display name ─────────────────
+function colDisplayName(val) {
+  var s = String(val || '');
+  var aliasMatch = s.match(/:ALIAS=(.+?):/);
+  if (aliasMatch) return aliasMatch[1];
+  return s.replace(/:!NULL:/g, '').replace(/:MULTI:/g, '').replace(/\[TODAY\]/g, '').trim();
+}
+
 // ── Render table head ─────────────────────────────────────────────────────────
 function renderHead(reqs) {
   var html = '<tr>';
@@ -252,7 +260,7 @@ function renderHead(reqs) {
   // Requisites
   reqs.forEach(function(r) {
     html += '<th style="cursor:pointer;" data-col="' + r.id + '" onclick="sortBy(' + r.id + ')">' +
-            escHtml(r.name) + sortIndicator(r.id) + '</th>';
+            escHtml(colDisplayName(r.name)) + sortIndicator(r.id) + '</th>';
   });
   html += '</tr>';
 
@@ -327,7 +335,7 @@ function loadData() {
   document.getElementById('tb-wrap').style.opacity = '0.4';
 
   var url = '/' + db + '/_list/' + id + '?JSON&up=' + F_U +
-            '&limit=' + PAGE_SIZE + '&offset=' + (pageNum * PAGE_SIZE);
+            '&LIMIT=' + PAGE_SIZE + '&F=' + (pageNum * PAGE_SIZE);
 
   // Sort
   if (sortCol !== '') url += '&sort=' + sortCol + '&dir=' + (sortDir || 'asc');
