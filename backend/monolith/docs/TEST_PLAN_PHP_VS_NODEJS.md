@@ -856,9 +856,9 @@ check "terms"            "$NODE/$DB/terms?JSON"                   ".[0].id"
 check "_dict"            "$NODE/$DB/_dict/$TYPE_ID?JSON"          "id"
 check "obj_meta"         "$NODE/$DB/obj_meta/$OBJ_ID?JSON"        "id"
 check "_connect"         "$NODE/$DB/_connect?JSON"                "status"
-check "object JSON"      "$NODE/$DB/object/$TYPE_ID?JSON"         "object"  # currently ❌
-check "object JSON_DATA" "$NODE/$DB/object/$TYPE_ID?JSON_DATA"    ".[0].i"  # currently ❌
-check "edit_obj JSON"    "$NODE/$DB/edit_obj/$OBJ_ID?JSON"        "obj.id"  # currently ❌
+check "object JSON"      "$NODE/$DB/object/$TYPE_ID?JSON"         "object"
+check "object JSON_DATA" "$NODE/$DB/object/$TYPE_ID?JSON_DATA"    ".[0].i"
+check "edit_obj JSON"    "$NODE/$DB/edit_obj/$OBJ_ID?JSON"        "obj.id"
 check "report meta"      "$NODE/$DB/report/$REPORT_ID?JSON"       "id"
 check "grants"           "$NODE/$DB/grants?JSON"                  "success"
 
