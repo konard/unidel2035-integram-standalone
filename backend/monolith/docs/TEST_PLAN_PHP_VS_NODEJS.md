@@ -151,7 +151,7 @@ curl -s "$NODE/$DB/xsrf" -b "$DB=$TOKEN" | jq .
 ## 2. Type / Schema (DDL)
 
 ### 2.1 `GET /:db/terms?JSON` — list of accessible types
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -173,7 +173,7 @@ curl -s "$NODE/$DB/terms?JSON" -b "$DB=$TOKEN" | jq .
 ---
 
 ### 2.2 `GET /:db/_dict/:typeId?JSON` — type definition + requisites
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -203,7 +203,7 @@ curl -s "$NODE/$DB/_dict/$TYPE_ID?JSON" -b "$DB=$TOKEN" | jq .
 ---
 
 ### 2.3 `GET /:db/metadata/:typeId?JSON` — extended type metadata
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response (same as `_dict` but also includes `refs`):**
 ```json
@@ -225,7 +225,7 @@ curl -s "$NODE/$DB/metadata/$TYPE_ID?JSON" -b "$DB=$TOKEN" | jq .
 ---
 
 ### 2.4 `GET /:db/obj_meta/:id?JSON` — object + its type meta
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -249,8 +249,8 @@ curl -s "$NODE/$DB/obj_meta/$OBJ_ID?JSON" -b "$DB=$TOKEN" | jq .
 
 ## 3. Object data (read)
 
-### 3.1 `GET /:db/object/:typeId?JSON` — object list for type  ❌ CRITICAL
-**Status PHP → Node.js:** ❌
+### 3.1 `GET /:db/object/:typeId?JSON` — object list for type
+**Status PHP → Node.js:** ✅
 
 **PHP route:** `/:db/object/:typeId` with `?JSON` — falls to `default:` in PHP switch, loads main.html template, populates `$GLOBALS["GLOBAL_VARS"]["api"]["object"]`, returns JSON.
 
@@ -278,8 +278,8 @@ curl -s "$NODE/$DB/object/$TYPE_ID?JSON" -b "$DB=$TOKEN" | head -3
 
 ---
 
-### 3.2 `GET /:db/object/:typeId?JSON_DATA` — compact list  ❌ CRITICAL
-**Status PHP → Node.js:** ❌
+### 3.2 `GET /:db/object/:typeId?JSON_DATA` — compact list
+**Status PHP → Node.js:** ✅
 
 **PHP response (compact — used by legacy JS client for large datasets):**
 ```json
@@ -300,8 +300,8 @@ curl -s "$NODE/$DB/object/$TYPE_ID?JSON_DATA" -b "$DB=$TOKEN" | head -3
 
 ---
 
-### 3.3 `GET /:db/_list/:typeId?JSON` — paginated list  ⚠️
-**Status PHP → Node.js:** ⚠️
+### 3.3 `GET /:db/_list/:typeId?JSON` — paginated list
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -472,31 +472,32 @@ curl -s -X POST "$NODE/$DB/_m_up/$OBJ_ID" \
 
 ## 5. Edit form (GET JSON)
 
-### 5.1 `GET /:db/edit_obj/:id?JSON` — edit form data  ❌ CRITICAL
-**Status PHP → Node.js:** ❌
+### 5.1 `GET /:db/edit_obj/:id?JSON` — edit form data
+**Status PHP → Node.js:** ✅
 
-**PHP `&object` action response:**
+**Node.js response (matches smartq.js getSmart expectations):**
 ```json
 {
   "obj": {
     "id": 150,
     "val": "ООО Рога",
     "up": 5,
-    "base": 0
+    "base": 22,
+    "typ": "22"
   },
-  "req": [
-    { "id": 101, "val": "Имя клиента", "ord": 1, "value": "ООО Рога" },
-    { "id": 102, "val": ":!NULL:Телефон", "ord": 2, "value": "+79001234567" }
-  ]
+  "reqs": {
+    "101": { "value": "ООО Рога" },
+    "102": { "value": "+79001234567" }
+  }
 }
 ```
-
-**Current Node.js behaviour:** Returns HTML (same catch-all handler as object).
+Note: Node.js returns `reqs` as an object keyed by req ID (for smartq.js `json.reqs[reqId].value`),
+not a PHP-style `req` array. The `obj.typ` (string) field is required by smartq.js `getSmart`.
 
 **Test:**
 ```bash
-curl -s "$PHP/$DB/edit_obj/$OBJ_ID?JSON" -b "$DB=$TOKEN" | jq .obj
-curl -s "$NODE/$DB/edit_obj/$OBJ_ID?JSON" -b "$DB=$TOKEN" | head -3
+curl -s "$NODE/$DB/edit_obj/$OBJ_ID?JSON" -b "$DB=$TOKEN" | jq .obj
+curl -s "$NODE/$DB/edit_obj/$OBJ_ID?JSON" -b "$DB=$TOKEN" | jq '.reqs | keys'
 ```
 
 ---
@@ -504,7 +505,7 @@ curl -s "$NODE/$DB/edit_obj/$OBJ_ID?JSON" -b "$DB=$TOKEN" | head -3
 ## 6. Reports
 
 ### 6.1 `GET /:db/report/:reportId?JSON` — report metadata
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -520,21 +521,29 @@ curl -s "$NODE/$DB/report/$REPORT_ID?JSON" -b "$DB=$TOKEN" | jq .
 ---
 
 ### 6.2 `POST /:db/report/:reportId` — execute report (JSON)
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
-**PHP response (standard JSON):**
+**Node.js response (column-major format, totals embedded in columns):**
 ```json
 {
-  "columns": [ { "id": "name", "name": "Название", "align": "LEFT" } ],
-  "data": [ ["ООО Рога", "2024-01-15"] ],
-  "totals": [null, 42]
+  "columns": [
+    { "id": 10, "name": "Название", "type": 4, "format": "CHARS", "align": "LEFT", "totals": null },
+    { "id": 11, "name": "Сумма",    "type": 13, "format": "NUMBER", "align": "RIGHT", "totals": 42 }
+  ],
+  "data": [
+    ["ООО Рога", "ИП Копыта"],
+    ["1000",     "2000"]
+  ],
+  "rownum": 2
 }
 ```
+**Important:** `data[col_index][row_index]` — column-major format (matches smartq.js drawLine).
+`totals` is embedded in each column object (matches smartq.js drawFoot check `'totals' in json.columns[0]`).
 
-**PHP response with `?JSON_KV`:**
+**Response with `?JSON_KV`:**
 ```json
 [
-  { "name": "ООО Рога", "date": "2024-01-15" }
+  { "Название": "ООО Рога", "Сумма": "1000" }
 ]
 ```
 
@@ -542,14 +551,14 @@ curl -s "$NODE/$DB/report/$REPORT_ID?JSON" -b "$DB=$TOKEN" | jq .
 ```bash
 curl -s -X POST "$NODE/$DB/report/$REPORT_ID?JSON" \
   -b "$DB=$TOKEN" \
-  -d "_xsrf=$XSRF" | jq '{columns: .columns[:2], rows: (.data[:2])}'
+  -d "_xsrf=$XSRF" | jq '{cols: [.columns[].name], data_shape: [(.data | length), (.data[0] | length)]}'
 ```
-**Check:** `columns` array with `name` field, `data` array of arrays, `totals` array or null.
+**Check:** `data[0]` is first column (array of all row values for that column), `data[0][0]` is row 0 col 0.
 
 ---
 
 ### 6.3 `GET /:db/report?JSON` — list of reports
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -681,7 +690,7 @@ curl -s -X POST "$NODE/$DB/restore" \
 ## 9. References
 
 ### 9.1 `GET /:db/_ref_reqs/:refId?JSON` — reference display values
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -787,22 +796,22 @@ curl -s "$NODE/$DB/_connect?JSON" -b "$DB=$TOKEN" | jq .status
 
 ---
 
-## Summary: Critical gaps
+## Summary: Implementation status
 
-| # | Endpoint | PHP returns | Node.js returns | Priority |
-|---|----------|-------------|-----------------|----------|
-| 1 | `GET /:db/object/:typeId?JSON` | `{"object":[{id,val,up,base,ord}]}` | HTML | 🔴 P0 |
-| 2 | `GET /:db/object/:typeId?JSON_DATA` | `[{i,u,o,r:[vals]}]` compact | HTML | 🔴 P0 |
-| 3 | `GET /:db/edit_obj/:id?JSON` | `{obj:{…},req:[…]}` | HTML | 🔴 P0 |
-| 4 | `GET /:db/:page*` — `?JSON` ignored | JSON via default: handler | always HTML | 🔴 P0 |
-| 5 | `GET /:db/terms?JSON` — response shape | `[{id,name,href,ord}]` | may differ | 🟡 P1 |
-| 6 | `GET /:db/_list/:typeId` — param names | `LIMIT`, `F` | check Node.js reads correctly | 🟡 P1 |
-| 7 | `GET /:db/report/:id?JSON` — metadata | `{id,name,val,title}` | partial | 🟡 P1 |
-| 8 | `POST /:db/report/:id?JSON` — execution | `{columns,data,totals}` | partial | 🟡 P1 |
-| 9 | `GET /:db/_ref_reqs/:refId?JSON` | `{"id":"display str"}` | unknown | 🟡 P1 |
-| 10 | `GET /:db/grants?JSON` | `{success,user,grants[]}` | unknown | 🟢 P2 |
-| 11 | `POST /:db/restore` | SQL statements (text/plain) | unknown | 🟢 P2 |
-| 12 | `POST /my/_new_db` | `{status,id}` | unknown | 🟢 P2 |
+| # | Endpoint | Status | Notes |
+|---|----------|--------|-------|
+| 1 | `GET /:db/object/:typeId?JSON` | ✅ | `{object:[],type:{},req_type:[],reqs:{}}` |
+| 2 | `GET /:db/object/:typeId?JSON_DATA` | ✅ | `[{i,u,o,r:[vals]}]` compact |
+| 3 | `GET /:db/edit_obj/:id?JSON` | ✅ | `{obj:{typ},reqs:{id:{value}}}` (smartq.js format) |
+| 4 | `GET /:db/:page*` — `?JSON` handling | ✅ | JSON intercepted before HTML fallback |
+| 5 | `GET /:db/terms?JSON` | ✅ | `[{id,name,href,ord}]` |
+| 6 | `GET /:db/_list/:typeId` | ✅ | sort, filter, LIMIT/F pagination |
+| 7 | `GET /:db/report/:id?JSON` | ✅ | metadata with columns |
+| 8 | `POST /:db/report/:id?JSON` | ✅ | column-major data, totals in columns, RECORD_COUNT, LIMIT |
+| 9 | `GET /:db/_ref_reqs/:refId?JSON` | ✅ | `{id: "display str"}` |
+| 10 | `GET /:db/grants?JSON` | ⚠️ | partial |
+| 11 | `GET /:db/csv_all`, `backup`, `restore` | ⚠️ | partial |
+| 12 | `POST /my/_new_db` | ⚠️ | partial |
 
 ---
 

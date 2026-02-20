@@ -1564,9 +1564,38 @@ router.get('/:db/:page*', async (req, res, next) => {
           })));
         }
 
-        // Standard JSON: {"object":[{id,val,up,base,ord}]}
+        // Standard JSON: {"object":[...], "type":{val}, "req_type":[names], "reqs":{objId:[vals]}}
+        // Needed by gjsParseObject in main.js for template variable substitution
+        const [[typeRow] = []] = await pool.query(
+          `SELECT id, val FROM \`${db}\` WHERE id = ?`, [subId]
+        );
+        const [reqDefStd] = await pool.query(
+          `SELECT id, val FROM \`${db}\` WHERE up = ? ORDER BY ord`, [subId]
+        );
+        const reqMapStd = {};
+        if (objRows.length > 0 && reqDefStd.length > 0) {
+          const objIdsStd = objRows.map(r => r.id);
+          const phStd = objIdsStd.map(() => '?').join(',');
+          const [reqValsStd] = await pool.query(
+            `SELECT up, t, val FROM \`${db}\` WHERE up IN (${phStd}) ORDER BY up, ord`,
+            objIdsStd
+          );
+          for (const rv of reqValsStd) {
+            if (!reqMapStd[rv.up]) reqMapStd[rv.up] = {};
+            reqMapStd[rv.up][rv.t] = rv.val;
+          }
+        }
+        const reqsStd = {};
+        for (const o of objRows) {
+          reqsStd[o.id] = reqDefStd.map(rd =>
+            (reqMapStd[o.id] && reqMapStd[o.id][rd.id] !== undefined) ? reqMapStd[o.id][rd.id] : ''
+          );
+        }
         return res.json({
           object: objRows.map(r => ({ id: r.id, val: r.val, up: r.up, base: r.base, ord: r.ord })),
+          type: { id: typeRow ? typeRow.id : subId, val: typeRow ? typeRow.val : '' },
+          req_type: reqDefStd.map(r => r.val),
+          reqs: reqsStd,
         });
       }
 
@@ -1595,14 +1624,12 @@ router.get('/:db/:page*', async (req, res, next) => {
         const valMap = {};
         for (const rv of reqVals) valMap[rv.t] = rv.val;
 
+        // Legacy JS (smartq.js) expects: json.obj.typ (string), json.reqs[reqId].value
         return res.json({
-          obj: { id: obj.id, val: obj.val, up: obj.up, base: obj.base },
-          req: reqDefs.map(rd => ({
-            id: rd.id,
-            val: rd.val,
-            ord: rd.ord,
-            value: valMap[rd.id] !== undefined ? valMap[rd.id] : '',
-          })),
+          obj: { id: obj.id, val: obj.val, up: obj.up, base: obj.base, typ: String(obj.base) },
+          reqs: Object.fromEntries(
+            reqDefs.map(rd => [rd.id, { value: valMap[rd.id] !== undefined ? valMap[rd.id] : '' }])
+          ),
         });
       }
     } catch (err) {
@@ -1773,12 +1800,21 @@ router.post('/:db/_m_new/:up?', (req, res, next) => {
   }
 
   try {
-    const parentId = parseInt(up || req.body.up || '0', 10);
-    const typeId = parseInt(req.body.t, 10);
-    const value = req.body.val || '';
+    // Support two calling conventions:
+    // 1. Node.js: URL=_m_new/:parentId?type=<typeId>  val=<name>
+    // 2. Legacy:  URL=_m_new/:typeId   body.up=<parentId>  t<typeId>=<name>
+    let parentId, typeId;
+    if (req.query.type) {
+      typeId = parseInt(req.query.type, 10);
+      parentId = parseInt(up || req.body.up || '0', 10);
+    } else {
+      typeId = parseInt(up, 10);
+      parentId = parseInt(req.body.up || req.query.up || '0', 10);
+    }
+    const value = req.body.val || req.body['t' + typeId] || '';
 
     if (!typeId) {
-      return res.status(200).json([{ error: 'Type ID (t) is required'  }]);
+      return res.status(200).json([{ error: 'Type ID (t or type) is required'  }]);
     }
 
     // Get next order
@@ -1825,13 +1861,15 @@ router.post('/:db/_m_new/:up?', (req, res, next) => {
     );
     const hasReqs = reqRows.length > 0;
 
-    // PHP response format: {"id":$i,"obj":$obj,"ord":$ord,"next_act":"...","args":"...","val":"..."}
+    // PHP response format: {"id":$newId,"obj":$typeId,"ord":$ord,"next_act":"...","args":"...","val":"..."}
+    // obj = type ID (so client knows which type to navigate back to)
+    // args = new object ID (string) when next_act=edit_obj, or parent filter when returning to list
     const next_act = hasReqs ? 'edit_obj' : 'object';
-    const args = hasReqs ? `new1=1&` : (parentId > 1 ? `F_U=${parentId}` : '');
+    const args = hasReqs ? String(id) : (parentId > 1 ? `F_U=${parentId}` : '');
 
     return res.status(200).json({
       id,
-      obj: id,
+      obj: typeId,
       ord: order,
       next_act,
       args,
@@ -2300,28 +2338,80 @@ router.all('/:db/_list/:typeId', async (req, res) => {
     const offset = parseInt(req.query.F || req.query.offset || req.body.F || req.body.offset || '0', 10);
     const search = req.query.q || req.body.q || '';
 
-    // Build query
-    let query = `SELECT id, val, up, t, ord FROM ${db} WHERE t = ?`;
-    let countQuery = `SELECT COUNT(*) as total FROM ${db} WHERE t = ?`;
-    const params = [type];
-    const countParams = [type];
+    // Sort: sort=0 → by val, sort=<reqId> → by requisite value
+    const sortCol = req.query.sort || req.body.sort || '';
+    const sortDir = (req.query.dir || req.body.dir || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+    const sortReqId = sortCol && sortCol !== '0' ? parseInt(sortCol, 10) : 0;
+
+    // Filters: f_0=text → by name; f_<reqId>=text → by requisite value
+    const colFilters = {}; // reqId → filterText
+    const allParams = { ...req.query, ...req.body };
+    for (const [k, v] of Object.entries(allParams)) {
+      if (k.startsWith('f_') && v) {
+        const colId = parseInt(k.slice(2), 10);
+        if (!isNaN(colId)) colFilters[colId] = v;
+      }
+    }
+
+    // Build query with optional JOINs for sort/filter by requisite
+    const joinParts = [];
+    const joinParams = [];
+    let joinIdx = 0;
+
+    // Sort JOIN (if sorting by a requisite)
+    let orderExpr = sortCol === '0' ? `a.val ${sortDir}` : `a.ord`;
+    if (sortReqId) {
+      const alias = `sort_j`;
+      joinParts.push(`LEFT JOIN \`${db}\` ${alias} ON ${alias}.up = a.id AND ${alias}.t = ?`);
+      joinParams.push(sortReqId);
+      orderExpr = `${alias}.val ${sortDir}`;
+    }
+
+    // Filter JOINs (for requisite column filters)
+    const filterJoins = [];
+    const filterWhere = [];
+    const filterParams = [];
+
+    for (const [colId, filterText] of Object.entries(colFilters)) {
+      const colIdNum = parseInt(colId, 10);
+      if (colIdNum === 0) continue; // handled in WHERE below
+      const alias = `fj${++joinIdx}`;
+      joinParts.push(`LEFT JOIN \`${db}\` ${alias} ON ${alias}.up = a.id AND ${alias}.t = ?`);
+      joinParams.push(colIdNum);
+      filterWhere.push(`${alias}.val LIKE ?`);
+      filterParams.push(`%${filterText}%`);
+    }
+
+    const selectCols = `a.id, a.val, a.up, a.t, a.ord`;
+    const fromClause = `FROM \`${db}\` a`;
+    const joinClause = joinParts.join(' ');
+
+    const whereParts = ['a.t = ?'];
+    const whereParams = [type];
 
     if (parentId !== null) {
-      query += ` AND up = ?`;
-      countQuery += ` AND up = ?`;
-      params.push(parentId);
-      countParams.push(parentId);
+      whereParts.push('a.up = ?');
+      whereParams.push(parentId);
     }
-
     if (search) {
-      query += ` AND val LIKE ?`;
-      countQuery += ` AND val LIKE ?`;
-      params.push(`%${search}%`);
-      countParams.push(`%${search}%`);
+      whereParts.push('a.val LIKE ?');
+      whereParams.push(`%${search}%`);
+    }
+    if (colFilters[0]) {
+      whereParts.push('a.val LIKE ?');
+      whereParams.push(`%${colFilters[0]}%`);
+    }
+    for (const fw of filterWhere) {
+      whereParts.push(fw);
     }
 
-    query += ` ORDER BY ord LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
+    const whereClause = `WHERE ${whereParts.join(' AND ')}`;
+    const allQueryParams = [...joinParams, ...whereParams, ...filterParams];
+
+    const query = `SELECT ${selectCols} ${fromClause} ${joinClause} ${whereClause} ORDER BY ${orderExpr} LIMIT ? OFFSET ?`;
+    const countQuery = `SELECT COUNT(*) as total ${fromClause} ${joinClause} ${whereClause}`;
+    const params = [...allQueryParams, limit, offset];
+    const countParams = [...allQueryParams];
 
     const [rows] = await pool.query(query, params);
     const [countRows] = await pool.query(countQuery, countParams);
@@ -4584,8 +4674,21 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         }
       }
 
-      const limit = params.LIMIT || params.limit || 100;
-      const offset = params.F || params.offset || 0;
+      // Parse LIMIT: smartq.js sends "offset,count" (e.g. "0,50" or "50,50") or just "50"
+      let limit = 100, offset = 0;
+      const rawLimit = params.LIMIT || params.limit;
+      if (rawLimit) {
+        const parts = String(rawLimit).split(',');
+        if (parts.length === 2) {
+          offset = parseInt(parts[0], 10) || 0;
+          limit = parseInt(parts[1], 10) || 100;
+        } else {
+          limit = parseInt(parts[0], 10) || 100;
+          offset = parseInt(params.F || params.offset || 0, 10);
+        }
+      } else {
+        offset = parseInt(params.F || params.offset || 0, 10);
+      }
 
       const results = await executeReport(pool, db, report, filters, limit, offset);
 
@@ -4601,6 +4704,13 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       });
 
       logger.info('[Legacy report] Report executed', { db, reportId: id, rows: results.rownum });
+
+      // RECORD_COUNT: smartq.js calls ?JSON&RECORD_COUNT → {count: N}
+      if (req.query.RECORD_COUNT !== undefined) {
+        // Fetch all matching rows to get true count (no LIMIT)
+        const cntResults = await executeReport(pool, db, report, filters, 999999, 0);
+        return res.json({ count: cntResults.rownum });
+      }
 
       // CSV export (?format=csv)
       if (format === 'csv') {
@@ -4647,21 +4757,24 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (isApiRequest(req)) {
-        // PHP default JSON: columns array + data as row-major array of arrays
-        // data[row_index] = [col0_val, col1_val, ...]
-        // totals: array of sum values per column (null if not numeric)
+        // PHP default JSON: column-major data[col_index][row_index]
+        // smartq.js getRep: iterates `for(i in json.data[0])` (rows of first col)
+        // smartq.js drawLine: uses `json.data[j][i]` (col j, row i)
+        // smartq.js drawFoot: checks 'totals' in json.columns[0] → embed totals in each column
+        const totalsMap = results.totals || {};
         const cols = report.columns.map(col => ({
           id: col.id,
           name: col.name,
           type: col.baseType || 0,
           format: REV_BASE_TYPE[col.baseType] || 'CHARS',
           align: col.align || 'LEFT',
+          totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
         }));
-        const data = results.data.map(row =>
-          report.columns.map(col => row[col.alias] !== undefined ? row[col.alias] : '')
+        // Column-major: data[column_index] = [row0_val, row1_val, ...]
+        const data = report.columns.map(col =>
+          results.data.map(row => row[col.alias] !== undefined ? row[col.alias] : '')
         );
-        const totals = results.totals || report.columns.map(() => null);
-        return res.json({ columns: cols, data, totals, rownum: results.rownum });
+        return res.json({ columns: cols, data, rownum: results.rownum });
       }
 
       // Non-API (browser) fallback
@@ -5633,12 +5746,31 @@ router.post('/:db', async (req, res, next) => {
       }
     }
 
-    const limit = params.LIMIT || params.limit || 100;
-    const offset = params.F || params.offset || 0;
+    // Parse LIMIT: handles "offset,count" format from smartq.js (e.g. "0,50" or "50,50")
+    let limit = 100, offset = 0;
+    const rawLimit = params.LIMIT || params.limit;
+    if (rawLimit) {
+      const parts = String(rawLimit).split(',');
+      if (parts.length === 2) {
+        offset = parseInt(parts[0], 10) || 0;
+        limit = parseInt(parts[1], 10) || 100;
+      } else {
+        limit = parseInt(parts[0], 10) || 100;
+        offset = parseInt(params.F || params.offset || 0, 10);
+      }
+    } else {
+      offset = parseInt(params.F || params.offset || 0, 10);
+    }
 
     const results = await executeReport(pool, db, report, filters, limit, offset);
 
     const q = req.query;
+
+    // RECORD_COUNT: smartq.js calls ?JSON&RECORD_COUNT → {count: N}
+    if (q.RECORD_COUNT !== undefined) {
+      const cntResults = await executeReport(pool, db, report, filters, 999999, 0);
+      return res.json({ count: cntResults.rownum });
+    }
 
     // JSON_KV format: [{col_name: val, ...}, ...]
     if (q.JSON_KV !== undefined) {
@@ -5673,16 +5805,20 @@ router.post('/:db', async (req, res, next) => {
       return res.json({ columns: cols, rows, totalCount: results.data.length });
     }
 
-    // PHP default JSON: data is column-major array of arrays
-    // data[col_index] = [row0_val, row1_val, ...]
+    // PHP default JSON: row-major data[row_index][col_index], totals embedded in columns
     if (isApiRequest(req)) {
+      const totalsMap = results.totals || {};
       const cols = report.columns.map(col => ({
         id: col.id,
         name: col.name,
         type: col.baseType || 0,
-        format: col.baseOut || 'CHARS'
+        format: REV_BASE_TYPE[col.baseType] || 'CHARS',
+        align: col.align || 'LEFT',
+        totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
       }));
-      const data = report.columns.map(col => results.data.map(row => row[col.alias] ?? ''));
+      const data = results.data.map(row =>
+        report.columns.map(col => row[col.alias] ?? '')
+      );
       return res.json({ columns: cols, data, rownum: results.rownum });
     }
 

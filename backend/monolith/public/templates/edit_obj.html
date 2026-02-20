@@ -165,9 +165,9 @@ function renderForm() {
   html += '<form id="edit-form" enctype="multipart/form-data">';
   html += '<input type="hidden" name="_xsrf" value="' + escHtml(xsrf) + '">';
 
-  // Name field (val / t100)
-  html += '<div class="field-group"><label>Наименование</label>';
-  html += '<input class="form-control" type="text" id="t100" name="t100" value="' + escHtml(name) + '"></div>';
+  // Main name field — sent as `val` so _m_new and _m_save can read req.body.val
+  html += '<div class="field-group"><label><t9n>[RU]Наименование[EN]Name</t9n></label>';
+  html += '<input class="form-control" type="text" id="fld-val" name="val" value="' + escHtml(name) + '"></div>';
 
   reqs.forEach(function(r) {
     var val = getReqVal(r.id);
@@ -198,10 +198,10 @@ function renderForm() {
 
   document.getElementById('form-wrap').innerHTML = html;
 
-  // Init select2 for reference fields
+  // Init select fields for reference requisites
+  // refType is non-null for user-defined type references (from _d_main)
   reqs.forEach(function(r) {
-    var typeCode = String(r.type);
-    if (typeCode === '12' || typeCode === 'REFERENCE') {
+    if (r.refType) {
       initRefField(r);
     }
   });
@@ -251,14 +251,14 @@ function renderField(r, val) {
     return '<input class="form-control" type="checkbox" id="' + n + '" name="' + n + '" value="1"' + checked + '>' +
            '<input type="hidden" name="b' + r.id + '" value="1">';
   }
-  if (tc === '12' || tc === 'REFERENCE') {
-    // Will be populated by initRefField
+  if (r.refType || tc === '12' || tc === 'REFERENCE') {
+    // Reference to another type — rendered as a SELECT dropdown (populated by initRefField)
     var selVal = '';
     var selText = '';
     if (val && typeof val === 'object') { selVal = val.id || ''; selText = val.val || ''; }
     else { selVal = val || ''; }
-    return '<select class="form-control select2" id="' + n + '" name="' + n +
-           '" data-ref-type="' + (r.refType || r.ref || '') + '">' +
+    return '<select class="form-control" id="' + n + '" name="' + n +
+           '" data-ref-type="' + escHtml(String(r.refType || r.ref || '')) + '">' +
            '<option value="' + escHtml(String(selVal)) + '">' + escHtml(selText || String(selVal)) + '</option>' +
            '</select>';
   }
