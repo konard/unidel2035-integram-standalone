@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Pragma" content="no-cache">
+  <title>Integram — Report</title>
+  <link rel="stylesheet" href="/css/bootstrap337.min.css">
+  <script>
+    // ── Session init ──────────────────────────────────────────────────────────
+    var p = new URLSearchParams(location.search);
+    var db    = p.get('db')     || localStorage.getItem('_db') || '';
+    var xsrf  = localStorage.getItem(db + '_xsrf')   || '';
+    var token = localStorage.getItem(db + '_token')  || '';
+    var uid   = localStorage.getItem(db + '_userId') || '';
+    var id    = parseInt(p.get('id')) || 0;
+    var action = '';
+    if (!token) location.href = '/app/templates/login.html?db=' + encodeURIComponent(db);
+  </script>
+  <script src="/js/jquery-3.5.1.slim.min.js"></script>
+  <script src="/js/js.js"></script>
+</head>
+<body style="font-family:Verdana,Tahoma,sans-serif;font-size:13px;line-height:normal;padding:2px">
+
+<!-- Filter form (mirrors PHP version) -->
+<FORM method="post" id="report" onsubmit="runReport(event)">
+<input type="hidden" name="_xsrf" id="xsrf-field" value="">
+  <TABLE>
+  <TR>
+    <TD>&nbsp;<a href="/app/templates/main.html?db=" id="home-link">
+        <span class="glyphicon glyphicon-home"></span></a>&nbsp;
+      <script type="text/javascript">
+      var tableToExcel = (function() {
+        var uri = 'data:application/vnd.ms-excel;base64,'
+          , template = ('<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>{'
+              + 'worksheet}</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--><meta http-equiv="content-type" content="text/plain; charset=UTF-8"/></head><body><table>{'
+              + 'table}</table></body></html>')
+          , base64 = function(s) { return window.btoa(unescape(encodeURIComponent(s))); }
+          , format = function(s, c) { return s.replace(/{(\w+)}/g, function(m, p) { return c[p]; }); };
+        return function(table, name) {
+          if (!table.nodeType) table = byId(table);
+          var ctx = {worksheet: name || 'Worksheet', table: table.innerHTML};
+          window.location.href = uri + base64(format(template, ctx));
+        };
+      })();
+      </script>
+      <a href="#" id="export-html" style="border:1px solid;-moz-border-radius:5px;-webkit-border-radius:5px;border-radius:5px;padding:3px;">.HTML</a>
+      <a href="#" id="export-xls" style="border:1px solid;-moz-border-radius:5px;-webkit-border-radius:5px;border-radius:5px;padding:3px;">.XLS</a>
+    </td>
+    <TD ALIGN="center" style="padding-left:13px;padding-right:13px"><H4 id="report-title">Отчет</H4></TD>
+    <TD align="right" class="t9n" style="padding-right:10px">
+      <a href="#" title="<t9n>[RU]Управление компактностью[EN]Switch compact/loose view</t9n>" onclick="toggle_compact(); return false;">
+        <span class="glyphicon glyphicon-text-width"></span></a>&nbsp;
+      &nbsp;<a href="#" title="<t9n>[RU]Показать фильтр[EN]Show filter</t9n>" onclick="toggle_filter(); return false;">
+        <span class="glyphicon glyphicon-filter"></span></a>
+      &nbsp;<button id="refresh" type="submit" class="btn btn-default btn-xs" title="<t9n>[RU]Применить фильтр[EN]Apply filter</t9n>" style="border:none;">
+        <a href="#"><span class="glyphicon glyphicon-refresh"></span></a></button>
+      &nbsp;<a href="#" onclick="clearFilters(); return false;" title="<t9n>[RU]Очистить фильтр[EN]Reset filter</t9n>">
+        <span class="glyphicon glyphicon-remove-circle"></span></a>&nbsp;
+    </TD>
+  </TR>
+  <TR>
+  <TD colspan="3">
+    <div id="report-loading" style="text-align:center;padding:20px;display:none;">
+      <img src="/i/ajax.gif" alt="loading">
+    </div>
+    <div id="report-error" class="alert alert-danger" style="display:none;"></div>
+    <TABLE id="report_table" class="table table-bordered">
+      <TR style="background-color:#f9f9f9;position:sticky;top:-1px;" onclick="toggle_filter();">
+        <TD id="report-head"></TD>
+      </TR>
+      <TR id="filter_row" style="display:none;">
+        <TD id="report-filter"></TD>
+      </TR>
+      <TBODY id="report-body"></TBODY>
+      <TFOOT id="report-totals"></TFOOT>
+    </TABLE>
+  </TD>
+  </TR>
+  </TABLE>
+</FORM>
+
+<FORM method="POST" id="post" action=""><input type="hidden" name="_xsrf" value=""></FORM>
+
+<script type="text/javascript">
+// Lazy-load XLSX
+var _xlsxLoaded = false;
+function ensureXlsx(cb) {
+  if (_xlsxLoaded) { cb(); return; }
+  var script = document.createElement('script');
+  script.src = '/js/xlsx.full.min.js';
+  script.onload = function() { _xlsxLoaded = true; cb(); };
+  document.body.appendChild(script);
+}
+
+localize();
+
+// Fix nav links
+document.getElementById('home-link').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
+document.getElementById('post').action = '/' + db + '/';
+document.getElementById('xsrf-field').value = xsrf;
+
+// ── Report state ─────────────────────────────────────────────────────────────
+var reportMeta = null;   // from GET /:db/report/:id?JSON
+var filterVals = {};     // col_id → {from, to}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+function init() {
+  if (!id) {
+    showError('Укажите ID отчёта в URL (?id=...)');
+    return;
+  }
+  // Try to fetch report metadata
+  fetch('/' + db + '/report/' + id + '?JSON', { credentials: 'include' })
+    .then(function(r){ return r.json(); })
+    .then(function(meta) {
+      reportMeta = meta;
+      var title = meta.title || meta.name || meta.val || ('Отчет #' + id);
+      document.title = title;
+      document.getElementById('report-title').textContent = title;
+      runReport(null);
+    })
+    .catch(function(e) {
+      // No metadata endpoint - just run the report directly
+      document.title = 'Отчет #' + id;
+      runReport(null);
+    });
+}
+
+// ── Run report ────────────────────────────────────────────────────────────────
+function runReport(event) {
+  if (event) event.preventDefault();
+  showLoading(true);
+  showError('');
+
+  // Build filter body
+  var body = '_xsrf=' + encodeURIComponent(xsrf);
+  Object.keys(filterVals).forEach(function(col) {
+    var v = filterVals[col];
+    if (v.from) body += '&FR_' + col + '=' + encodeURIComponent(v.from);
+    if (v.to)   body += '&TO_' + col + '=' + encodeURIComponent(v.to);
+  });
+
+  // Try POST to /:db/report/:id (execute report)
+  fetch('/' + db + '/report/' + id, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body,
+    credentials: 'include'
+  }).then(function(r) {
+    var ct = r.headers.get('content-type') || '';
+    if (ct.indexOf('json') !== -1 || ct.indexOf('application') !== -1) {
+      return r.json().then(function(json) { renderJsonReport(json); });
+    }
+    // HTML response — inject into table area
+    return r.text().then(function(html) { renderHtmlReport(html); });
+  }).catch(function(e) {
+    showError('Ошибка выполнения отчёта: ' + e.message);
+  }).finally(function() { showLoading(false); });
+}
+
+// ── Render JSON report ────────────────────────────────────────────────────────
+function renderJsonReport(json) {
+  var cols = json.columns || json.cols || [];
+  var rows = json.data || json.rows || [];
+  var totals = json.totals || json.sums || [];
+
+  // Head
+  var headHtml = '';
+  cols.forEach(function(c) { headHtml += '<TD ALIGN="CENTER"><B>' + escHtml(c.name || c) + '</B></TD>'; });
+  document.getElementById('report-head').innerHTML = headHtml;
+
+  // Filter row
+  var filterHtml = '';
+  cols.forEach(function(c, idx) {
+    var cid = c.id || idx;
+    var fv = filterVals[cid] || {};
+    filterHtml += '<TD style="padding:0px;" align="center">'
+      + '<input type="text" name="FR_' + cid + '" value="' + escHtml(fv.from || '') + '" size="2" oninput="setFilter(\'' + cid + '\',\'from\',this.value)">'
+      + '-<input type="text" name="TO_' + cid + '" value="' + escHtml(fv.to || '') + '" size="2" oninput="setFilter(\'' + cid + '\',\'to\',this.value)">'
+      + '</TD>';
+  });
+  document.getElementById('report-filter').innerHTML = filterHtml;
+
+  // Data rows
+  var bodyHtml = '';
+  rows.forEach(function(row) {
+    bodyHtml += '<TR>';
+    if (Array.isArray(row)) {
+      row.forEach(function(cell, idx) {
+        var align = cols[idx] && cols[idx].align ? cols[idx].align : 'LEFT';
+        bodyHtml += '<TD ALIGN="' + align + '" style="mso-number-format:\\@">' + escHtml(String(cell !== null && cell !== undefined ? cell : '')) + '</TD>';
+      });
+    } else {
+      cols.forEach(function(c, idx) {
+        var key = c.id || c.name || idx;
+        var align = c.align || 'LEFT';
+        bodyHtml += '<TD ALIGN="' + align + '" style="mso-number-format:\\@">' + escHtml(String(row[key] !== undefined ? row[key] : '')) + '</TD>';
+      });
+    }
+    bodyHtml += '</TR>';
+  });
+  document.getElementById('report-body').innerHTML = bodyHtml;
+
+  // Totals
+  if (totals && totals.length) {
+    var totHtml = '<TR>';
+    totals.forEach(function(v) { totHtml += '<TD ALIGN="RIGHT"><B>' + escHtml(String(v !== null && v !== undefined ? v : '')) + '</B></TD>'; });
+    totHtml += '</TR>';
+    document.getElementById('report-totals').innerHTML = totHtml;
+  }
+
+  restoreCompact();
+}
+
+// ── Render HTML report (fallback) ────────────────────────────────────────────
+function renderHtmlReport(html) {
+  // Extract table content if possible
+  var match = html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
+  if (match) {
+    document.getElementById('report-body').innerHTML = match[1];
+  } else {
+    // Insert as-is in a wrapper
+    document.getElementById('report-body').innerHTML = '<TR><TD><div style="overflow:auto">' + html + '</div></TD></TR>';
+  }
+  restoreCompact();
+}
+
+// ── Filter helpers ────────────────────────────────────────────────────────────
+function setFilter(col, type, val) {
+  if (!filterVals[col]) filterVals[col] = {};
+  filterVals[col][type] = val;
+}
+
+function clearFilters() {
+  filterVals = {};
+  document.querySelectorAll('#filter_row input').forEach(function(el){ el.value = ''; });
+  runReport(null);
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function showLoading(v) {
+  document.getElementById('report-loading').style.display = v ? 'block' : 'none';
+  document.getElementById('report-table').style.opacity = v ? '0.4' : '1';
+}
+function showError(msg) {
+  var el = document.getElementById('report-error');
+  if (msg) { el.textContent = msg; el.style.display = 'block'; }
+  else el.style.display = 'none';
+}
+
+// ── Export ────────────────────────────────────────────────────────────────────
+document.getElementById('export-html').onclick = function() {
+  document.getElementById('refresh').style.display = 'none';
+  tableToExcel('report_table', document.getElementById('report-title').textContent);
+  return false;
+};
+document.getElementById('export-xls').onclick = function() {
+  ensureXlsx(function() {
+    XLSX.writeFile(XLSX.utils.table_to_book(document.getElementById('report_table')), 'output.xlsx');
+  });
+  return false;
+};
+
+// ── Compact / filter toggle ───────────────────────────────────────────────────
+function set_cookie(name, value) {
+  var date = new Date();
+  date.setTime(date.getTime() + 31536000000);
+  document.cookie = name + '=' + escape(value) + '; expires=' + date.toGMTString();
+}
+function get_cookie(name) {
+  var results = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
+  if (results) return unescape(results[2]);
+  return null;
+}
+function delete_cookie(name) {
+  var cookie_date = new Date();
+  cookie_date.setTime(cookie_date.getTime() - 1);
+  document.cookie = name + '=; expires=' + cookie_date.toGMTString();
+}
+function toggle_compact() {
+  if (get_cookie('compact') == 'compact') {
+    byId('report_table').classList.remove('table-condensed');
+    delete_cookie('compact');
+  } else {
+    byId('report_table').classList.add('table-condensed');
+    set_cookie('compact', 'compact');
+  }
+}
+function restoreCompact() {
+  if (get_cookie('compact') == 'compact')
+    byId('report_table').classList.add('table-condensed');
+}
+function toggle_filter() {
+  var fr = byId('filter_row');
+  if (!fr) { location.reload(); return; }
+  fr.style.display = (fr.style.display == 'table-row') ? 'none' : 'table-row';
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+restoreCompact();
+init();
+</script>
+</body>
+</html>

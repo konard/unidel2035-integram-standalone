@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Integram — Login</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+        integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">
+  <style>
+    body { background: #f5f5f5; }
+    .login-card {
+      max-width: 360px;
+      margin: 100px auto 0;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 32px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+    .login-card h4 { text-align: center; margin-bottom: 24px; }
+    .logo { text-align: center; margin-bottom: 16px; }
+    .logo img { width: 48px; }
+    #msg { display: none; }
+  </style>
+</head>
+<body>
+<div class="login-card">
+  <div class="logo">
+    <img src="/i/lamp.png" alt="Integram" onerror="this.style.display='none'">
+  </div>
+  <h4>Integram</h4>
+  <div id="msg" class="alert"></div>
+  <div class="form-group">
+    <label for="inp-db">База данных</label>
+    <input type="text" id="inp-db" class="form-control" placeholder="mydb" autocomplete="off">
+  </div>
+  <div class="form-group">
+    <label for="inp-login">Логин</label>
+    <input type="text" id="inp-login" class="form-control" autocomplete="username">
+  </div>
+  <div class="form-group">
+    <label for="inp-pwd">Пароль</label>
+    <input type="password" id="inp-pwd" class="form-control" autocomplete="current-password">
+  </div>
+  <button id="btn-login" class="btn btn-primary btn-block" onclick="doLogin()">Войти</button>
+</div>
+
+<script>
+(function () {
+  // Pre-fill db from URL ?db= param
+  var p = new URLSearchParams(location.search);
+  var dbParam = p.get('db') || localStorage.getItem('_db') || '';
+  if (dbParam) document.getElementById('inp-db').value = dbParam;
+
+  // Submit on Enter
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') doLogin();
+  });
+})();
+
+function showMsg(type, text) {
+  var el = document.getElementById('msg');
+  el.className = 'alert alert-' + type;
+  el.textContent = text;
+  el.style.display = 'block';
+}
+
+function doLogin() {
+  var db    = document.getElementById('inp-db').value.trim();
+  var login = document.getElementById('inp-login').value.trim();
+  var pwd   = document.getElementById('inp-pwd').value;
+
+  if (!db)    return showMsg('danger', 'Укажите базу данных');
+  if (!login) return showMsg('danger', 'Укажите логин');
+  if (!pwd)   return showMsg('danger', 'Укажите пароль');
+
+  var btn = document.getElementById('btn-login');
+  btn.disabled = true;
+  btn.textContent = '…';
+
+  var body = 'login=' + encodeURIComponent(login) + '&pwd=' + encodeURIComponent(pwd);
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/' + db + '/auth?JSON', true);
+  xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+  xhr.onload = function () {
+    btn.disabled = false;
+    btn.textContent = 'Войти';
+    var json;
+    try { json = JSON.parse(xhr.responseText); } catch (e) {
+      return showMsg('danger', 'Сервер вернул неожиданный ответ');
+    }
+    if (xhr.status !== 200 || !json.token) {
+      return showMsg('danger', json.msg || json.error || 'Неверный логин или пароль');
+    }
+    // Persist session
+    localStorage.setItem('_db', db);
+    localStorage.setItem(db + '_xsrf',   json._xsrf  || '');
+    localStorage.setItem(db + '_token',  json.token  || '');
+    localStorage.setItem(db + '_userId', json.id     || '');
+    // Set auth cookie (same as PHP: {db}={token} path=/)
+    document.cookie = encodeURIComponent(db) + '=' + encodeURIComponent(json.token) + '; path=/';
+    location.href = '/app/templates/main.html?db=' + encodeURIComponent(db);
+  };
+  xhr.onerror = function () {
+    btn.disabled = false;
+    btn.textContent = 'Войти';
+    showMsg('danger', 'Ошибка сети');
+  };
+  xhr.send(body);
+}
+</script>
+</body>
+</html>

@@ -63,6 +63,15 @@ if (!fs.existsSync(STATIC_PATH)) {
   }
 }
 
+// ── Node.js-native App UI (/app) ──────────────────────────────────────────────
+
+const PUBLIC_PATH = path.resolve(__dirname, '../public');
+if (fs.existsSync(PUBLIC_PATH)) {
+  const appStaticOpts = { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') };
+  app.use('/app', express.static(PUBLIC_PATH, appStaticOpts));
+  console.log(`   App UI: http://localhost:${PORT}/app/templates/login.html`);
+}
+
 // ── Legacy PHP-compatible API + page routing ──────────────────────────────────
 
 const { default: legacyRouter } = await import('../src/api/routes/legacy-compat.js');

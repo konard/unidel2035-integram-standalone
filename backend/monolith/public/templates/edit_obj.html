@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+        integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">
+  <link rel="stylesheet" href="/css/css.css">
+  <link rel="stylesheet" href="/css/select2.min.css">
+  <title>Integram</title>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+  <script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
+  <script>
+    // ── Session init ──────────────────────────────────────────────────────────
+    var p = new URLSearchParams(location.search);
+    var db     = p.get('db')   || localStorage.getItem('_db') || '';
+    var xsrf   = localStorage.getItem(db + '_xsrf')   || '';
+    var token  = localStorage.getItem(db + '_token')  || '';
+    var uid    = localStorage.getItem(db + '_userId') || '';
+    var id     = parseInt(p.get('id'))   || 0;   // object id (0 = new)
+    var typeId = parseInt(p.get('type')) || 0;
+    var F_U    = parseInt(p.get('up'))   || 0;
+    var isNew  = p.get('new') === '1' || id === 0;
+    var action = '';
+    var menu = [];
+    if (!token) location.href = '/app/templates/login.html?db=' + encodeURIComponent(db);
+  </script>
+  <script src="/js/js.js"></script>
+  <style>
+    label { font-size: 90%; color: gray; }
+    .dict-title { padding: 20px 0 10px 0; font-size: 24px; line-height: 24px; color: #172D4E; display: block; }
+    .comp-control { display: flex; flex-direction: column; justify-content: flex-end; }
+    .btn-xs { padding: 1px 5px; line-height: 1.5; border-radius: 3px; }
+    .breadcrumb { padding: 2px; margin: 0; }
+    .select2-selection__rendered { line-height: 38px !important; }
+    .select2-container .select2-selection--single { height: 38px !important; }
+    .select2-selection__arrow { height: 38px !important; }
+    #msg-area { display: none; }
+    .field-group { margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+<!-- ── Navbar ──────────────────────────────────────────────────────────────── -->
+<nav id="nav" class="navbar shadow-sm navbar-expand-562 fixed-top dark navbar-fixed-top">
+  <a id="brand" class="navbar-brand" href="/app/templates/main.html?db=">
+    <img src="/i/lamp.png" width="30" loading="lazy"/>
+  </a>
+  <div class="right-block" id="right_block">
+    <div class="nav-item dropdown">
+      <a class="user-link dropdown-toggle user-margin" href="#" role="button" data-toggle="dropdown">
+        <svg height="30" viewBox="0 0 18 20" fill="white" xmlns="http://www.w3.org/2000/svg">
+          <path d="M17 19V17C17 15.9391 16.5786 14.9217 15.8284 14.1716C15.0783 13.4214 14.0609 13 13 13H5C3.93913 13 2.92172 13.4214 2.17157 14.1716C1.42143 14.9217 1 15.9391 1 17V19M13 5C13 7.20914 11.2091 9 9 9C6.79086 9 5 7.20914 5 5C5 2.79086 6.79086 1 9 1C11.2091 1 13 2.79086 13 5Z"
+                stroke="#fafafa" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+      <div class="dropdown-menu dropdown-menu-right shadow">
+        <a class="dropdown-item" onclick="doExit()"><t9n>[RU]Выход[EN]Exit</t9n></a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Page content ───────────────────────────────────────────────────────── -->
+<div class="content" style="padding-top:50px;">
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb pl-2">
+      <li class="breadcrumb-item"><a id="bc-home" href="#">…</a></li>
+      <li class="breadcrumb-item"><a id="bc-type" href="#">…</a></li>
+      <li class="breadcrumb-item active" id="bc-obj" aria-current="page">…</li>
+    </ol>
+  </nav>
+
+  <div class="container">
+    <div id="msg-area" class="alert"></div>
+    <div id="form-wrap">
+      <div class="text-center py-5"><img src="/i/ajax.gif" alt="loading"></div>
+    </div>
+  </div>
+</div>
+
+<script src="/js/popper.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"
+        integrity="sha384-B4gt1jrGC7Jh4AgTPSdUtOBvfO8shuf57BaghqFfPlYxofvL8/KUEfYiJOMMV+rV" crossorigin="anonymous"></script>
+<script src="/js/select2.min.js"></script>
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+var typeMeta = null;    // from _d_main/:typeId
+var objMeta  = null;    // from obj_meta/:id (null if new)
+
+// ── Breadcrumb ────────────────────────────────────────────────────────────────
+var bcHome = document.getElementById('bc-home');
+bcHome.textContent = db.charAt(0).toUpperCase() + db.slice(1);
+bcHome.href = '/app/templates/main.html?db=' + encodeURIComponent(db);
+document.getElementById('brand').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
+
+// ── Load data ─────────────────────────────────────────────────────────────────
+function init() {
+  // Resolve typeId from obj if editing
+  var typeUrl = typeId ? ('/' + db + '/_d_main/' + typeId) : null;
+  var metaUrl = (!isNew && id) ? ('/' + db + '/obj_meta/' + id) : null;
+
+  var promises = [];
+  if (!typeUrl && metaUrl) {
+    // Fetch object first to get type
+    promises.push(
+      fetch(metaUrl, { credentials: 'include' })
+        .then(function(r){ return r.json(); })
+        .then(function(om) {
+          objMeta = om;
+          typeId = om.type;
+          return fetch('/' + db + '/_d_main/' + typeId, { credentials: 'include' })
+            .then(function(r){ return r.json(); });
+        })
+        .then(function(tm){ typeMeta = tm; })
+    );
+  } else {
+    if (typeUrl) {
+      promises.push(
+        fetch(typeUrl, { credentials: 'include' })
+          .then(function(r){ return r.json(); })
+          .then(function(tm){ typeMeta = tm; })
+      );
+    }
+    if (metaUrl) {
+      promises.push(
+        fetch(metaUrl, { credentials: 'include' })
+          .then(function(r){ return r.json(); })
+          .then(function(om){ objMeta = om; })
+      );
+    }
+  }
+
+  Promise.all(promises).then(function() {
+    renderForm();
+  }).catch(function(e) {
+    showMsg('danger', 'Ошибка загрузки: ' + e.message);
+  });
+}
+
+// ── Render form ───────────────────────────────────────────────────────────────
+function renderForm() {
+  if (!typeMeta) { showMsg('danger', 'Тип не найден'); return; }
+
+  var name = objMeta ? (objMeta.val || '') : '';
+  var objId = objMeta ? objMeta.id : 0;
+  var up    = objMeta ? objMeta.up : F_U;
+
+  // Breadcrumb
+  var bcType = document.getElementById('bc-type');
+  bcType.textContent = typeMeta.name;
+  bcType.href = '/app/templates/object.html?db=' + encodeURIComponent(db) +
+                '&type=' + typeId + '&up=' + up;
+  document.getElementById('bc-obj').textContent = name || (isNew ? 'Новый объект' : '#' + objId);
+  document.title = name || typeMeta.name;
+
+  var reqs = typeMeta.requisites || [];
+  var html = '';
+
+  html += '<span class="dict-title">' + escHtml(typeMeta.name);
+  if (!isNew) {
+    html += ' <font color="lightgray">#' + objId + '</font>';
+  }
+  html += '</span>';
+
+  html += '<form id="edit-form" enctype="multipart/form-data">';
+  html += '<input type="hidden" name="_xsrf" value="' + escHtml(xsrf) + '">';
+
+  // Name field (val / t100)
+  html += '<div class="field-group"><label>Наименование</label>';
+  html += '<input class="form-control" type="text" id="t100" name="t100" value="' + escHtml(name) + '"></div>';
+
+  reqs.forEach(function(r) {
+    var val = getReqVal(r.id);
+    html += '<div class="field-group"><label for="t' + r.id + '">' + escHtml(r.name);
+    if (r.required) html += ' <span class="text-danger">*</span>';
+    html += '</label>';
+    html += renderField(r, val);
+    html += '</div>';
+  });
+
+  // Buttons
+  html += '<div class="row t9n pt-3 pb-2">';
+  html += '<div class="col-6 col-sm-4 col-md-3 p-0 pr-2">';
+  html += '<button type="button" class="btn btn-primary btn-block mb-2" onclick="doSave()">' +
+          '<t9n>[RU]Сохранить[EN]Save</t9n></button></div>';
+  html += '<div class="col-6 col-sm-4 col-md-3 p-0 pr-2">';
+  html += '<a href="/app/templates/object.html?db=' + encodeURIComponent(db) +
+          '&type=' + typeId + '&up=' + up + '">';
+  html += '<button type="button" class="btn btn-outline-secondary btn-block mb-2">' +
+          '<t9n>[RU]Отменить[EN]Cancel</t9n></button></a></div>';
+  if (!isNew && objId) {
+    html += '<div class="col-6 col-sm-4 col-md-3 p-0 pr-2">';
+    html += '<button type="button" class="btn btn-outline-danger btn-block mb-2" onclick="doDelete()">' +
+            '<t9n>[RU]Удалить[EN]Delete</t9n></button></div>';
+  }
+  html += '</div>';
+  html += '</form>';
+
+  document.getElementById('form-wrap').innerHTML = html;
+
+  // Init select2 for reference fields
+  reqs.forEach(function(r) {
+    var typeCode = String(r.type);
+    if (typeCode === '12' || typeCode === 'REFERENCE') {
+      initRefField(r);
+    }
+  });
+}
+
+function getReqVal(reqId) {
+  if (!objMeta) return '';
+  if (objMeta.reqs) {
+    if (objMeta.reqs.ord && objMeta.reqs.ord[reqId] !== undefined) {
+      var rv = objMeta.reqs.ord[reqId];
+      return (rv && typeof rv === 'object') ? (rv.val || rv.id || '') : rv;
+    }
+    if (objMeta.reqs[reqId] !== undefined) return objMeta.reqs[reqId];
+  }
+  return '';
+}
+
+// ── Render individual field ───────────────────────────────────────────────────
+function renderField(r, val) {
+  var n = 't' + r.id;
+  var v = escHtml(String(val || ''));
+  var tc = String(r.type || r.baseType || '');
+
+  // Type code mapping
+  // 1=SHORT, 2=MEMO, 3=HTML, 4=CHARS, 5=FILE, 6=DATE, 7=DATETIME
+  // 9=DATE, 11=BOOLEAN, 12=REFERENCE, 13=NUMBER, 14=SIGNED
+  // 15=ARRAY, 16=CALCULATABLE, 20=PWD
+
+  if (tc === '2' || tc === 'MEMO') {
+    return '<textarea class="form-control" id="' + n + '" name="' + n + '" rows="4">' + v + '</textarea>';
+  }
+  if (tc === '3' || tc === 'HTML') {
+    return '<textarea class="form-control" id="' + n + '" name="' + n + '" rows="6">' + v + '</textarea>';
+  }
+  if (tc === '5' || tc === 'FILE') {
+    var cur = v ? '<div class="mb-1 text-muted small">' + v + '</div>' : '';
+    return cur + '<input class="form-control-file" type="file" id="' + n + '" name="' + n + '">';
+  }
+  if (tc === '6' || tc === '9' || tc === 'DATE') {
+    return '<input class="form-control" type="date" id="' + n + '" name="' + n + '" value="' + v + '">';
+  }
+  if (tc === '7' || tc === 'DATETIME') {
+    return '<input class="form-control" type="datetime-local" id="' + n + '" name="' + n + '" value="' + v + '">';
+  }
+  if (tc === '11' || tc === 'BOOLEAN') {
+    var checked = (val == 1 || val === true || val === 'true' || val === '1') ? ' checked' : '';
+    return '<input class="form-control" type="checkbox" id="' + n + '" name="' + n + '" value="1"' + checked + '>' +
+           '<input type="hidden" name="b' + r.id + '" value="1">';
+  }
+  if (tc === '12' || tc === 'REFERENCE') {
+    // Will be populated by initRefField
+    var selVal = '';
+    var selText = '';
+    if (val && typeof val === 'object') { selVal = val.id || ''; selText = val.val || ''; }
+    else { selVal = val || ''; }
+    return '<select class="form-control select2" id="' + n + '" name="' + n +
+           '" data-ref-type="' + (r.refType || r.ref || '') + '">' +
+           '<option value="' + escHtml(String(selVal)) + '">' + escHtml(selText || String(selVal)) + '</option>' +
+           '</select>';
+  }
+  if (tc === '15' || tc === 'ARRAY') {
+    var arrUrl = '/app/templates/object.html?db=' + encodeURIComponent(db) +
+                 '&type=' + r.id + '&up=' + (objMeta ? objMeta.id : 0);
+    return '<a href="' + arrUrl + '" class="btn btn-sm btn-outline-secondary">' +
+           '<t9n>[RU]Открыть список[EN]Open list</t9n></a>';
+  }
+  if (tc === '16' || tc === 'CALCULATABLE') {
+    return '<div class="form-control-plaintext">' + v + '</div>';
+  }
+  if (tc === '20' || tc === 'PWD') {
+    return '<input class="form-control" type="password" id="' + n + '" name="' + n + '" value="' + v + '">';
+  }
+  // Default: text input
+  return '<input class="form-control" type="text" id="' + n + '" name="' + n + '" value="' + v + '">';
+}
+
+// ── Reference field init ──────────────────────────────────────────────────────
+function initRefField(r) {
+  var refTypeId = r.refType || r.ref || r.orig;
+  if (!refTypeId) return;
+  var sel = document.getElementById('t' + r.id);
+  if (!sel) return;
+
+  fetch('/' + db + '/_list/' + refTypeId + '?JSON&limit=200', { credentials: 'include' })
+    .then(function(resp){ return resp.json(); })
+    .then(function(res) {
+      var rows = res.data || res;
+      var cur = sel.value;
+      sel.innerHTML = '<option value=""></option>';
+      rows.forEach(function(row) {
+        var opt = document.createElement('option');
+        opt.value = row.id;
+        opt.textContent = row.val || row.id;
+        if (String(row.id) === String(cur)) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      if (typeof $.fn.select2 !== 'undefined') $(sel).select2({ width: '100%' });
+    })
+    .catch(function(e){ console.warn('initRefField', r.id, e); });
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────────
+function doSave() {
+  var form = document.getElementById('edit-form');
+  var fd = new FormData(form);
+  fd.set('_xsrf', xsrf);
+  fd.set('savebtn', '1');
+
+  var url;
+  if (isNew) {
+    url = '/' + db + '/_m_new/' + F_U + '?JSON&type=' + typeId;
+  } else {
+    url = '/' + db + '/_m_save/' + id + '?JSON';
+  }
+
+  fetch(url, { method: 'POST', body: fd, credentials: 'include' })
+    .then(function(r){ return r.json(); })
+    .then(function(json) {
+      if (json.error || json.err) {
+        showMsg('danger', json.error || json.err || 'Ошибка сохранения');
+      } else {
+        var newId = json.id || id;
+        if (isNew && newId) {
+          location.href = '/app/templates/edit_obj.html?db=' + encodeURIComponent(db) +
+                          '&id=' + newId + '&type=' + typeId + '&up=' + F_U;
+        } else {
+          showMsg('success', '<t9n>[RU]Сохранено[EN]Saved</t9n>');
+        }
+      }
+    })
+    .catch(function(e){ showMsg('danger', 'Ошибка: ' + e.message); });
+}
+
+// ── Delete ────────────────────────────────────────────────────────────────────
+function doDelete() {
+  if (!confirm('<t9n>[RU]Удалить объект?[EN]Delete this record?</t9n>')) return;
+  fetch('/' + db + '/_m_del/' + id + '?JSON', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: '_xsrf=' + encodeURIComponent(xsrf),
+    credentials: 'include'
+  }).then(function(r){ return r.json(); })
+    .then(function(json) {
+      if (json.error) return showMsg('danger', json.error);
+      location.href = '/app/templates/object.html?db=' + encodeURIComponent(db) +
+                      '&type=' + typeId + '&up=' + F_U;
+    })
+    .catch(function(e){ showMsg('danger', 'Ошибка: ' + e.message); });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function showMsg(type, text) {
+  var el = document.getElementById('msg-area');
+  el.className = 'alert alert-' + type;
+  el.innerHTML = text;
+  el.style.display = 'block';
+  setTimeout(function(){ el.style.display = 'none'; }, 5000);
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function doExit() {
+  localStorage.removeItem(db + '_xsrf');
+  localStorage.removeItem(db + '_token');
+  localStorage.removeItem(db + '_userId');
+  document.cookie = encodeURIComponent(db) + '=; path=/; max-age=0';
+  location.href = '/app/templates/login.html?db=' + encodeURIComponent(db);
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+localize();
+init();
+</script>
+</body>
+</html>
