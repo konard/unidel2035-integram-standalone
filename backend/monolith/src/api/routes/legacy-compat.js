@@ -1514,11 +1514,109 @@ router.get('/:db/:page*', async (req, res, next) => {
 
   logger.info('[Legacy SubPage] Request', { db, page, fullPath });
 
+  // ── JSON API: PHP-compatible responses for object/edit_obj pages ─────────
+  // PHP routes /:db/object/:typeId?JSON and /:db/edit_obj/:id?JSON fall to the
+  // default: case in index.php which populates $GLOBALS["GLOBAL_VARS"]["api"]
+  // and returns json_encode() when isApi() is true.
+  if (isApiRequest(req)) {
+    const subId = parseInt((fullPath || '').replace(/^\//, ''), 10) || 0;
+    try {
+      const pool = getPool();
+
+      // ── GET /:db/object/:typeId?JSON → {"object":[{id,val,up,base,ord}]}
+      // ── GET /:db/object/:typeId?JSON_DATA → [{i,u,o,r:[vals]}] compact
+      if (page === 'object' && subId) {
+        const [objRows] = await pool.query(
+          `SELECT id, val, up, t AS base, ord FROM \`${db}\` WHERE t = ? ORDER BY ord`,
+          [subId]
+        );
+
+        if (req.query.JSON_DATA !== undefined) {
+          // Compact format: each row → {i:id, u:up, o:ord, r:[req_val,...]}
+          // Get requisite type IDs for this type (defines column order)
+          const [reqDefs] = await pool.query(
+            `SELECT id FROM \`${db}\` WHERE up = ? ORDER BY ord`,
+            [subId]
+          );
+          const reqIds = reqDefs.map(r => r.id);
+
+          // Batch-load all requisite values for all objects
+          const reqMap = {};
+          if (objRows.length > 0 && reqIds.length > 0) {
+            const objIds = objRows.map(r => r.id);
+            const ph = objIds.map(() => '?').join(',');
+            const [reqVals] = await pool.query(
+              `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`,
+              objIds
+            );
+            for (const rv of reqVals) {
+              if (!reqMap[rv.up]) reqMap[rv.up] = {};
+              reqMap[rv.up][rv.t] = rv.val;
+            }
+          }
+
+          return res.json(objRows.map(obj => ({
+            i: obj.id,
+            u: obj.up,
+            o: obj.ord,
+            r: reqIds.map(rid => (reqMap[obj.id] && reqMap[obj.id][rid] !== undefined)
+              ? reqMap[obj.id][rid] : null),
+          })));
+        }
+
+        // Standard JSON: {"object":[{id,val,up,base,ord}]}
+        return res.json({
+          object: objRows.map(r => ({ id: r.id, val: r.val, up: r.up, base: r.base, ord: r.ord })),
+        });
+      }
+
+      // ── GET /:db/edit_obj/:id?JSON → {obj:{id,val,up,base}, req:[{id,val,ord,value}]}
+      if ((page === 'edit_obj' || page === 'edit') && subId) {
+        const [objResult] = await pool.query(
+          `SELECT id, val, up, t AS base, ord FROM \`${db}\` WHERE id = ?`,
+          [subId]
+        );
+        if (objResult.length === 0) {
+          return res.status(404).json({ error: 'Object not found' });
+        }
+        const obj = objResult[0];
+
+        // Requisite definitions (schema) for this type
+        const [reqDefs] = await pool.query(
+          `SELECT id, val, ord FROM \`${db}\` WHERE up = ? ORDER BY ord`,
+          [obj.base]
+        );
+
+        // Stored requisite values for this specific object
+        const [reqVals] = await pool.query(
+          `SELECT t, val FROM \`${db}\` WHERE up = ? ORDER BY ord`,
+          [subId]
+        );
+        const valMap = {};
+        for (const rv of reqVals) valMap[rv.t] = rv.val;
+
+        return res.json({
+          obj: { id: obj.id, val: obj.val, up: obj.up, base: obj.base },
+          req: reqDefs.map(rd => ({
+            id: rd.id,
+            val: rd.val,
+            ord: rd.ord,
+            value: valMap[rd.id] !== undefined ? valMap[rd.id] : '',
+          })),
+        });
+      }
+    } catch (err) {
+      logger.error('[Legacy page JSON] Error', { error: err.message, db, page });
+      return res.status(200).json([{ error: err.message }]);
+    }
+  }
+
   // Map page names to template files
   const pageMap = {
     'dict': 'templates/dict.html',
     'object': 'templates/object.html',
     'edit': 'templates/edit_obj.html',
+    'edit_obj': 'templates/edit_obj.html',
     'report': 'templates/report.html',
     'types': 'templates/edit_types.html',
     'form': 'templates/form.html',
@@ -1531,9 +1629,14 @@ router.get('/:db/:page*', async (req, res, next) => {
 
   const templatePath = pageMap[page];
   if (templatePath) {
-    const fullTemplatePath = path.join(legacyPath, templatePath);
-    if (fs.existsSync(fullTemplatePath)) {
-      return res.sendFile(fullTemplatePath);
+    // Node.js-native templates take precedence over legacy integram-server templates
+    const nodePath = path.resolve(__dirname, '../../../public', templatePath);
+    if (fs.existsSync(nodePath)) {
+      return res.sendFile(nodePath);
+    }
+    const legacyTemplatePath = path.join(legacyPath, templatePath);
+    if (fs.existsSync(legacyTemplatePath)) {
+      return res.sendFile(legacyTemplatePath);
     }
   }
 
@@ -2193,8 +2296,8 @@ router.all('/:db/_list/:typeId', async (req, res) => {
     const parentId = req.query.up !== undefined || req.body.up !== undefined
       ? parseInt(req.query.up || req.body.up, 10)
       : null;
-    const limit = parseInt(req.query.LIMIT || req.body.LIMIT || '50', 10);
-    const offset = parseInt(req.query.F || req.body.F || '0', 10);
+    const limit = parseInt(req.query.LIMIT || req.query.limit || req.body.LIMIT || req.body.limit || '50', 10);
+    const offset = parseInt(req.query.F || req.query.offset || req.body.F || req.body.offset || '0', 10);
     const search = req.query.q || req.body.q || '';
 
     // Build query
@@ -2224,12 +2327,30 @@ router.all('/:db/_list/:typeId', async (req, res) => {
     const [countRows] = await pool.query(countQuery, countParams);
     const total = countRows[0]?.total || 0;
 
+    // Batch-load requisite values for all returned objects so the client can
+    // display column values without a second round-trip.
+    // reqs: { [typeId]: val } keyed by requisite type id.
+    const reqMap = {};
+    if (rows.length > 0) {
+      const objIds = rows.map(r => r.id);
+      const ph = objIds.map(() => '?').join(',');
+      const [reqVals] = await pool.query(
+        `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`,
+        objIds
+      );
+      for (const rv of reqVals) {
+        if (!reqMap[rv.up]) reqMap[rv.up] = {};
+        reqMap[rv.up][rv.t] = rv.val;
+      }
+    }
+
     const objects = rows.map(row => ({
       id: row.id,
       val: row.val,
       up: row.up,
       t: row.t,
       ord: row.ord,
+      reqs: reqMap[row.id] || {},
     }));
 
     // Return in PHP-compatible format
@@ -2425,11 +2546,17 @@ router.all('/:db/_d_main/:typeId', async (req, res) => {
         name = name.replace(':MULTI:', '');
       }
 
+      // Detect reference fields: if type is not a known base type code,
+      // it's a reference to another user-defined type.
+      const isRef = !REV_BASE_TYPE[row.type];
+      const refType = isRef ? row.type : null;
+
       return {
         id: row.id,
         name: name.trim(),
         alias,
         type: row.type,
+        refType,           // non-null when this requisite references another type
         order: row.ord,
         required,
         multi,
@@ -2498,7 +2625,7 @@ router.get('/:db/terms', async (req, res) => {
     // Match PHP terms query: all top-level objects where id!=t, val!='', t!=0
     // Left join to get the type of each requisite (child record) per PHP logic
     const [rows] = await pool.query(
-      `SELECT a.id, a.val, a.t, reqs.t AS reqs_t
+      `SELECT a.id, a.val, a.t, a.ord, reqs.t AS reqs_t
        FROM \`${db}\` a
        LEFT JOIN \`${db}\` reqs ON reqs.up = a.id
        WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
@@ -2510,7 +2637,8 @@ router.get('/:db/terms', async (req, res) => {
     // - Track which type IDs are used as requisite types ($req)
     // - Only show types not used as requisites elsewhere
     const base = {}; // id -> t
-    const typ = {};  // id -> val (types to display)
+    const typ  = {}; // id -> val (types to display)
+    const ord  = {}; // id -> ord
     const reqMap = {};  // id -> true (types used as requisites)
 
     for (const row of rows) {
@@ -2518,6 +2646,7 @@ router.get('/:db/terms', async (req, res) => {
       if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
 
       base[row.id] = row.t;
+      ord[row.id]  = row.ord;
       if (!reqMap[row.id]) {
         typ[row.id] = row.val;
       }
@@ -2527,7 +2656,7 @@ router.get('/:db/terms', async (req, res) => {
       }
     }
 
-    // Build response array matching PHP: [{id, type, name}]
+    // Build response array matching PHP: [{id, name, href, ord}]
     // PHP: if(Grant_1level($id)) $json .= ...
     const types = [];
     for (const id of Object.keys(typ)) {
@@ -2537,8 +2666,10 @@ router.get('/:db/terms', async (req, res) => {
       if (grantLevel) {
         types.push({
           id: numId,
-          type: base[id],
           name: typ[id],
+          href: String(numId),
+          ord: ord[id] || 0,
+          type: base[id],
         });
       }
     }
@@ -3598,29 +3729,14 @@ router.all('/:db/obj_meta/:id', async (req, res) => {
       reqs: {}
     };
 
-    // Add requisites
+    // Add requisite stored values.
+    // reqs is keyed by the requisite-definition ID (req.t = req_type) so the
+    // edit_obj.html template can look up values with reqs[reqId].
+    // The stored value itself is req.val (aliased req_attrs in the query).
     for (const row of rows) {
       if (row.req_id) {
-        const reqData = {
-          id: row.req_id.toString(),
-          val: row.req_val || '',
-          type: row.base_typ ? row.base_typ.toString() : ''
-        };
-
-        if (row.arr_id) {
-          reqData.arr_id = row.arr_id.toString();
-        }
-
-        if (row.ref_id) {
-          reqData.ref = row.ref_id.toString();
-          reqData.ref_id = row.req_type.toString();
-        }
-
-        if (row.req_attrs) {
-          reqData.attrs = row.req_attrs;
-        }
-
-        meta.reqs[row.req_ord.toString()] = reqData;
+        // Plain stored value — what the edit form needs to populate fields
+        meta.reqs[row.req_type.toString()] = row.req_attrs || '';
       }
     }
 
@@ -4429,14 +4545,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         `SELECT id, val AS name, ord FROM ${db} WHERE t = ${TYPE.REPORT} ORDER BY ord`
       );
 
-      return res.json({
-        success: true,
-        reports: rows.map(r => ({
-          id: r.id,
-          name: r.name,
-          order: r.ord
-        }))
-      });
+      // PHP returns plain array — match that format
+      return res.json(rows.map(r => ({ id: r.id, name: r.name, val: r.name, ord: r.ord })));
     }
 
     // Compile report
@@ -4537,16 +4647,21 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (isApiRequest(req)) {
-        // PHP default JSON: columns array + data as column-major array of arrays
-        // data[col_index] = [row0_val, row1_val, ...]
+        // PHP default JSON: columns array + data as row-major array of arrays
+        // data[row_index] = [col0_val, col1_val, ...]
+        // totals: array of sum values per column (null if not numeric)
         const cols = report.columns.map(col => ({
           id: col.id,
           name: col.name,
           type: col.baseType || 0,
-          format: REV_BASE_TYPE[col.baseType] || 'CHARS'
+          format: REV_BASE_TYPE[col.baseType] || 'CHARS',
+          align: col.align || 'LEFT',
         }));
-        const data = report.columns.map(col => results.data.map(row => row[col.alias] ?? ''));
-        return res.json({ columns: cols, data, rownum: results.rownum });
+        const data = results.data.map(row =>
+          report.columns.map(col => row[col.alias] !== undefined ? row[col.alias] : '')
+        );
+        const totals = results.totals || report.columns.map(() => null);
+        return res.json({ columns: cols, data, totals, rownum: results.rownum });
       }
 
       // Non-API (browser) fallback
@@ -4565,9 +4680,11 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       return res.json({
         id: report.id,
         name: report.header,
+        val: report.header,
+        title: report.header,
         columns: report.columns,
         head: report.head,
-        types: report.types
+        types: report.types,
       });
     }
 
