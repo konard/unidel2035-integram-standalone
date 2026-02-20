@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Integram</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #sidebar { width: 220px; min-width: 220px; background: #212529; overflow-y: auto; }
+    #sidebar .nav-link { color: #adb5bd; padding: .4rem 1rem; }
+    #sidebar .nav-link:hover, #sidebar .nav-link.active { color: #fff; background: #343a40; }
+    #content { flex: 1; overflow: auto; background: #f8f9fa; }
+    #content iframe { width: 100%; height: 100%; border: 0; }
+    .sidebar-header { color: #6c757d; font-size: .75rem; text-transform: uppercase;
+                      padding: .5rem 1rem; margin-top: .5rem; }
+  </style>
+</head>
+<body class="d-flex flex-column" style="height:100vh">
+
+<!-- Navbar -->
+<nav class="navbar navbar-dark bg-dark px-3 py-1 flex-shrink-0">
+  <span class="navbar-brand mb-0 h1">Integram</span>
+  <div class="d-flex align-items-center gap-2">
+    <span class="text-light small" id="navUser"></span>
+    <span class="badge bg-secondary" id="navDb"></span>
+    <button class="btn btn-sm btn-outline-warning" id="btnTypes">Types</button>
+    <button class="btn btn-sm btn-outline-danger" id="btnLogout">Logout</button>
+  </div>
+</nav>
+
+<!-- Body -->
+<div class="d-flex flex-grow-1 overflow-hidden">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div class="sidebar-header">Sections</div>
+    <ul class="nav flex-column" id="typeList"></ul>
+  </div>
+
+  <!-- Main content -->
+  <div id="content">
+    <div id="welcome" class="p-4 text-muted">
+      <h5>Select a section from the left menu</h5>
+    </div>
+    <iframe id="frame" class="d-none"></iframe>
+  </div>
+</div>
+
+<script>
+// ── API helpers ───────────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search);
+const db = params.get('db') || '';
+
+function getSession() {
+  return {
+    db,
+    token: localStorage.getItem(`${db}_token`) || '',
+    xsrf:  localStorage.getItem(`${db}_xsrf`)  || '',
+    userId: localStorage.getItem(`${db}_userId`) || '',
+  };
+}
+function redirectLogin() {
+  location.href = `login.html?db=${encodeURIComponent(db)}`;
+}
+async function api(method, path, body) {
+  const opts = { method, credentials: 'include', headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    opts.body = new URLSearchParams(body).toString();
+  }
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { return { error: text }; }
+}
+
+// ── Guard ─────────────────────────────────────────────────────────────────────
+const sess = getSession();
+if (!sess.token) redirectLogin();
+document.getElementById('navDb').textContent = db;
+document.getElementById('navUser').textContent = sess.userId ? `uid:${sess.userId}` : '';
+
+// ── Load menu ─────────────────────────────────────────────────────────────────
+async function loadMenu() {
+  const data = await api('GET', `/${db}/terms?JSON`);
+  const list = document.getElementById('typeList');
+  list.innerHTML = '';
+  const types = Array.isArray(data) ? data : (data.types || data.data || []);
+  types.forEach(t => {
+    const li = document.createElement('li');
+    li.className = 'nav-item';
+    li.innerHTML = `<a class="nav-link" href="#" data-type="${t.id}" data-name="${t.name || t.val || t.id}">${t.name || t.val || t.id}</a>`;
+    list.appendChild(li);
+  });
+  list.querySelectorAll('.nav-link').forEach(a => {
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      list.querySelectorAll('.nav-link').forEach(x => x.classList.remove('active'));
+      a.classList.add('active');
+      openSection(a.dataset.type, a.dataset.name);
+    });
+  });
+}
+
+function openSection(typeId, name) {
+  const frame = document.getElementById('frame');
+  document.getElementById('welcome').classList.add('d-none');
+  frame.classList.remove('d-none');
+  frame.src = `object.html?db=${encodeURIComponent(db)}&type=${typeId}&up=0`;
+}
+
+// ── Refresh xsrf periodically ─────────────────────────────────────────────────
+async function refreshXsrf() {
+  const data = await api('GET', `/${db}/xsrf?JSON`);
+  if (data && data.xsrf) localStorage.setItem(`${db}_xsrf`, data.xsrf);
+}
+
+// ── Buttons ───────────────────────────────────────────────────────────────────
+document.getElementById('btnTypes').addEventListener('click', () => {
+  const frame = document.getElementById('frame');
+  document.getElementById('welcome').classList.add('d-none');
+  frame.classList.remove('d-none');
+  frame.src = `types.html?db=${encodeURIComponent(db)}`;
+});
+
+document.getElementById('btnLogout').addEventListener('click', async () => {
+  await fetch(`/${db}/exit`, { credentials: 'include' });
+  localStorage.removeItem(`${db}_token`);
+  localStorage.removeItem(`${db}_xsrf`);
+  localStorage.removeItem(`${db}_userId`);
+  document.cookie = `${db}_token=;path=/;max-age=0`;
+  redirectLogin();
+});
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+loadMenu();
+setInterval(refreshXsrf, 5 * 60 * 1000);
+</script>
+</body>
+</html>

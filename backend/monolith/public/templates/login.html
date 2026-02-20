@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Integram — Login</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <style>
+    body { background: #f5f6fa; }
+    .card { max-width: 420px; margin: 80px auto; }
+  </style>
+</head>
+<body>
+<div class="card shadow-sm">
+  <div class="card-header text-center fw-bold fs-5">Integram</div>
+  <div class="card-body">
+    <ul class="nav nav-tabs mb-3" id="authTabs">
+      <li class="nav-item"><a class="nav-link active" data-tab="login" href="#">Login</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="register" href="#">Register</a></li>
+    </ul>
+
+    <div id="alertBox" class="alert d-none" role="alert"></div>
+
+    <!-- Login form -->
+    <form id="loginForm">
+      <div class="mb-3">
+        <label class="form-label">Database</label>
+        <input type="text" class="form-control" id="loginDb" placeholder="mydb" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Login</label>
+        <input type="text" class="form-control" id="loginUser" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Password</label>
+        <input type="password" class="form-control" id="loginPass" required>
+      </div>
+      <button type="submit" class="btn btn-primary w-100">Sign in</button>
+    </form>
+
+    <!-- Register form -->
+    <form id="registerForm" class="d-none">
+      <div class="mb-3">
+        <label class="form-label">Database</label>
+        <input type="text" class="form-control" id="regDb" placeholder="mydb" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Login</label>
+        <input type="text" class="form-control" id="regUser" required>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Password</label>
+        <input type="password" class="form-control" id="regPass" required>
+      </div>
+      <button type="submit" class="btn btn-success w-100">Register</button>
+    </form>
+  </div>
+</div>
+
+<script>
+// ── API helpers ───────────────────────────────────────────────────────────────
+function getCookie(name) {
+  const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+  return m ? decodeURIComponent(m[2]) : null;
+}
+function setSession(db, token, xsrf, userId) {
+  localStorage.setItem(`${db}_token`, token);
+  localStorage.setItem(`${db}_xsrf`, xsrf);
+  localStorage.setItem(`${db}_userId`, userId);
+  document.cookie = `${db}_token=${encodeURIComponent(token)};path=/;SameSite=Lax`;
+}
+async function api(method, path, body) {
+  const opts = { method, credentials: 'include', headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    opts.body = new URLSearchParams(body).toString();
+  }
+  const res = await fetch(path, opts);
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { return { error: text }; }
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+document.querySelectorAll('[data-tab]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const tab = a.dataset.tab;
+    document.querySelectorAll('[data-tab]').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    document.getElementById('loginForm').classList.toggle('d-none', tab !== 'login');
+    document.getElementById('registerForm').classList.toggle('d-none', tab !== 'register');
+    document.getElementById('alertBox').classList.add('d-none');
+  });
+});
+
+function showAlert(msg, type = 'danger') {
+  const box = document.getElementById('alertBox');
+  box.className = `alert alert-${type}`;
+  box.textContent = msg;
+}
+
+// Pre-fill db from URL
+const params = new URLSearchParams(location.search);
+if (params.get('db')) {
+  document.getElementById('loginDb').value = params.get('db');
+  document.getElementById('regDb').value = params.get('db');
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+document.getElementById('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const db   = document.getElementById('loginDb').value.trim();
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  const data = await api('POST', `/${db}/auth?JSON`, { login: user, password: pass });
+  if (data.error) return showAlert(data.error);
+  if (!data.token) return showAlert(data.msg || 'Login failed');
+  setSession(db, data.token, data._xsrf || data.xsrf || '', data.id || '');
+  location.href = `app.html?db=${encodeURIComponent(db)}`;
+});
+
+// ── Register ──────────────────────────────────────────────────────────────────
+document.getElementById('registerForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const db   = document.getElementById('regDb').value.trim();
+  const user = document.getElementById('regUser').value.trim();
+  const pass = document.getElementById('regPass').value;
+  const data = await api('POST', `/my/register?JSON`, { db, login: user, password: pass });
+  if (data.error) return showAlert(data.error);
+  showAlert('Registered! You can now log in.', 'success');
+  document.querySelectorAll('[data-tab="login"]')[0].click();
+  document.getElementById('loginDb').value = db;
+  document.getElementById('loginUser').value = user;
+});
+</script>
+</body>
+</html>
