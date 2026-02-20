@@ -2083,11 +2083,26 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       req.body[`t${refTypeId}`] = String(refId);
     }
 
+    // Fetch object's type early — needed to detect when t{objType}=val means "update a.val"
+    // (smartq sends t{parentType}=newName when inline-editing the main column)
+    const [objInfoEarly] = await pool.query(
+      `SELECT t, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
+    );
+    const objTypeEarly = objInfoEarly.length > 0 ? objInfoEarly[0].t : 0;
+
     // Update requisites (t{id}=value format); merge query+body so t{id}=val works in URL too
     // (smartq.js sends &t{tid}=(timestamp) in URL query for DATETIME unique value on copy)
     const attributes = extractAttributes({ ...req.query, ...req.body });
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
       const typeIdNum = parseInt(attrTypeId, 10);
+
+      // When smartq inline-edits the main column, it sends t{objType}=newName.
+      // This means "update a.val", not a child requisite row.
+      if (typeIdNum === objTypeEarly) {
+        await updateRowValue(db, objectId, String(attrValue));
+        continue;
+      }
+
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
 
       let finalValue = String(attrValue);
@@ -2132,12 +2147,9 @@ router.post('/:db/_m_save/:id', async (req, res) => {
 
     logger.info('[Legacy _m_save] Object saved', { db, id: objectId, newRefs: Object.keys(newRefParams).length });
 
-    // Fetch object's type and parent for PHP api_dump() compatible response
-    const [objInfo] = await pool.query(
-      `SELECT t, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
-    );
-    const objType = objInfo.length > 0 ? objInfo[0].t : 0;
-    const objUp   = objInfo.length > 0 ? objInfo[0].up : 0;
+    // Reuse the already-fetched object info for PHP api_dump() compatible response
+    const objType = objTypeEarly;
+    const objUp   = objInfoEarly.length > 0 ? objInfoEarly[0].up : 0;
 
     // PHP api_dump(): {id, obj, next_act, args, warnings}
     // For _m_save: obj = type ID, next_act = "object", args = F_U=<parent> if parent>1
