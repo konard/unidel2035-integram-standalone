@@ -56,6 +56,21 @@ function isApiRequest(req) {
 }
 
 /**
+ * Extract Bearer/plain token from request headers and cookie.
+ * @param {object} req - Express request
+ * @param {string} db  - database name (cookie key)
+ * @returns {string}   - token or ''
+ */
+function extractToken(req, db) {
+  const authHeader  = req.headers.authorization   || '';
+  const xAuthHeader = req.headers['x-authorization'] || '';
+  return req.cookies?.[db] ||
+    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
+    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
+    '';
+}
+
+/**
  * PHP-compatible mutation response helper.
  * – JSON API requests (?JSON / ?JSON_DATA etc.): return JSON
  * – Plain form POSTs: redirect to next_act URL (mirrors PHP index.php lines 9169-9180)
@@ -1384,13 +1399,7 @@ router.all('/:db/exit', async (req, res) => {
   const { db } = req.params;
 
   // Delete token from DB (PHP: DELETE FROM $z WHERE up=user_id AND t=TOKEN)
-  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
-  const authHeader = req.headers.authorization || '';
-  const xAuthHeader = req.headers['x-authorization'] || '';
-  const token = req.cookies[db] ||
-    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
-    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
-    '';
+  const token = extractToken(req, db);
   if (token && isValidDbName(db)) {
     try {
       const pool = getPool();
@@ -1467,13 +1476,7 @@ router.post('/:db', async (req, res, next) => {
   const { db } = req.params;
   if (!isValidDbName(db)) return next();
 
-  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
-  const authHeader = req.headers.authorization || '';
-  const xAuthHeader = req.headers['x-authorization'] || '';
-  const token = req.cookies[db] ||
-    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
-    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
-    '';
+  const token = extractToken(req, db);
 
   if (!token) {
     // Not authenticated — serve login page (same as GET /:db without token)
@@ -1541,13 +1544,7 @@ router.get('/:db', async (req, res, next) => {
     return next();
   }
 
-  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
-  const authHeader = req.headers.authorization || '';
-  const xAuthHeader = req.headers['x-authorization'] || '';
-  const token = req.cookies[db] ||
-    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
-    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
-    '';
+  const token = extractToken(req, db);
 
   logger.info('[Legacy Page] Request', { db, hasToken: !!token });
 
@@ -1684,13 +1681,7 @@ router.get('/:db/:page*', async (req, res, next) => {
     return next();
   }
 
-  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
-  const authHeader = req.headers.authorization || '';
-  const xAuthHeader = req.headers['x-authorization'] || '';
-  const token = req.cookies[db] ||
-    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
-    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
-    '';
+  const token = extractToken(req, db);
 
   // If no token and not auth-related, redirect to login
   // JSON API requests get a 401 instead of a redirect
@@ -3455,13 +3446,7 @@ router.get('/:db/terms', async (req, res) => {
  */
 router.get('/:db/xsrf', async (req, res) => {
   const { db } = req.params;
-  // Step 5: Accept token from cookie, Authorization header, or X-Authorization header
-  const authHeader = req.headers.authorization || '';
-  const xAuthHeader = req.headers['x-authorization'] || '';
-  const token = req.cookies[db] ||
-    (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
-    (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
-    '';
+  const token = extractToken(req, db);
 
   if (!token || !isValidDbName(db)) {
     // No token — return minimal info (client will redirect to login)
