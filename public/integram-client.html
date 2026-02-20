@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Integram Simple Client</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body { padding: 20px; background-color: #f5f5f5; }
+        .card { margin-bottom: 15px; }
+        .response-area { font-family: monospace; font-size: 12px; white-space: pre-wrap; background: #1e1e1e; color: #d4d4d4; padding: 10px; border-radius: 4px; max-height: 400px; overflow-y: auto; }
+        .nav-pills .nav-link { border-radius: 0; }
+        .nav-pills .nav-link.active { background-color: #007bff; }
+        .form-group label { font-weight: 500; }
+        .btn-sm { margin-right: 5px; margin-bottom: 5px; }
+        .section-header { background: #007bff; color: white; padding: 10px 15px; margin: -15px -15px 15px -15px; border-radius: 4px 4px 0 0; }
+        .quick-action { cursor: pointer; color: #007bff; text-decoration: underline; }
+        .quick-action:hover { color: #0056b3; }
+        #status-bar { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px 20px; background: #343a40; color: white; font-size: 14px; }
+        #status-bar.success { background: #28a745; }
+        #status-bar.error { background: #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <h2 class="mb-4">
+            <img src="/i/lamp.png" width="40" onerror="this.style.display='none'">
+            Integram Node.js Backend Test Client
+        </h2>
+
+        <!-- Connection Settings -->
+        <div class="card">
+            <div class="card-body">
+                <div class="section-header">Connection Settings</div>
+                <div class="row">
+                    <div class="col-md-3">
+                        <div class="form-group">
+                            <label>Database</label>
+                            <input type="text" id="db" class="form-control" value="my" placeholder="Database name">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-group">
+                            <label>Username</label>
+                            <input type="text" id="username" class="form-control" placeholder="Username or email">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-group">
+                            <label>Password</label>
+                            <input type="password" id="password" class="form-control" placeholder="Password">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="form-group">
+                            <label>&nbsp;</label>
+                            <button class="btn btn-primary btn-block" onclick="login()">Login</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <small class="text-muted">Token: <span id="token-display">Not logged in</span></small>
+                    </div>
+                    <div class="col-md-6">
+                        <small class="text-muted">XSRF: <span id="xsrf-display">N/A</span></small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <ul class="nav nav-pills mb-3">
+            <li class="nav-item"><a class="nav-link active" data-toggle="pill" href="#auth-section">Auth</a></li>
+            <li class="nav-item"><a class="nav-link" data-toggle="pill" href="#objects-section">Objects</a></li>
+            <li class="nav-item"><a class="nav-link" data-toggle="pill" href="#types-section">Types</a></li>
+            <li class="nav-item"><a class="nav-link" data-toggle="pill" href="#reports-section">Reports</a></li>
+            <li class="nav-item"><a class="nav-link" data-toggle="pill" href="#files-section">Files</a></li>
+            <li class="nav-item"><a class="nav-link" data-toggle="pill" href="#custom-section">Custom API</a></li>
+        </ul>
+
+        <div class="tab-content">
+            <!-- Authentication Section -->
+            <div id="auth-section" class="tab-pane fade show active">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="section-header">Authentication Endpoints</div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6>Quick Actions</h6>
+                                <button class="btn btn-outline-primary btn-sm" onclick="validateToken()">Validate Token</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="getXsrf()">Get XSRF</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="logout()">Logout</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="getTerms()">Get Terms</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="getMetadata()">Get Metadata</button>
+                                <button class="btn btn-outline-primary btn-sm" onclick="getGrants()">Get Grants</button>
+                            </div>
+                            <div class="col-md-6">
+                                <h6>Email Authentication (2FA)</h6>
+                                <div class="input-group mb-2">
+                                    <input type="email" id="email-2fa" class="form-control" placeholder="Email address">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-outline-secondary" onclick="getCode()">Get Code</button>
+                                    </div>
+                                </div>
+                                <div class="input-group">
+                                    <input type="text" id="code-2fa" class="form-control" placeholder="4-digit code">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-outline-secondary" onclick="checkCode()">Verify Code</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Objects Section -->
+            <div id="objects-section" class="tab-pane fade">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="section-header">Object Management (CRUD)</div>
+
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <h6>Create Object (_m_new)</h6>
+                                <div class="form-group">
+                                    <label>Parent ID (up)</label>
+                                    <input type="number" id="new-up" class="form-control" value="1">
+                                </div>
+                                <div class="form-group">
+                                    <label>Type ID (t)</label>
+                                    <input type="number" id="new-t" class="form-control" value="18" placeholder="e.g., 18=User">
+                                </div>
+                                <div class="form-group">
+                                    <label>Value</label>
+                                    <input type="text" id="new-val" class="form-control" placeholder="Object value">
+                                </div>
+                                <button class="btn btn-success" onclick="createObject()">Create</button>
+                            </div>
+
+                            <div class="col-md-4">
+                                <h6>Update Object (_m_save)</h6>
+                                <div class="form-group">
+                                    <label>Object ID</label>
+                                    <input type="number" id="save-id" class="form-control" placeholder="ID to update">
+                                </div>
+                                <div class="form-group">
+                                    <label>New Value</label>
+                                    <input type="text" id="save-val" class="form-control" placeholder="New value">
+                                </div>
+                                <div class="form-group">
+                                    <label>Attribute (t{typeId}=value)</label>
+                                    <input type="text" id="save-attr" class="form-control" placeholder="e.g., t41=email@test.com">
+                                </div>
+                                <button class="btn btn-warning" onclick="saveObject()">Save</button>
+                            </div>
+
+                            <div class="col-md-4">
+                                <h6>Delete Object (_m_del)</h6>
+                                <div class="form-group">
+                                    <label>Object ID</label>
+                                    <input type="number" id="del-id" class="form-control" placeholder="ID to delete">
+                                </div>
+                                <button class="btn btn-danger" onclick="deleteObject()">Delete</button>
+
+                                <hr>
+                                <h6>View Object (obj_meta)</h6>
+                                <div class="form-group">
+                                    <label>Object ID</label>
+                                    <input type="number" id="view-id" class="form-control" placeholder="ID to view">
+                                </div>
+                                <button class="btn btn-info" onclick="viewObject()">View</button>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h6>Other Object Operations</h6>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="moveObject()">Move (_m_move)</button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="setObjectAttr()">Set Attr (_m_set)</button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="moveObjectUp()">Move Up (_m_up)</button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="setObjectOrder()">Set Order (_m_ord)</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Types Section -->
+            <div id="types-section" class="tab-pane fade">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="section-header">Type/Term Definitions (DDL)</div>
+
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <h6>Create Type (_d_new/_terms)</h6>
+                                <div class="form-group">
+                                    <label>Base Type ID</label>
+                                    <select id="type-base" class="form-control">
+                                        <option value="8">8 - String (Строка)</option>
+                                        <option value="12">12 - Text (Текст)</option>
+                                        <option value="13">13 - Number (Число)</option>
+                                        <option value="9">9 - Date (Дата)</option>
+                                        <option value="4">4 - DateTime</option>
+                                        <option value="11">11 - Boolean (Да/Нет)</option>
+                                        <option value="6">6 - Password</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Type Name</label>
+                                    <input type="text" id="type-val" class="form-control" placeholder="New type name">
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input type="checkbox" class="form-check-input" id="type-unique">
+                                    <label class="form-check-label" for="type-unique">Unique values</label>
+                                </div>
+                                <button class="btn btn-success" onclick="createType()">Create Type</button>
+                            </div>
+
+                            <div class="col-md-4">
+                                <h6>Add Requisite (_d_req/_attributes)</h6>
+                                <div class="form-group">
+                                    <label>Parent Type ID</label>
+                                    <input type="number" id="req-parent" class="form-control" placeholder="Type to add req to">
+                                </div>
+                                <div class="form-group">
+                                    <label>Requisite Type ID</label>
+                                    <input type="number" id="req-type" class="form-control" placeholder="Attribute type">
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input type="checkbox" class="form-check-input" id="req-multi">
+                                    <label class="form-check-label" for="req-multi">Multi-select</label>
+                                </div>
+                                <button class="btn btn-success" onclick="addRequisite()">Add Requisite</button>
+                            </div>
+
+                            <div class="col-md-4">
+                                <h6>Delete Type/Req</h6>
+                                <div class="form-group">
+                                    <label>Type ID</label>
+                                    <input type="number" id="del-type-id" class="form-control" placeholder="ID to delete">
+                                </div>
+                                <button class="btn btn-danger btn-sm" onclick="deleteType()">Delete Type (_d_del)</button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteReq()">Delete Req (_d_del_req)</button>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h6>Requisite Modifiers</h6>
+                                <input type="number" id="mod-req-id" class="form-control d-inline-block" style="width: 100px;" placeholder="Req ID">
+                                <button class="btn btn-outline-secondary btn-sm" onclick="setNull()">Toggle NULL (_d_null)</button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="setMulti()">Toggle Multi (_d_multi)</button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="moveReqUp()">Move Up (_d_up)</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reports Section -->
+            <div id="reports-section" class="tab-pane fade">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="section-header">Reports & SQL</div>
+
+                        <div class="row">
+                            <div class="col-md-6">
+                                <h6>Execute Report (action=report)</h6>
+                                <div class="form-group">
+                                    <label>Report ID</label>
+                                    <input type="number" id="report-id" class="form-control" placeholder="Report ID">
+                                </div>
+                                <div class="form-group">
+                                    <label>Filters (JSON)</label>
+                                    <textarea id="report-filters" class="form-control" rows="3" placeholder='{"FR_col": "value", "TO_col": "value"}'>{}</textarea>
+                                </div>
+                                <div class="form-check mb-2">
+                                    <input type="checkbox" class="form-check-input" id="report-json">
+                                    <label class="form-check-label" for="report-json">Return JSON (JSON=1)</label>
+                                </div>
+                                <button class="btn btn-primary" onclick="executeReport()">Execute Report</button>
+                            </div>
+
+                            <div class="col-md-6">
+                                <h6>View Object Page (action=object)</h6>
+                                <div class="form-group">
+                                    <label>Object ID</label>
+                                    <input type="number" id="object-action-id" class="form-control" placeholder="Object ID">
+                                </div>
+                                <button class="btn btn-info btn-sm" onclick="actionObject()">View Object</button>
+                                <button class="btn btn-info btn-sm" onclick="actionEditObj()">Edit Object</button>
+
+                                <hr>
+                                <h6>Quick Report Links</h6>
+                                <button class="btn btn-outline-info btn-sm" onclick="window.open('/' + getDb() + '/report', '_blank')">Open Report Page</button>
+                                <button class="btn btn-outline-info btn-sm" onclick="window.open('/' + getDb() + '/sql', '_blank')">Open SQL Page</button>
+                                <button class="btn btn-outline-info btn-sm" onclick="window.open('/' + getDb() + '/dict', '_blank')">Open Dictionary</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Files Section -->
+            <div id="files-section" class="tab-pane fade">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="section-header">File Operations</div>
+
+                        <div class="row">
+                            <div class="col-md-4">
+                                <h6>Upload File</h6>
+                                <div class="form-group">
+                                    <input type="file" id="upload-file" class="form-control-file">
+                                </div>
+                                <button class="btn btn-primary" onclick="uploadFile()">Upload</button>
+                            </div>
+
+                            <div class="col-md-4">
+                                <h6>Download File</h6>
+                                <div class="form-group">
+                                    <label>Filename</label>
+                                    <input type="text" id="download-filename" class="form-control" placeholder="filename.ext">
+                                </div>
+                                <button class="btn btn-info" onclick="downloadFile()">Download</button>
+                            </div>
+
+                            <div class="col-md-4">
+                                <h6>File Management</h6>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="listFiles()">List Files (dir_admin)</button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="exportCsv()">Export CSV (csv_all)</button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="backupDb()">Backup DB</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Custom API Section -->
+            <div id="custom-section" class="tab-pane fade">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="section-header">Custom API Request</div>
+
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="form-group">
+                                    <label>Method</label>
+                                    <select id="custom-method" class="form-control">
+                                        <option>GET</option>
+                                        <option>POST</option>
+                                        <option>PUT</option>
+                                        <option>DELETE</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-md-9">
+                                <div class="form-group">
+                                    <label>Endpoint</label>
+                                    <input type="text" id="custom-endpoint" class="form-control" placeholder="/:db/endpoint">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Request Body (JSON)</label>
+                            <textarea id="custom-body" class="form-control" rows="4" placeholder='{"key": "value"}'></textarea>
+                        </div>
+                        <button class="btn btn-primary" onclick="customRequest()">Send Request</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Response Area -->
+        <div class="card mt-3">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0">Response</h6>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="clearResponse()">Clear</button>
+                </div>
+                <div id="response" class="response-area">Waiting for request...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="status-bar">Ready</div>
+
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // State
+        let token = localStorage.getItem('integram_token') || '';
+        let xsrf = localStorage.getItem('integram_xsrf') || '';
+
+        // Update displays
+        function updateDisplays() {
+            $('#token-display').text(token ? token.substring(0, 20) + '...' : 'Not logged in');
+            $('#xsrf-display').text(xsrf ? xsrf.substring(0, 20) + '...' : 'N/A');
+        }
+        updateDisplays();
+
+        // Helpers
+        function getDb() { return $('#db').val() || 'my'; }
+
+        function setStatus(message, type = '') {
+            const bar = $('#status-bar');
+            bar.removeClass('success error').text(message);
+            if (type) bar.addClass(type);
+        }
+
+        function showResponse(data, status) {
+            let formatted;
+            try {
+                formatted = typeof data === 'string' ? JSON.stringify(JSON.parse(data), null, 2) : JSON.stringify(data, null, 2);
+            } catch (e) {
+                formatted = data;
+            }
+            $('#response').text(`Status: ${status}\n\n${formatted}`);
+        }
+
+        function clearResponse() {
+            $('#response').text('Waiting for request...');
+        }
+
+        async function apiRequest(endpoint, method = 'GET', body = null) {
+            const db = getDb();
+            const url = endpoint.replace(':db', db);
+
+            setStatus(`${method} ${url}...`);
+
+            const options = {
+                method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Authorization': `Bearer ${token}`
+                },
+                credentials: 'include'
+            };
+
+            if (body && method !== 'GET') {
+                options.body = JSON.stringify({ ...body, _xsrf: xsrf });
+            }
+
+            try {
+                const response = await fetch(url, options);
+                const text = await response.text();
+                let data;
+                try { data = JSON.parse(text); } catch { data = text; }
+
+                showResponse(data, response.status);
+                setStatus(`${method} ${url} - ${response.status}`, response.ok ? 'success' : 'error');
+
+                return { ok: response.ok, status: response.status, data };
+            } catch (error) {
+                showResponse({ error: error.message }, 'Error');
+                setStatus(`Error: ${error.message}`, 'error');
+                return { ok: false, error: error.message };
+            }
+        }
+
+        // Authentication
+        async function login() {
+            const db = getDb();
+            const result = await apiRequest(`/${db}/auth`, 'POST', {
+                login: $('#username').val(),
+                pwd: $('#password').val(),
+                uri: `/${db}`,
+                tzone: new Date().getTime()
+            });
+
+            if (result.ok && result.data) {
+                token = result.data.token || result.data._xsrf || '';
+                xsrf = result.data._xsrf || result.data.xsrf || '';
+                localStorage.setItem('integram_token', token);
+                localStorage.setItem('integram_xsrf', xsrf);
+                updateDisplays();
+            }
+        }
+
+        async function validateToken() {
+            await apiRequest(`/${getDb()}/validate`);
+        }
+
+        async function getXsrf() {
+            const result = await apiRequest(`/${getDb()}/xsrf`);
+            if (result.ok && result.data && result.data._xsrf) {
+                xsrf = result.data._xsrf;
+                localStorage.setItem('integram_xsrf', xsrf);
+                updateDisplays();
+            }
+        }
+
+        async function logout() {
+            await apiRequest(`/${getDb()}/exit`);
+            token = '';
+            xsrf = '';
+            localStorage.removeItem('integram_token');
+            localStorage.removeItem('integram_xsrf');
+            updateDisplays();
+        }
+
+        async function getTerms() {
+            await apiRequest(`/${getDb()}/terms`);
+        }
+
+        async function getMetadata() {
+            await apiRequest(`/${getDb()}/metadata`);
+        }
+
+        async function getGrants() {
+            await apiRequest(`/${getDb()}/grants`);
+        }
+
+        async function getCode() {
+            await apiRequest(`/${getDb()}/getcode`, 'POST', { u: $('#email-2fa').val() });
+        }
+
+        async function checkCode() {
+            await apiRequest(`/${getDb()}/checkcode`, 'POST', {
+                u: $('#email-2fa').val(),
+                c: $('#code-2fa').val()
+            });
+        }
+
+        // Objects
+        async function createObject() {
+            await apiRequest(`/${getDb()}/_m_new/${$('#new-up').val()}`, 'POST', {
+                up: parseInt($('#new-up').val()),
+                t: parseInt($('#new-t').val()),
+                val: $('#new-val').val()
+            });
+        }
+
+        async function saveObject() {
+            const body = { val: $('#save-val').val() };
+            const attr = $('#save-attr').val();
+            if (attr && attr.includes('=')) {
+                const [key, val] = attr.split('=');
+                body[key] = val;
+            }
+            await apiRequest(`/${getDb()}/_m_save/${$('#save-id').val()}`, 'POST', body);
+        }
+
+        async function deleteObject() {
+            await apiRequest(`/${getDb()}/_m_del/${$('#del-id').val()}`, 'POST', {});
+        }
+
+        async function viewObject() {
+            await apiRequest(`/${getDb()}/obj_meta/${$('#view-id').val()}`);
+        }
+
+        async function moveObject() {
+            const id = prompt('Object ID to move:');
+            const newUp = prompt('New parent ID:');
+            if (id && newUp) {
+                await apiRequest(`/${getDb()}/_m_move/${id}`, 'POST', { up: parseInt(newUp) });
+            }
+        }
+
+        async function setObjectAttr() {
+            const id = prompt('Object ID:');
+            const attr = prompt('Attribute (t{typeId}=value):');
+            if (id && attr && attr.includes('=')) {
+                const [key, val] = attr.split('=');
+                await apiRequest(`/${getDb()}/_m_set/${id}`, 'POST', { [key]: val });
+            }
+        }
+
+        async function moveObjectUp() {
+            const id = prompt('Object ID to move up:');
+            if (id) {
+                await apiRequest(`/${getDb()}/_m_up/${id}`, 'POST', {});
+            }
+        }
+
+        async function setObjectOrder() {
+            const id = prompt('Object ID:');
+            const order = prompt('New order:');
+            if (id && order) {
+                await apiRequest(`/${getDb()}/_m_ord/${id}`, 'POST', { order: parseInt(order) });
+            }
+        }
+
+        // Types
+        async function createType() {
+            await apiRequest(`/${getDb()}/_d_new`, 'POST', {
+                t: parseInt($('#type-base').val()),
+                val: $('#type-val').val(),
+                unique: $('#type-unique').is(':checked') ? '1' : '0'
+            });
+        }
+
+        async function addRequisite() {
+            await apiRequest(`/${getDb()}/_d_req/${$('#req-parent').val()}`, 'POST', {
+                t: parseInt($('#req-type').val()),
+                multiselect: $('#req-multi').is(':checked') ? '1' : undefined
+            });
+        }
+
+        async function deleteType() {
+            await apiRequest(`/${getDb()}/_d_del/${$('#del-type-id').val()}`, 'POST', {});
+        }
+
+        async function deleteReq() {
+            await apiRequest(`/${getDb()}/_d_del_req/${$('#del-type-id').val()}`, 'POST', {});
+        }
+
+        async function setNull() {
+            await apiRequest(`/${getDb()}/_d_null/${$('#mod-req-id').val()}`, 'POST', {});
+        }
+
+        async function setMulti() {
+            await apiRequest(`/${getDb()}/_d_multi/${$('#mod-req-id').val()}`, 'POST', {});
+        }
+
+        async function moveReqUp() {
+            await apiRequest(`/${getDb()}/_d_up/${$('#mod-req-id').val()}`, 'POST', {});
+        }
+
+        // Reports
+        async function executeReport() {
+            let filters = {};
+            try {
+                filters = JSON.parse($('#report-filters').val() || '{}');
+            } catch (e) {
+                alert('Invalid JSON in filters');
+                return;
+            }
+
+            await apiRequest(`/${getDb()}`, 'POST', {
+                action: 'report',
+                id: parseInt($('#report-id').val()),
+                JSON: $('#report-json').is(':checked') ? '1' : undefined,
+                ...filters
+            });
+        }
+
+        async function actionObject() {
+            await apiRequest(`/${getDb()}`, 'POST', {
+                action: 'object',
+                id: parseInt($('#object-action-id').val())
+            });
+        }
+
+        async function actionEditObj() {
+            await apiRequest(`/${getDb()}`, 'POST', {
+                action: 'edit_obj',
+                id: parseInt($('#object-action-id').val())
+            });
+        }
+
+        // Files
+        async function uploadFile() {
+            const fileInput = document.getElementById('upload-file');
+            if (!fileInput.files.length) {
+                alert('Please select a file');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            setStatus('Uploading...');
+            try {
+                const response = await fetch(`/${getDb()}/upload`, {
+                    method: 'POST',
+                    headers: { 'X-Authorization': `Bearer ${token}` },
+                    body: formData,
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                showResponse(data, response.status);
+                setStatus('Upload complete', response.ok ? 'success' : 'error');
+            } catch (error) {
+                showResponse({ error: error.message }, 'Error');
+                setStatus(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        function downloadFile() {
+            const filename = $('#download-filename').val();
+            if (!filename) {
+                alert('Please enter filename');
+                return;
+            }
+            window.open(`/${getDb()}/download/${filename}`, '_blank');
+        }
+
+        async function listFiles() {
+            await apiRequest(`/${getDb()}/dir_admin`);
+        }
+
+        async function exportCsv() {
+            window.open(`/${getDb()}/csv_all`, '_blank');
+        }
+
+        async function backupDb() {
+            window.open(`/${getDb()}/backup`, '_blank');
+        }
+
+        // Custom Request
+        async function customRequest() {
+            const method = $('#custom-method').val();
+            const endpoint = $('#custom-endpoint').val();
+            let body = null;
+
+            if (method !== 'GET') {
+                try {
+                    body = JSON.parse($('#custom-body').val() || '{}');
+                } catch (e) {
+                    alert('Invalid JSON in request body');
+                    return;
+                }
+            }
+
+            await apiRequest(endpoint, method, body);
+        }
+    </script>
+</body>
+</html>
