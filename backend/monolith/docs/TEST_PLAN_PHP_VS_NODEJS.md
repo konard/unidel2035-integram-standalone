@@ -647,7 +647,7 @@ curl -s -X POST "$NODE/$DB/_d_del_req/$REQ_ID" -b "$DB=$TOKEN" -d "_xsrf=$XSRF" 
 ## 8. Export / Backup
 
 ### 8.1 `GET /:db/csv_all` — export all as ZIP of CSVs
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:** Binary ZIP file (Content-Type: application/zip).
 
@@ -662,7 +662,7 @@ unzip -l /tmp/test.zip | head -10
 ---
 
 ### 8.2 `GET /:db/backup` — binary dump
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:** Binary ZIP (contains `.dmp` file with compact binary format).
 
@@ -676,7 +676,7 @@ unzip -l /tmp/test_backup.zip
 ---
 
 ### 8.3 `POST /:db/restore` — restore from dump
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **Test:**
 ```bash
@@ -733,7 +733,7 @@ curl -s "$NODE/$DB/grants?JSON" -b "$DB=$TOKEN" | jq .
 ## 11. File management
 
 ### 11.1 `POST /:db/upload` — upload file
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -750,7 +750,7 @@ curl -s -X POST "$NODE/$DB/upload" \
 ---
 
 ### 11.2 `GET /:db/download/:filename` — download file
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **Test:**
 ```bash
@@ -812,8 +812,11 @@ curl -s "$NODE/$DB/_connect?JSON" -b "$DB=$TOKEN" | jq .status
 | 10 | `POST /:db/report/:id` (no ?JSON) | ✅ | row-major data, `columns` at top level (for report.html) |
 | 11 | `GET /:db/_ref_reqs/:refId?JSON` | ✅ | `{id: "display str"}` |
 | 12 | `GET /:db/grants?JSON` | ✅ | `{user: "name", grants: [{id,type}]}` |
-| 13 | `GET /:db/csv_all`, `backup`, `restore` | ⚠️ | partial (export/import) |
-| 14 | `POST /my/_new_db` | ✅ | `{status:"Ok", id: ...}` |
+| 13 | `GET /:db/csv_all` | ✅ | ZIP with semicolon-CSV |
+| 14 | `GET /:db/backup` | ✅ | ZIP with .dmp compact format |
+| 15 | `POST /:db/restore` | ✅ | ZIP file upload, INSERT IGNORE batch, `{status,rows}` |
+| 16 | `POST /:db/upload` / `GET /:db/download/:filename` | ✅ | multer disk storage |
+| 17 | `POST /my/_new_db` | ✅ | `{status:"Ok", id: ...}` |
 
 ---
 

@@ -5308,6 +5308,46 @@ function buildZip(entryName, content) {
   return Buffer.concat([lfh, compressed, cdh, eocd]);
 }
 
+/**
+ * Read entries from a ZIP buffer. Supports stored (method 0) and deflate (method 8).
+ * @param {Buffer} buf - ZIP file buffer
+ * @returns {Array<{name: string, content: Buffer}>}
+ */
+function readZip(buf) {
+  // Find End of Central Directory signature (search backwards)
+  let eocdOffset = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocdOffset = i; break; }
+  }
+  if (eocdOffset < 0) throw new Error('Not a valid ZIP file');
+
+  const cdCount  = buf.readUInt16LE(eocdOffset + 10);
+  const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+
+  const entries = [];
+  let pos = cdOffset;
+  for (let i = 0; i < cdCount; i++) {
+    if (buf.readUInt32LE(pos) !== 0x02014b50) break;
+    const method     = buf.readUInt16LE(pos + 10);
+    const compSize   = buf.readUInt32LE(pos + 20);
+    const nameLen    = buf.readUInt16LE(pos + 28);
+    const extraLen   = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    const localOff   = buf.readUInt32LE(pos + 42);
+    const name       = buf.slice(pos + 46, pos + 46 + nameLen).toString('utf8');
+
+    // Local file header: 30 bytes fixed + name + extra
+    const lfhExtraLen = buf.readUInt16LE(localOff + 28);
+    const dataStart   = localOff + 30 + nameLen + lfhExtraLen;
+    const compData    = buf.slice(dataStart, dataStart + compSize);
+
+    const content = method === 0 ? compData : zlib.inflateRawSync(compData);
+    entries.push({ name, content });
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  return entries;
+}
+
 // ============================================================================
 // backup - Binary dump export (P0 Critical)
 // PHP: index.php lines 4239–4284
@@ -5456,14 +5496,17 @@ router.get('/:db/backup', async (req, res) => {
  *
  * PHP: index.php lines 4178–4238
  * Requires EXPORT grant on root (1) or admin user.
- * Expects the dump content in request body or file upload.
- * Returns INSERT SQL statements for execution.
+ * Accepts a .zip file upload (multipart/form-data field "file") containing a .dmp backup.
+ * Also accepts raw dump text in body.content / body.data for API clients.
  */
-router.post('/:db/restore', async (req, res) => {
+router.post('/:db/restore', (req, res, next) => {
+  // Accept optional file upload (same memory multer used elsewhere)
+  upload.single('file')(req, res, next);
+}, async (req, res) => {
   const { db } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).send('Invalid database');
+    return res.status(200).json([{ error: 'Invalid database' }]);
   }
 
   try {
@@ -5492,21 +5535,27 @@ router.post('/:db/restore', async (req, res) => {
 
     // Check EXPORT grant (same as backup for restore)
     if (!grants.EXPORT?.[1] && username.toLowerCase() !== 'admin' && username !== db) {
-      return res.status(403).send('You do not have permission to import to the database');
+      return res.status(403).json({ error: 'You do not have permission to import to the database' });
     }
 
-    // Get dump content from body
+    // Get dump content: file upload (ZIP) > body.content > body.data
     let dumpContent = '';
-    if (typeof req.body === 'string') {
+    if (req.file) {
+      // Extract .dmp text from uploaded ZIP
+      const entries = readZip(req.file.buffer);
+      const dmpEntry = entries.find(e => e.name.endsWith('.dmp')) || entries[0];
+      if (!dmpEntry) return res.status(400).json({ error: 'No .dmp file found in ZIP' });
+      dumpContent = dmpEntry.content.toString('utf8');
+    } else if (typeof req.body === 'string') {
       dumpContent = req.body;
-    } else if (req.body.content) {
+    } else if (req.body?.content) {
       dumpContent = req.body.content;
-    } else if (req.body.data) {
+    } else if (req.body?.data) {
       dumpContent = req.body.data;
     }
 
     if (!dumpContent) {
-      return res.status(400).send('No backup content provided');
+      return res.status(400).json({ error: 'No backup content provided' });
     }
 
     // Parse the dump format (PHP lines 4196–4237)
@@ -5514,15 +5563,13 @@ router.post('/:db/restore', async (req, res) => {
     let lastId = 0;
     let lastUp = 0;
     let lastT = 0;
-    const values = [];
+    const rows = [];
 
     for (let line of lines) {
       if (line.length === 0 || line.trim().length === 0) continue;
 
       // Remove BOM if present
-      if (line.charCodeAt(0) === 0xFEFF || line.substring(0, 3) === '\xEF\xBB\xBF') {
-        line = line.substring(line.charCodeAt(0) === 0xFEFF ? 1 : 3);
-      }
+      if (line.charCodeAt(0) === 0xFEFF) line = line.substring(1);
 
       // Parse ID delta
       if (line.startsWith('/')) {
@@ -5533,56 +5580,50 @@ router.post('/:db/restore', async (req, res) => {
         line = line.substring(1);
       } else {
         const delimPos = line.indexOf(';');
-        if (delimPos > 0) {
-          const idDelta = parseInt(line.substring(0, delimPos), 36);
-          lastId += idDelta;
-        }
+        if (delimPos > 0) lastId += parseInt(line.substring(0, delimPos), 36);
         line = line.substring(delimPos + 1);
       }
 
       // Parse up
       let delimPos = line.indexOf(';');
-      if (delimPos > 0) {
-        lastUp = parseInt(line.substring(0, delimPos), 36);
-      }
+      if (delimPos > 0) lastUp = parseInt(line.substring(0, delimPos), 36);
       line = line.substring(delimPos + 1);
 
       // Parse t
       delimPos = line.indexOf(';');
-      if (delimPos > 0) {
-        lastT = parseInt(line.substring(0, delimPos), 36);
-      }
+      if (delimPos > 0) lastT = parseInt(line.substring(0, delimPos), 36);
       line = line.substring(delimPos + 1);
 
       // Parse ord
       delimPos = line.indexOf(';');
       let ord = 1;
-      if (delimPos > 0) {
-        ord = line.substring(0, delimPos) || 1;
-      }
+      if (delimPos > 0) ord = parseInt(line.substring(0, delimPos)) || 1;
       line = line.substring(delimPos + 1);
 
       // Val is the rest (with newline escaping removed)
-      const val = line
-        .replace(/&ritrn;/g, '\n')
-        .replace(/&ritrr;/g, '\r');
-
-      // Escape for SQL
-      const escapedVal = val.replace(/'/g, "''");
-      values.push(`(${lastId},${lastT},${lastUp},${ord},'${escapedVal}')`);
+      const val = line.replace(/&ritrn;/g, '\n').replace(/&ritrr;/g, '\r');
+      rows.push([lastId, lastT, lastUp, ord, val]);
     }
 
-    // Return INSERT statement (PHP returns this, doesn't execute directly)
-    const insertSql = `INSERT INTO \`${db}\` (\`id\`, \`t\`, \`up\`, \`ord\`, \`val\`) VALUES ${values.join(',')};`;
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'Empty or unrecognised dump file' });
+    }
 
-    logger.info('[Legacy restore] Parsed backup', { db, rowCount: values.length });
+    // Execute in batches of 1000
+    const BATCH = 1000;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH);
+      await pool.query(
+        `INSERT IGNORE INTO \`${db}\` (\`id\`, \`t\`, \`up\`, \`ord\`, \`val\`) VALUES ?`,
+        [batch]
+      );
+    }
 
-    // Return the SQL statement as PHP does
-    res.setHeader('Content-Type', 'text/plain');
-    res.send(insertSql);
+    logger.info('[Legacy restore] Import completed', { db, rowCount: rows.length });
+    res.json({ status: 'Ok', rows: rows.length });
   } catch (error) {
     logger.error('[Legacy restore] Error', { error: error.message, db });
-    res.status(500).send('Restore failed: ' + error.message);
+    res.status(500).json({ error: 'Restore failed: ' + error.message });
   }
 });
 
