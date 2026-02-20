@@ -1649,25 +1649,46 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
         const obj = objResult[0];
 
-        // Requisite definitions (schema) for this type
+        // Requisite definitions (schema) for this type; val = attrs string (may contain :MULTI:)
         const [reqDefs] = await pool.query(
           `SELECT id, val, ord FROM \`${db}\` WHERE up = ? ORDER BY ord`,
           [obj.base]
         );
 
-        // Stored requisite values for this specific object
+        // Stored requisite values — include row id for multiselect deletion tracking
         const [reqVals] = await pool.query(
-          `SELECT t, val FROM \`${db}\` WHERE up = ? ORDER BY ord`,
+          `SELECT id, t, val FROM \`${db}\` WHERE up = ? ORDER BY ord`,
           [subId]
         );
-        const valMap = {};
-        for (const rv of reqVals) valMap[rv.t] = rv.val;
+        // Group values by type: multiselect may have multiple rows with same t
+        const valsByType = {};
+        for (const rv of reqVals) {
+          if (!valsByType[rv.t]) valsByType[rv.t] = [];
+          valsByType[rv.t].push({ id: rv.id, val: rv.val });
+        }
 
         // Legacy JS (smartq.js) expects: json.obj.typ (string), json.reqs[reqId].value
+        // For :MULTI: requisites also needs json.reqs[reqId].multiselect.{ref_val, id}
+        // (used by getRef/dropRef to delete individual multi-select items via _m_del)
         return res.json({
           obj: { id: obj.id, val: obj.val, up: obj.up, base: obj.base, typ: String(obj.base) },
           reqs: Object.fromEntries(
-            reqDefs.map(rd => [rd.id, { value: valMap[rd.id] !== undefined ? valMap[rd.id] : '' }])
+            reqDefs.map(rd => {
+              const isMulti = rd.val && rd.val.includes(':MULTI:');
+              const rows    = valsByType[rd.id] || [];
+              const reqEntry = {
+                value: isMulti
+                  ? rows.map(r => r.val).join(',')
+                  : (rows.length > 0 ? rows[0].val : ''),
+              };
+              if (isMulti && rows.length > 0) {
+                reqEntry.multiselect = {
+                  ref_val: rows.map(r => r.val),
+                  id:      rows.map(r => r.id),
+                };
+              }
+              return [rd.id, reqEntry];
+            })
           ),
         });
       }
@@ -4540,6 +4561,7 @@ async function compileReport(pool, db, reportId) {
         reqTypeId,          // ← which type to LEFT JOIN on
         isMainCol:  reqTypeId === report.parentType,  // main object's own val
         baseType:   col.col_base_t || TYPE.CHARS,
+        isRef:      !REV_BASE_TYPE[col.col_base_t] && (col.col_base_t || 0) > 0,
         order:      col.ord,
       });
     }
@@ -4685,6 +4707,9 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       const out = { id: row.id, val: row.main_val };
       for (const col of report.columns) {
         out[col.alias] = row[col.alias] ?? '';
+        // Companion ID value for {name}ID columns (used by smartq.js for obj-id / ref-id attributes)
+        if (col.isMainCol)      out[col.alias + '_id'] = row.id;
+        else if (col.isRef)     out[col.alias + '_id'] = row[col.alias] ?? '';
       }
       return out;
     });
@@ -4775,6 +4800,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       // Parse LIMIT: smartq.js sends "offset,count" (e.g. "0,50" or "50,50") or just "50"
+      // When LIMIT is absent (TOTALS request) use a large limit to get accurate totals
       let limit = 100, offset = 0;
       const rawLimit = params.LIMIT || params.limit;
       if (rawLimit) {
@@ -4787,6 +4813,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
           offset = parseInt(params.F || params.offset || 0, 10);
         }
       } else {
+        // No LIMIT = drawFoot/TOTALS request — fetch all rows for accurate totals
+        limit = 99999;
         offset = parseInt(params.F || params.offset || 0, 10);
       }
 
@@ -4863,18 +4891,44 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         // smartq.js drawLine: uses `json.data[j][i]` (col j, row i)
         // smartq.js drawFoot: checks 'totals' in json.columns[0] → embed totals in each column
         const totalsMap = results.totals || {};
-        const cols = report.columns.map(col => ({
-          id: col.id,
-          name: col.name,
-          // type = requisite type ID (used by smartq.js as req-id for inline editing / metadata)
-          type: col.reqTypeId || 0,
-          format: REV_BASE_TYPE[col.baseType] || 'CHARS',
-          align: col.align || 'LEFT',
-          totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
-        }));
+        // Build column entries; for object/ref columns emit a hidden {name}ID companion column
+        // so smartq.js can set obj-id / ref-id attributes via zis.columns[col.name+'ID'].col
+        const colEntries = [];
+        for (const col of report.columns) {
+          colEntries.push({
+            def: {
+              id: col.id,
+              name: col.name,
+              // type = requisite type ID (used by smartq.js as req-id for inline editing / metadata)
+              type: col.reqTypeId || 0,
+              format: REV_BASE_TYPE[col.baseType] || 'CHARS',
+              align: col.align || 'LEFT',
+              totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
+              // ref = truthy for reference columns; smartq uses ref-id vs obj-id
+              ref: col.isRef ? col.baseType : null,
+            },
+            alias: col.alias,
+          });
+          // Companion hidden ID column: smartq detects name ending in 'ID' and sets ids[i]=0
+          if (col.isMainCol || col.isRef) {
+            colEntries.push({
+              def: {
+                id: col.id,          // truthy so smartq processes it in the ID detection branch
+                name: col.name + 'ID',
+                type: col.reqTypeId || 0,
+                format: 'CHARS',
+                align: 'LEFT',
+                totals: null,
+                ref: col.isRef ? col.baseType : null,
+              },
+              alias: col.alias + '_id',
+            });
+          }
+        }
+        const cols = colEntries.map(e => e.def);
         // Column-major: data[column_index] = [row0_val, row1_val, ...]
-        const data = report.columns.map(col =>
-          results.data.map(row => row[col.alias] !== undefined ? row[col.alias] : '')
+        const data = colEntries.map(e =>
+          results.data.map(row => row[e.alias] !== undefined ? row[e.alias] : '')
         );
         return res.json({ columns: cols, data, rownum: results.rownum });
       }
@@ -5964,10 +6018,11 @@ router.post('/:db', async (req, res, next) => {
       const cols = report.columns.map(col => ({
         id: col.id,
         name: col.name,
-        type: col.baseType || 0,
+        type: col.reqTypeId || 0,
         format: REV_BASE_TYPE[col.baseType] || 'CHARS',
         align: col.align || 'LEFT',
         totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
+        ref: col.isRef ? col.baseType : null,
       }));
       const data = results.data.map(row =>
         report.columns.map(col => row[col.alias] ?? '')
