@@ -1596,6 +1596,12 @@ router.get('/:db/:page*', async (req, res, next) => {
   // and returns json_encode() when isApi() is true.
   if (isApiRequest(req)) {
     const subId = parseInt((fullPath || '').replace(/^\//, ''), 10) || 0;
+
+    // JSON requested but page is a template page without required sub-id → JSON error
+    if ((page === 'object' || page === 'edit_obj' || page === 'report') && !subId) {
+      return res.status(200).json({ error: `typeId required: /${db}/${page}/{id}?JSON` });
+    }
+
     try {
       const pool = getPool();
 
