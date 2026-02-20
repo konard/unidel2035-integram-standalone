@@ -72,14 +72,6 @@ if (fs.existsSync(PUBLIC_PATH)) {
   console.log(`   App UI: http://localhost:${PORT}/app/templates/login.html`);
 }
 
-// ── API v2 (JSON:API, REST) ───────────────────────────────────────────────────
-
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const v2Router = require('../src/api/v2/index.js');
-app.use('/api/v2', v2Router);
-console.log(`   API v2: http://localhost:${PORT}/api/v2/integram/databases/{db}/objects/{id}`);
-
 // ── Legacy PHP-compatible API + page routing ──────────────────────────────────
 
 const { default: legacyRouter } = await import('../src/api/routes/legacy-compat.js');
