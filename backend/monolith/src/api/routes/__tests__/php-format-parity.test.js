@@ -378,4 +378,204 @@ describe('PHP Format Parity (Issue #155)', () => {
       expect(response.headers['content-type']).toMatch(/json/);
     });
   });
+
+  describe('GET /:db/types?JSON (edit_types) format parity', () => {
+    /**
+     * PHP returns: {edit_types: {...}, types: {...basic_types...}, editable: 1}
+     * See PHP index.php lines 4293-4318
+     */
+
+    it('returns edit_types object with type data', async () => {
+      // Mock type data query
+      mockQuery.mockResolvedValueOnce([[
+        { id: 100, t: 3, ref_val: null, uniq: 1, val: 'TestType', req_id: 200, req_t: 3, ord: 1, attrs: '', reft: null },
+        { id: 100, t: 3, ref_val: null, uniq: 1, val: 'TestType', req_id: 201, req_t: 4, ord: 2, attrs: ':ALIAS=Test:', reft: null },
+      ]]);
+
+      const response = await request(app)
+        .get('/testdb/types?JSON')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('edit_types');
+      expect(response.body.edit_types).toHaveProperty('id');
+      expect(response.body.edit_types).toHaveProperty('val');
+      expect(Array.isArray(response.body.edit_types.id)).toBe(true);
+    });
+
+    it('returns types object with basic type mappings', async () => {
+      mockQuery.mockResolvedValueOnce([[
+        { id: 100, t: 3, ref_val: null, uniq: 1, val: 'TestType', req_id: null, req_t: null, ord: null, attrs: null, reft: null },
+      ]]);
+
+      const response = await request(app)
+        .get('/testdb/types?JSON')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('types');
+      expect(typeof response.body.types).toBe('object');
+    });
+
+    it('returns editable flag when user has write permissions', async () => {
+      mockQuery.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/testdb/types?JSON')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('editable');
+      expect(response.body.editable).toBe(1);
+    });
+
+    it('also works with edit_types alias', async () => {
+      mockQuery.mockResolvedValueOnce([[]]);
+
+      const response = await request(app)
+        .get('/testdb/edit_types?JSON')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('edit_types');
+    });
+  });
+
+  describe('GET /:db?JSON (main page) format parity', () => {
+    /**
+     * PHP returns: {user, user_id, role, _xsrf, token, &main.myrolemenu, terms}
+     */
+
+    it('returns 401 when no authentication token', async () => {
+      const response = await request(app)
+        .get('/testdb?JSON');
+
+      expect(response.status).toBe(401);
+      expect(response.body).toHaveProperty('error');
+    });
+
+    it('returns user info when authenticated', async () => {
+      // Mock: 1. DB exists check (must return a row), 2. User token validation, 3. Terms query
+      mockQuery
+        .mockResolvedValueOnce([[{ '1': 1 }]]) // DB exists - must return a row!
+        .mockResolvedValueOnce([[{
+          uid: 1,
+          username: 'testuser',
+          xsrf_val: 'xsrf123',
+          role_val: null
+        }]]) // User query
+        .mockResolvedValueOnce([[]]); // Terms query
+
+      const response = await request(app)
+        .get('/testdb?JSON')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('user');
+      expect(response.body).toHaveProperty('user_id');
+      expect(response.body).toHaveProperty('_xsrf');
+      expect(response.body).toHaveProperty('token');
+    });
+
+    it('returns role menu when user has a role', async () => {
+      // Mock queries
+      mockQuery
+        .mockResolvedValueOnce([[{ '1': 1 }]]) // DB exists - must return a row!
+        .mockResolvedValueOnce([[{
+          uid: 1,
+          username: 'testuser',
+          xsrf_val: 'xsrf123',
+          role_val: '500' // Has role
+        }]])
+        .mockResolvedValueOnce([[ // Role menu items
+          { id: 100, name: 'Dashboard', ord: 1 },
+          { id: 101, name: 'Reports', ord: 2 },
+        ]])
+        .mockResolvedValueOnce([[]]); // Terms
+
+      const response = await request(app)
+        .get('/testdb?JSON')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('&main.myrolemenu');
+      expect(response.body['&main.myrolemenu']).toHaveProperty('href');
+      expect(response.body['&main.myrolemenu']).toHaveProperty('name');
+    });
+
+    it('returns terms/types list', async () => {
+      mockQuery
+        .mockResolvedValueOnce([[{ '1': 1 }]]) // DB exists - must return a row!
+        .mockResolvedValueOnce([[{
+          uid: 1,
+          username: 'testuser',
+          xsrf_val: 'xsrf123',
+          role_val: null
+        }]])
+        .mockResolvedValueOnce([[ // Terms
+          { id: 18, name: 'User', type: 3, ord: 1 },
+          { id: 22, name: 'Report', type: 3, ord: 2 },
+        ]]);
+
+      const response = await request(app)
+        .get('/testdb?JSON')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toHaveProperty('terms');
+      expect(Array.isArray(response.body.terms)).toBe(true);
+    });
+  });
+
+  describe('GET /:db/object/:typeId?JSON_DATA format parity', () => {
+    /**
+     * PHP JSON_DATA returns compact format: [{i:id, u:up, o:ord, r:[vals]}]
+     */
+
+    it('returns compact JSON_DATA format', async () => {
+      // Mock queries
+      mockQuery
+        .mockResolvedValueOnce([[ // Objects
+          { id: 100, val: 'Obj1', up: 0, base: 18, ord: 1 },
+          { id: 101, val: 'Obj2', up: 0, base: 18, ord: 2 },
+        ]])
+        .mockResolvedValueOnce([[ // Requisite definitions
+          { id: 50 },
+          { id: 51 },
+        ]])
+        .mockResolvedValueOnce([[ // Requisite values
+          { up: 100, t: 50, val: 'Value1' },
+          { up: 100, t: 51, val: 'Value2' },
+          { up: 101, t: 50, val: 'Value3' },
+          { up: 101, t: 51, val: 'Value4' },
+        ]]);
+
+      const response = await request(app)
+        .get('/testdb/object/18?JSON_DATA')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(Array.isArray(response.body)).toBe(true);
+      if (response.body.length > 0) {
+        expect(response.body[0]).toHaveProperty('i'); // id
+        expect(response.body[0]).toHaveProperty('u'); // up
+        expect(response.body[0]).toHaveProperty('o'); // ord
+        expect(response.body[0]).toHaveProperty('r'); // requisite values array
+      }
+    });
+
+    it('returns empty array when no objects', async () => {
+      mockQuery
+        .mockResolvedValueOnce([[]]) // No objects
+        .mockResolvedValueOnce([[]]); // No requisite definitions
+
+      const response = await request(app)
+        .get('/testdb/object/999?JSON_DATA')
+        .set('Cookie', 'testdb=valid-test-token');
+
+      expect(response.status).toBe(200);
+      expect(Array.isArray(response.body)).toBe(true);
+      expect(response.body.length).toBe(0);
+    });
+  });
 });

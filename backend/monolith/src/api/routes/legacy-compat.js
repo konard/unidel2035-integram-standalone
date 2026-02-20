@@ -1552,6 +1552,10 @@ router.get('/:db', async (req, res, next) => {
   logger.info('[Legacy Page] Request', { db, hasToken: !!token });
 
   if (!token) {
+    // JSON API request without token gets 401
+    if (isApiRequest(req)) {
+      return res.status(401).json({ error: 'Unauthorized', hint: `POST /${db}/auth?JSON with login+pwd to get token` });
+    }
     // Serve login page
     const loginPage = path.join(legacyPath, 'index.html');
     if (fs.existsSync(loginPage)) {
@@ -1570,16 +1574,22 @@ router.get('/:db', async (req, res, next) => {
     // Check if database exists
     if (!await dbExists(db)) {
       res.clearCookie(db, { path: '/' });
+      if (isApiRequest(req)) {
+        return res.status(404).json({ error: 'Database not found' });
+      }
       return res.redirect(`/${db}`);
     }
 
     const pool = getPool();
 
-    // Validate token
+    // Validate token and get user info
     const query = `
-      SELECT user.id AS uid
+      SELECT user.id AS uid, user.val AS username,
+             xsrf.val AS xsrf_val, role.val AS role_val
       FROM ${db} user
       JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
+      LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
+      LEFT JOIN ${db} role ON role.up = user.id AND role.t = ${TYPE.ROLE}
       WHERE token.val = ? AND user.t = ${TYPE.USER}
       LIMIT 1
     `;
@@ -1589,7 +1599,58 @@ router.get('/:db', async (req, res, next) => {
     if (rows.length === 0) {
       // Invalid token - clear cookie and redirect to login
       res.clearCookie(db, { path: '/' });
+      if (isApiRequest(req)) {
+        return res.status(401).json({ error: 'Invalid token' });
+      }
       return res.redirect(`/${db}`);
+    }
+
+    const user = rows[0];
+
+    // ── GET /:db/?JSON → Main page API response
+    // PHP returns: {user, role, _xsrf, &main.myrolemenu, etc.}
+    if (isApiRequest(req)) {
+      // Get role menu items if user has a role
+      const menuItems = [];
+      if (user.role_val) {
+        // Get menu items for user's role (role menu is stored as children of role type)
+        const [menuRows] = await pool.query(
+          `SELECT m.id, m.val AS name, m.ord
+           FROM ${db} m
+           WHERE m.up = ? AND m.t != m.id
+           ORDER BY m.ord`,
+          [user.role_val]
+        );
+        for (const m of menuRows) {
+          menuItems.push({ id: m.id, name: m.name, ord: m.ord });
+        }
+      }
+
+      // Get available terms/types for the user
+      const [termsRows] = await pool.query(
+        `SELECT a.id, a.val AS name, a.t AS type, a.ord
+         FROM ${db} a
+         WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
+         ORDER BY a.val`
+      );
+      // Filter out CALCULATABLE and BUTTON types
+      const terms = termsRows.filter(t => {
+        const bt = REV_BASE_TYPE[t.type];
+        return bt !== 'CALCULATABLE' && bt !== 'BUTTON';
+      });
+
+      return res.json({
+        user: user.username,
+        user_id: user.uid,
+        role: user.role_val || '',
+        _xsrf: user.xsrf_val || '',
+        token: token,
+        '&main.myrolemenu': {
+          href: menuItems.map(m => String(m.id)),
+          name: menuItems.map(m => m.name),
+        },
+        terms: terms.map(t => ({ id: t.id, name: t.name, type: t.type })),
+      });
     }
 
     // Valid token - render main page with template variables
@@ -1821,6 +1882,55 @@ router.get('/:db/:page*', async (req, res, next) => {
           req_base_id,
           reqs: reqsStd,
         });
+      }
+
+      // ── GET /:db/types?JSON (edit_types endpoint)
+      // PHP: index.php &edit_typs case (lines 4293-4318)
+      // Returns: {edit_types: {...}, types: {...basic_types...}, editable: 1}
+      if (page === 'types' || page === 'edit_types') {
+        // Get all types with their requisites (PHP query at line 4295-4304)
+        const [typeRows] = await pool.query(
+          `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
+                  CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END AS val,
+                  reqs.id AS req_id, reqs.t AS req_t, reqs.ord, reqs.val AS attrs, ref_typs.t AS reft
+           FROM \`${db}\` typs
+           LEFT JOIN \`${db}\` refs ON refs.id = typs.t AND refs.id != refs.t
+           LEFT JOIN \`${db}\` reqs ON reqs.up = typs.id
+           LEFT JOIN \`${db}\` req_typs ON req_typs.id = reqs.t AND req_typs.id != req_typs.t
+           LEFT JOIN \`${db}\` ref_typs ON ref_typs.id = req_typs.t AND ref_typs.id != ref_typs.t
+           WHERE typs.up = 0 AND typs.id != typs.t
+           ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`
+        );
+
+        // Build edit_types object matching PHP $blocks[$block] structure
+        const editTypes = {
+          id: [], t: [], ref_val: [], uniq: [], val: [],
+          req_id: [], req_t: [], ord: [], attrs: [], reft: []
+        };
+        for (const row of typeRows) {
+          editTypes.id.push(row.id ?? '');
+          editTypes.t.push(row.t ?? '');
+          editTypes.ref_val.push(row.ref_val ?? '');
+          editTypes.uniq.push(row.uniq ?? '');
+          editTypes.val.push((row.val ?? '').replace(/\\/g, '\\\\'));
+          editTypes.req_id.push(row.req_id ?? '');
+          editTypes.req_t.push(row.req_t ?? '');
+          editTypes.ord.push(row.ord ?? '');
+          editTypes.attrs.push((row.attrs ?? '').replace(/\\/g, '\\\\'));
+          editTypes.reft.push(row.reft ?? '');
+        }
+
+        // Build response matching PHP (line 4312-4316)
+        const response = {
+          edit_types: editTypes,
+          types: REV_BASE_TYPE, // PHP: $GLOBALS["basics"]
+        };
+
+        // TODO: Check_Types_Grant() == "WRITE" → add editable: 1
+        // For now, assume editable since user is authenticated
+        response.editable = 1;
+
+        return res.json(response);
       }
 
       // ── GET /:db/edit_obj/:id?JSON → {obj:{id,val,up,base}, req:[{id,val,ord,value}]}
