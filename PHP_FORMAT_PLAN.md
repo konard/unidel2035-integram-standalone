@@ -31,11 +31,19 @@ Node.js ответы `GET /:db/object/:typeId?JSON` должны точно со
 - Проверить что GRANT rows в БД хранят hrefs в поле val
 - Если не так — возможно нужен другой запрос
 
-### ⬜ TODO — Часть 3: edit_obj endpoint
-- `GET /:db/edit_obj/:id?JSON` — проверить PHP формат
+### ✅ DONE — Часть 3: edit_obj endpoint
+- `GET /:db/edit_obj/:id?JSON` — PHP-формат реализован
+- obj: {id, val, parent, typ, typ_name, base_typ}
+- &main.myrolemenu — через role token
+- &main.a.&object — {typ x2, up, typ_name x2, val x2, id, disabled}
+- &main.a.&object.&edit_req — {type, typ, _parent_.val, _parent_.disabled}
+- reqs: {reqKey: {type, order, value, base, arr, arr_type}} — только непустые значения
+- &main.a.&object.&object_reqs — все не-FILE req поля
+- &main.a.&object.&object_reqs.&editreq_memo — MEMO req поля
+- &main.a.&object.&object_reqs.&editreq_file — FILE req поля (reqid)
 
-### ⬜ TODO — Часть 4: Bearer token dedup
-- Вынести извлечение токена в helper функцию (сейчас дублируется 6+ раз)
+### ✅ DONE — Часть 4: Bearer token dedup
+- extractToken(req, db) helper добавлен, 5 дублей убраны
 
 ## Ключевые находки из анализа DB
 

@@ -2148,59 +2148,196 @@ router.get('/:db/:page*', async (req, res, next) => {
         return res.json(response);
       }
 
-      // ── GET /:db/edit_obj/:id?JSON → {obj:{id,val,up,base}, req:[{id,val,ord,value}]}
+      // ── GET /:db/edit_obj/:id?JSON → PHP format
       if ((page === 'edit_obj' || page === 'edit') && subId) {
+        // 1. Object row + type name / base type
         const [objResult] = await pool.query(
-          `SELECT id, val, up, t AS base, ord FROM \`${db}\` WHERE id = ?`,
+          `SELECT o.id, o.val, o.up, o.t,
+                  t.val AS type_name,
+                  t.t   AS base_type_id
+           FROM \`${db}\` o
+           LEFT JOIN \`${db}\` t ON t.id = o.t
+           WHERE o.id = ?`,
           [subId]
         );
         if (objResult.length === 0) {
           return res.status(404).json({ error: 'Object not found' });
         }
-        const obj = objResult[0];
+        const obj        = objResult[0];
+        const objTypName  = obj.type_name   || String(obj.t);
+        const objBaseTypId = obj.base_type_id || obj.t;
 
-        // Requisite definitions (schema) for this type; val = attrs string (may contain :MULTI:)
-        const [reqDefs] = await pool.query(
-          `SELECT id, val, ord FROM \`${db}\` WHERE up = ? ORDER BY ord`,
-          [obj.base]
+        // 2. Req field definitions with PHP key rule (same as object handler)
+        const [reqDefsEd] = await pool.query(
+          `SELECT req.id AS req_id,
+                  req.t  AS req_t,
+                  req.val AS req_attrs_val,
+                  req.ord,
+                  type_def.val  AS type_name,
+                  type_def.up   AS type_up,
+                  type_def.t    AS type_def_t,
+                  COALESCE(type_def.t, req.t) AS resolved_base,
+                  CASE
+                    WHEN type_def.id IS NOT NULL
+                         AND type_def.id != type_def.t
+                         AND type_def.up <= 1
+                    THEN req.t
+                    ELSE req.id
+                  END AS req_key
+           FROM \`${db}\` req
+           LEFT JOIN \`${db}\` type_def ON type_def.id = req.t
+           WHERE req.up = ?
+           ORDER BY req.ord`,
+          [obj.t]
         );
 
-        // Stored requisite values — include row id for multiselect deletion tracking
-        const [reqVals] = await pool.query(
-          `SELECT id, t, val FROM \`${db}\` WHERE up = ? ORDER BY ord`,
-          [subId]
+        // 3. arr_type: first child for each user-type req
+        const arrTypeEd = {};
+        const userTypeReqsEd = reqDefsEd.filter(rd =>
+          rd.type_def_t !== null && rd.req_t !== rd.resolved_base
         );
-        // Group values by type: multiselect may have multiple rows with same t
-        const valsByType = {};
-        for (const rv of reqVals) {
-          if (!valsByType[rv.t]) valsByType[rv.t] = [];
-          valsByType[rv.t].push({ id: rv.id, val: rv.val });
+        if (userTypeReqsEd.length > 0) {
+          const utIds = userTypeReqsEd.map(rd => rd.req_t);
+          const ph    = utIds.map(() => '?').join(',');
+          const [arrRowsEd] = await pool.query(
+            `SELECT c.up AS parent_id, c.id AS child_id
+             FROM \`${db}\` c
+             WHERE c.up IN (${ph}) AND c.id != c.t
+             ORDER BY c.up, c.ord`,
+            utIds
+          );
+          const fcMap = {};
+          for (const r of arrRowsEd) {
+            if (fcMap[r.parent_id] === undefined) fcMap[r.parent_id] = r.child_id;
+          }
+          for (const rd of userTypeReqsEd) {
+            if (fcMap[rd.req_t] !== undefined) arrTypeEd[String(rd.req_key)] = fcMap[rd.req_t];
+          }
         }
 
-        // Legacy JS (smartq.js) expects: json.obj.typ (string), json.reqs[reqId].value
-        // For :MULTI: requisites also needs json.reqs[reqId].multiselect.{ref_val, id}
-        // (used by getRef/dropRef to delete individual multi-select items via _m_del)
-        return res.json({
-          obj: { id: obj.id, val: obj.val, up: obj.up, base: obj.base, typ: String(obj.base) },
-          reqs: Object.fromEntries(
-            reqDefs.map(rd => {
-              const isMulti = rd.val && rd.val.includes(':MULTI:');
-              const rows    = valsByType[rd.id] || [];
-              const reqEntry = {
-                value: isMulti
-                  ? rows.map(r => r.val).join(',')
-                  : (rows.length > 0 ? rows[0].val : ''),
-              };
-              if (isMulti && rows.length > 0) {
-                reqEntry.multiselect = {
-                  ref_val: rows.map(r => r.val),
-                  id:      rows.map(r => r.id),
-                };
+        // 4. Stored values for this object (t = req.id in data rows)
+        const [reqValsEd] = await pool.query(
+          `SELECT t, val FROM \`${db}\` WHERE up = ? ORDER BY ord`,
+          [subId]
+        );
+        const valsByDefId = {};
+        for (const rv of reqValsEd) {
+          if (!valsByDefId[rv.t]) valsByDefId[rv.t] = rv.val;
+        }
+
+        // 5. Build reqs + template arrays (only non-empty values go into reqs)
+        const reqsEd         = {};
+        const objReqsTyp     = [];
+        const objReqsTypName = [];
+        const memoTyp        = [];
+        const memoVal        = [];
+        const fileReqid      = [];
+
+        for (const rd of reqDefsEd) {
+          const k        = String(rd.req_key);
+          const baseTypId = rd.resolved_base || rd.req_t;
+          const baseName  = REV_BASE_TYPE[baseTypId] || 'SHORT';
+          const isArr     = arrTypeEd[k] !== undefined;
+          const storedVal = valsByDefId[rd.req_id] ?? '';
+
+          if (storedVal !== '') {
+            reqsEd[k] = {
+              type:     rd.type_name || String(rd.req_t),
+              order:    String(rd.ord ?? '0'),
+              value:    storedVal,
+              base:     baseName,
+              arr:      isArr ? 1 : 0,
+              arr_type: isArr ? (arrTypeEd[k] !== undefined ? Number(arrTypeEd[k]) : null) : null,
+            };
+          }
+
+          if (baseName === 'FILE') {
+            fileReqid.push(k);
+          } else {
+            objReqsTyp.push(k);
+            objReqsTypName.push(rd.type_name || String(rd.req_t));
+            if (baseName === 'MEMO') {
+              memoTyp.push(k);
+              memoVal.push(storedVal);
+            }
+          }
+        }
+
+        // 6. &main.myrolemenu
+        let myroleEd = { href: [], name: [] };
+        try {
+          if (token) {
+            const [uRowsEd] = await pool.query(
+              `SELECT r.id AS role_row_id
+               FROM \`${db}\` u
+               JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
+               LEFT JOIN \`${db}\` r ON r.up = u.id AND r.t = ${TYPE.ROLE}
+               WHERE u.t = ${TYPE.USER} LIMIT 1`,
+              [token]
+            );
+            if (uRowsEd.length > 0 && uRowsEd[0].role_row_id) {
+              const [gEd] = await pool.query(
+                `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.GRANT} ORDER BY ord`,
+                [uRowsEd[0].role_row_id]
+              );
+              if (gEd.length > 0) {
+                myroleEd = { href: gEd.map(g => g.val), name: gEd.map(g => g.val) };
               }
-              return [rd.id, reqEntry];
-            })
-          ),
-        });
+            }
+          }
+        } catch (_e) { /* ignore */ }
+
+        // 7. Build PHP-format response
+        const editResp = {
+          '&main.myrolemenu': myroleEd,
+          'obj': {
+            id:       String(obj.id),
+            val:      obj.val || '',
+            parent:   String(obj.up),
+            typ:      String(obj.t),
+            typ_name: objTypName,
+            base_typ: String(objBaseTypId),
+          },
+          '&main.a.&object': {
+            typ:      [String(obj.t), String(obj.t)],
+            up:       [String(obj.up)],
+            typ_name: [objTypName, objTypName],
+            val:      [obj.val || '', obj.val || ''],
+            id:       [String(obj.id)],
+            disabled: [''],
+          },
+          '&main.a.&object.&edit_req': {
+            type:                ['text'],
+            typ:                 [String(obj.t)],
+            '_parent_.val':      [obj.val || ''],
+            '_parent_.disabled': [''],
+          },
+        };
+
+        if (reqDefsEd.length > 0) {
+          if (Object.keys(reqsEd).length > 0) editResp['reqs'] = reqsEd;
+          if (objReqsTyp.length > 0) {
+            editResp['&main.a.&object.&object_reqs'] = {
+              typ:         objReqsTyp,
+              typ_name:    objReqsTypName,
+              enable_save: [''],
+            };
+          }
+          if (memoTyp.length > 0) {
+            editResp['&main.a.&object.&object_reqs.&editreq_memo'] = {
+              typ:      memoTyp,
+              disabled: memoTyp.map(() => ''),
+              val:      memoVal,
+            };
+          }
+          if (fileReqid.length > 0) {
+            editResp['&main.a.&object.&object_reqs.&editreq_file'] = {
+              reqid: fileReqid,
+            };
+          }
+        }
+
+        return res.json(editResp);
       }
     } catch (err) {
       logger.error('[Legacy page JSON] Error', { error: err.message, db, page });
