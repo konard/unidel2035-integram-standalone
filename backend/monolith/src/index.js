@@ -1005,7 +1005,7 @@ class IntegramBackend {
     this.app.use('/app', express.static(path.join(legacyStaticPath, 'app')));
 
     // Serve public directory (integram-client.html and other public assets)
-    const publicPath = path.resolve(__dirname, '../../../../public');
+    const publicPath = path.resolve(__dirname, '../../../public');
     this.app.use(express.static(publicPath));
 
     console.log('✅ [MONOLITH] Legacy static files served from', legacyStaticPath);
