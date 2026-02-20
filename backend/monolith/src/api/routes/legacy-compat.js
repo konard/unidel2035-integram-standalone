@@ -4789,10 +4789,12 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         }
       }
 
-      // ID-exact filter: dubRecDone sends FR_${colName}ID=objId to locate new record
+      // ID-exact filter: dubRecDone/createDone sends FR_${colName}ID=objId to locate new record
+      // smartq sends raw name (with spaces); filter inputs use underscore-replaced names
       for (const col of report.columns) {
         const nameKey = col.name.replace(/ /g, '_');
-        const idVal = params[`FR_${nameKey}ID`];
+        // Check both underscore-replaced and raw name (dubRecDone/createDone use raw DOM text)
+        const idVal = params[`FR_${nameKey}ID`] || params[`FR_${col.name}ID`];
         if (idVal && !filters._id) {
           filters._id = { eq: idVal };
           break;
