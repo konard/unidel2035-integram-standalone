@@ -1584,7 +1584,11 @@ router.get('/:db/:page*', async (req, res, next) => {
   const token = req.cookies[db];
 
   // If no token and not auth-related, redirect to login
+  // JSON API requests get a 401 instead of a redirect
   if (!token && page !== 'auth' && page !== 'login' && page !== 'register') {
+    if (isApiRequest(req)) {
+      return res.status(401).json({ error: 'Unauthorized', hint: `POST /${db}/auth?JSON with login+pwd to get token` });
+    }
     return res.redirect(`/${db}?uri=${encodeURIComponent(req.originalUrl)}`);
   }
 
