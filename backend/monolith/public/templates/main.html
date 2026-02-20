@@ -113,18 +113,17 @@
 <script src="/js/popper.min.js"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"
         integrity="sha384-B4gt1jrGC7Jh4AgTPSdUtOBvfO8shuf57BaghqFfPlYxofvL8/KUEfYiJOMMV+rV" crossorigin="anonymous"></script>
-<script src="/js/main.js"></script>
+<!-- Replace __DB__ BEFORE main.js captures the navlist template -->
 <script>
-localize();
-
-// Fix navbar brand link with actual db
 document.getElementById('brand').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
-
-// Replace __DB__ placeholders in navlist templates
 document.getElementById('navlist').innerHTML =
   document.getElementById('navlist').innerHTML.replace(/__DB__/g, encodeURIComponent(db));
 document.getElementById('extralist').innerHTML =
   document.getElementById('extralist').innerHTML.replace(/__DB__/g, encodeURIComponent(db));
+</script>
+<script src="/js/main.js"></script>
+<script>
+localize();
 
 // ── Load navigation menu ────────────────────────────────────────────────────
 function loadMenu() {
@@ -132,7 +131,7 @@ function loadMenu() {
     .then(function(r){ return r.json(); })
     .then(function(terms) {
       menu = terms.map(function(t){ return { href: t.id, name: t.name }; });
-      if (typeof buildMenu === 'function') buildMenu();
+      if (typeof resizeMutations === 'function') resizeMutations();
     })
     .catch(function(e){ console.error('loadMenu', e); });
 }

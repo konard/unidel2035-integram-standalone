@@ -67,7 +67,19 @@
     <img src="/i/lamp.png" width="30" loading="lazy"/>
   </a>
   <div class="collapse navbar-collapse" id="navbarSupportedContent">
-    <ul id="navbar-list" class="navbar-nav"></ul>
+    <ul id="navbar-list" class="navbar-nav">
+      <div id="navlist" class="hidden">
+        <li class="nav-item"><a class="nav-link" id="list:id::" href="/app/templates/object.html?db=__DB__&amp;type=:href:">:name:</a></li>
+      </div>
+      <div id="extralist" class="hidden">
+        <li id="dropdown-link" class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle expand-menu" role="button" data-toggle="dropdown">Еще</a>
+          <div class="dropdown-menu" id="dropdown-list">
+            <a class="dropdown-item" href="/app/templates/object.html?db=__DB__&amp;type=:href:">:name:</a>
+          </div>
+        </li>
+      </div>
+    </ul>
   </div>
   <div class="right-block" id="right_block">
     <div class="nav-item dropdown">
@@ -157,6 +169,14 @@
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"
         integrity="sha384-B4gt1jrGC7Jh4AgTPSdUtOBvfO8shuf57BaghqFfPlYxofvL8/KUEfYiJOMMV+rV" crossorigin="anonymous"></script>
 <script src="/js/select2.min.js"></script>
+<!-- Replace __DB__ BEFORE main.js captures the navlist template -->
+<script>
+document.getElementById('brand').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
+document.getElementById('navlist').innerHTML =
+  document.getElementById('navlist').innerHTML.replace(/__DB__/g, encodeURIComponent(db));
+document.getElementById('extralist').innerHTML =
+  document.getElementById('extralist').innerHTML.replace(/__DB__/g, encodeURIComponent(db));
+</script>
 <script src="/js/main.js"></script>
 <script>
 localize();
@@ -171,7 +191,6 @@ var PAGE_SIZE  = 50;
 var filterVisible = false;
 
 // ── Navbar / breadcrumb ───────────────────────────────────────────────────────
-document.getElementById('brand').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
 document.getElementById('bc-home').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
 document.getElementById('bc-home').textContent = db.charAt(0).toUpperCase() + db.slice(1);
 
@@ -180,7 +199,7 @@ fetch('/' + db + '/terms?JSON', { credentials: 'include' })
   .then(function(r){ return r.json(); })
   .then(function(terms) {
     menu = terms.map(function(t){ return { href: t.id, name: t.name }; });
-    if (typeof buildMenu === 'function') buildMenu();
+    if (typeof resizeMutations === 'function') resizeMutations();
   });
 
 // ── Align helper ─────────────────────────────────────────────────────────────
