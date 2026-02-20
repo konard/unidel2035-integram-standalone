@@ -27,9 +27,14 @@ Node.js ответы `GET /:db/object/:typeId?JSON` должны точно со
 - Fix root handler `GET /:db/?JSON`: myrolemenu теперь через role_id (не role_val)
 - Fix root handler: terms query использует `up <= 1` вместо `up = 0`
 
-### ⬜ TODO — Часть 2: проверить myrolemenu из DB
-- Проверить что GRANT rows в БД хранят hrefs в поле val
-- Если не так — возможно нужен другой запрос
+### ✅ DONE — Часть 2: myrolemenu из DB
+- GRANT (t=5) rows под ролью — это НЕ menu items
+- Menu items хранятся как: up=roleRowId, t=MenuTypeId(151), val=displayName
+- href берётся из дочерних rows: up=menuItemId, t=AddressTypeId(153), val=hrefURL
+- Логи подтвердили: _m_save t151=name; t153=href (req types для Menu type)
+- Исправлен buildMyrolemenu() helper: queries children of roleRow + their children
+- Обновлены все 3 места: root handler, object handler, edit_obj handler
+- Старый запрос `WHERE t = TYPE.GRANT(5)` был полностью неверным
 
 ### ✅ DONE — Часть 3: edit_obj endpoint
 - `GET /:db/edit_obj/:id?JSON` — PHP-формат реализован

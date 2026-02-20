@@ -71,6 +71,56 @@ function extractToken(req, db) {
 }
 
 /**
+ * Build &main.myrolemenu from role row's menu items.
+ * Menu items are non-type children of the role row (up=roleRowId, id!=t)
+ * that have their own non-type children with non-empty vals (the Address/href children).
+ * name = menu item's own val, href = first non-empty child val.
+ *
+ * @param {object} pool  - MySQL pool
+ * @param {string} db    - database name
+ * @param {number} roleRowId - ID of the user's role row
+ * @returns {object} {href: [...], name: [...]}
+ */
+async function buildMyrolemenu(pool, db, roleRowId) {
+  const empty = { href: [], name: [] };
+  if (!roleRowId) return empty;
+  try {
+    // Get menu items: non-type children of role row with non-empty val
+    const [menuItems] = await pool.query(
+      `SELECT m.id, m.val AS name
+       FROM \`${db}\` m
+       WHERE m.up = ? AND m.id != m.t AND m.val != ''
+       ORDER BY m.ord`,
+      [roleRowId]
+    );
+    if (menuItems.length === 0) return empty;
+    const mIds = menuItems.map(m => m.id);
+    const ph   = mIds.map(() => '?').join(',');
+    // Get Address children (first non-empty non-type child of each menu item)
+    const [addrRows] = await pool.query(
+      `SELECT a.up, a.val AS href
+       FROM \`${db}\` a
+       WHERE a.up IN (${ph}) AND a.id != a.t AND a.val != ''
+       ORDER BY a.up, a.ord`,
+      mIds
+    );
+    const hrefByParent = {};
+    for (const a of addrRows) {
+      if (hrefByParent[a.up] === undefined) hrefByParent[a.up] = a.href;
+    }
+    // Only include menu items that have an href child
+    const items = menuItems.filter(m => hrefByParent[m.id] !== undefined);
+    if (items.length === 0) return empty;
+    return {
+      href: items.map(m => hrefByParent[m.id]),
+      name: items.map(m => m.name),
+    };
+  } catch (_e) {
+    return empty;
+  }
+}
+
+/**
  * PHP-compatible mutation response helper.
  * – JSON API requests (?JSON / ?JSON_DATA etc.): return JSON
  * – Plain form POSTs: redirect to next_act URL (mirrors PHP index.php lines 9169-9180)
@@ -1607,19 +1657,10 @@ router.get('/:db', async (req, res, next) => {
     // ── GET /:db/?JSON → Main page API response
     // PHP returns: {user, role, _xsrf, &main.myrolemenu, etc.}
     if (isApiRequest(req)) {
-      // Get role menu items if user has a role (GRANT rows under role)
-      let menuHrefs = [];
-      let menuNames = [];
-      if (user.role_id) {
-        const [grantRows] = await pool.query(
-          `SELECT val, ord FROM \`${db}\`
-           WHERE up = ? AND t = ${TYPE.GRANT}
-           ORDER BY ord`,
-          [user.role_id]
-        );
-        menuHrefs = grantRows.map(g => g.val);
-        menuNames = grantRows.map(g => g.val);
-      }
+      // Get role menu items from role row's menu children
+      const roleMenu = await buildMyrolemenu(pool, db, user.role_id);
+      const menuHrefs = roleMenu.href;
+      const menuNames = roleMenu.name;
 
       // Get available terms/types for the user
       const [termsRows] = await pool.query(
@@ -1925,12 +1966,11 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
 
         // ── 6. &main.myrolemenu ─────────────────────────────────────────────
-        // Try to get role menu from DB via token; fall back to empty.
         let mainMyrolemenu = { href: [], name: [] };
-        try {
-          if (token) {
+        if (token) {
+          try {
             const [uRows] = await pool.query(
-              `SELECT u.id AS uid, r.id AS role_row_id, r.val AS role_name
+              `SELECT r.id AS role_row_id
                FROM \`${db}\` u
                JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
                LEFT JOIN \`${db}\` r ON r.up = u.id AND r.t = ${TYPE.ROLE}
@@ -1938,25 +1978,10 @@ router.get('/:db/:page*', async (req, res, next) => {
               [token]
             );
             if (uRows.length > 0) {
-              const roleRowId = uRows[0].role_row_id;
-              if (roleRowId) {
-                // Grants are GRANT-type (t=5) rows under the role row
-                const [grantRows] = await pool.query(
-                  `SELECT val, ord FROM \`${db}\`
-                   WHERE up = ? AND t = ${TYPE.GRANT}
-                   ORDER BY ord`,
-                  [roleRowId]
-                );
-                if (grantRows.length > 0) {
-                  mainMyrolemenu = {
-                    href: grantRows.map(g => g.val),
-                    name: grantRows.map(g => g.val),
-                  };
-                }
-              }
+              mainMyrolemenu = await buildMyrolemenu(pool, db, uRows[0].role_row_id);
             }
-          }
-        } catch (_e) { /* ignore myrolemenu errors */ }
+          } catch (_e) { /* ignore myrolemenu errors */ }
+        }
 
         // ── 7. Build response ───────────────────────────────────────────────
         const typeBaseTypeName = typeRow
@@ -2163,15 +2188,16 @@ router.get('/:db/:page*', async (req, res, next) => {
         if (objResult.length === 0) {
           return res.status(404).json({ error: 'Object not found' });
         }
-        const obj        = objResult[0];
-        const objTypName  = obj.type_name   || String(obj.t);
+        const obj         = objResult[0];
+        const objTypName   = obj.type_name    || String(obj.t);
         const objBaseTypId = obj.base_type_id || obj.t;
 
-        // 2. Req field definitions with PHP key rule (same as object handler)
+        // 2. Req field definitions for this type.
+        // Key rule for edit_obj: ALWAYS req.id (unlike object?JSON which uses PHP key rule).
+        // isArrType = same condition as PHP key rule: type_def.up<=1 AND type_def.id!=type_def.t
         const [reqDefsEd] = await pool.query(
           `SELECT req.id AS req_id,
                   req.t  AS req_t,
-                  req.val AS req_attrs_val,
                   req.ord,
                   type_def.val  AS type_name,
                   type_def.up   AS type_up,
@@ -2181,9 +2207,8 @@ router.get('/:db/:page*', async (req, res, next) => {
                     WHEN type_def.id IS NOT NULL
                          AND type_def.id != type_def.t
                          AND type_def.up <= 1
-                    THEN req.t
-                    ELSE req.id
-                  END AS req_key
+                    THEN 1 ELSE 0
+                  END AS is_arr_type
            FROM \`${db}\` req
            LEFT JOIN \`${db}\` type_def ON type_def.id = req.t
            WHERE req.up = ?
@@ -2191,82 +2216,88 @@ router.get('/:db/:page*', async (req, res, next) => {
           [obj.t]
         );
 
-        // 3. arr_type: first child for each user-type req
-        const arrTypeEd = {};
-        const userTypeReqsEd = reqDefsEd.filter(rd =>
-          rd.type_def_t !== null && rd.req_t !== rd.resolved_base
-        );
-        if (userTypeReqsEd.length > 0) {
-          const utIds = userTypeReqsEd.map(rd => rd.req_t);
-          const ph    = utIds.map(() => '?').join(',');
-          const [arrRowsEd] = await pool.query(
-            `SELECT c.up AS parent_id, c.id AS child_id
-             FROM \`${db}\` c
-             WHERE c.up IN (${ph}) AND c.id != c.t
-             ORDER BY c.up, c.ord`,
-            utIds
+        // 3. For arr-type reqs: count actual children WHERE up=subId AND t=req.t
+        const arrCountMap = {};
+        const arrTypeReqs = reqDefsEd.filter(rd => rd.is_arr_type);
+        if (arrTypeReqs.length > 0) {
+          const arrTs = arrTypeReqs.map(rd => rd.req_t);
+          const phArr = arrTs.map(() => '?').join(',');
+          const [arrCounts] = await pool.query(
+            `SELECT t, COUNT(*) AS cnt FROM \`${db}\`
+             WHERE up = ? AND t IN (${phArr})
+             GROUP BY t`,
+            [subId, ...arrTs]
           );
-          const fcMap = {};
-          for (const r of arrRowsEd) {
-            if (fcMap[r.parent_id] === undefined) fcMap[r.parent_id] = r.child_id;
-          }
-          for (const rd of userTypeReqsEd) {
-            if (fcMap[rd.req_t] !== undefined) arrTypeEd[String(rd.req_key)] = fcMap[rd.req_t];
+          for (const r of arrCounts) arrCountMap[r.t] = Number(r.cnt);
+        }
+
+        // 4. Stored values for base-type reqs (non-arr): t = req.id in data rows
+        const baseTypeReqs = reqDefsEd.filter(rd => !rd.is_arr_type);
+        const baseReqIds   = baseTypeReqs.map(rd => rd.req_id);
+        const valsByReqId  = {};
+        if (baseReqIds.length > 0) {
+          const phBase = baseReqIds.map(() => '?').join(',');
+          const [baseVals] = await pool.query(
+            `SELECT t, val FROM \`${db}\`
+             WHERE up = ? AND t IN (${phBase})
+             ORDER BY ord`,
+            [subId, ...baseReqIds]
+          );
+          for (const rv of baseVals) {
+            if (valsByReqId[rv.t] === undefined) valsByReqId[rv.t] = rv.val;
           }
         }
 
-        // 4. Stored values for this object (t = req.id in data rows)
-        const [reqValsEd] = await pool.query(
-          `SELECT t, val FROM \`${db}\` WHERE up = ? ORDER BY ord`,
-          [subId]
-        );
-        const valsByDefId = {};
-        for (const rv of reqValsEd) {
-          if (!valsByDefId[rv.t]) valsByDefId[rv.t] = rv.val;
-        }
-
-        // 5. Build reqs + template arrays (only non-empty values go into reqs)
-        const reqsEd         = {};
-        const objReqsTyp     = [];
+        // 5. Build reqs and template arrays
+        const reqsEd         = {};   // all non-FILE reqs
+        const objReqsTyp     = [];   // all non-FILE req.ids
         const objReqsTypName = [];
+        const arrTyp         = [];   // req.t for arr-type reqs
+        const arrParentId    = [];
+        const arrParentNum   = [];
         const memoTyp        = [];
         const memoVal        = [];
-        const fileReqid      = [];
+        const fileReqIds     = [];   // FILE req.ids
 
         for (const rd of reqDefsEd) {
-          const k        = String(rd.req_key);
+          const k        = String(rd.req_id);  // always req.id in edit_obj
           const baseTypId = rd.resolved_base || rd.req_t;
           const baseName  = REV_BASE_TYPE[baseTypId] || 'SHORT';
-          const isArr     = arrTypeEd[k] !== undefined;
-          const storedVal = valsByDefId[rd.req_id] ?? '';
-
-          if (storedVal !== '') {
-            reqsEd[k] = {
-              type:     rd.type_name || String(rd.req_t),
-              order:    String(rd.ord ?? '0'),
-              value:    storedVal,
-              base:     baseName,
-              arr:      isArr ? 1 : 0,
-              arr_type: isArr ? (arrTypeEd[k] !== undefined ? Number(arrTypeEd[k]) : null) : null,
-            };
-          }
+          const isArr     = !!rd.is_arr_type;
+          const arrCount  = isArr ? (arrCountMap[rd.req_t] || 0) : 0;
+          const storedVal = isArr ? '' : (valsByReqId[rd.req_id] ?? '');
 
           if (baseName === 'FILE') {
-            fileReqid.push(k);
-          } else {
-            objReqsTyp.push(k);
-            objReqsTypName.push(rd.type_name || String(rd.req_t));
-            if (baseName === 'MEMO') {
-              memoTyp.push(k);
-              memoVal.push(storedVal);
-            }
+            fileReqIds.push(k);
+            continue;  // FILE reqs not in reqs or object_reqs
+          }
+
+          reqsEd[k] = {
+            type:     rd.type_name || String(rd.req_t),
+            order:    String(rd.ord ?? '0'),
+            value:    storedVal,
+            base:     baseName,
+            arr:      arrCount,
+            arr_type: isArr ? String(rd.req_t) : null,
+          };
+
+          objReqsTyp.push(k);
+          objReqsTypName.push(rd.type_name || String(rd.req_t));
+
+          if (isArr) {
+            arrTyp.push(String(rd.req_t));
+            arrParentId.push(String(subId));
+            arrParentNum.push(String(arrCount));
+          } else if (baseName === 'MEMO') {
+            memoTyp.push(k);
+            memoVal.push(storedVal);
           }
         }
 
         // 6. &main.myrolemenu
         let myroleEd = { href: [], name: [] };
-        try {
-          if (token) {
+        if (token) {
+          try {
             const [uRowsEd] = await pool.query(
               `SELECT r.id AS role_row_id
                FROM \`${db}\` u
@@ -2275,17 +2306,11 @@ router.get('/:db/:page*', async (req, res, next) => {
                WHERE u.t = ${TYPE.USER} LIMIT 1`,
               [token]
             );
-            if (uRowsEd.length > 0 && uRowsEd[0].role_row_id) {
-              const [gEd] = await pool.query(
-                `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.GRANT} ORDER BY ord`,
-                [uRowsEd[0].role_row_id]
-              );
-              if (gEd.length > 0) {
-                myroleEd = { href: gEd.map(g => g.val), name: gEd.map(g => g.val) };
-              }
+            if (uRowsEd.length > 0) {
+              myroleEd = await buildMyrolemenu(pool, db, uRowsEd[0].role_row_id);
             }
-          }
-        } catch (_e) { /* ignore */ }
+          } catch (_e) { /* ignore */ }
+        }
 
         // 7. Build PHP-format response
         const editResp = {
@@ -2320,19 +2345,26 @@ router.get('/:db/:page*', async (req, res, next) => {
             editResp['&main.a.&object.&object_reqs'] = {
               typ:         objReqsTyp,
               typ_name:    objReqsTypName,
-              enable_save: [''],
+              enable_save: objReqsTyp.map(() => ''),
             };
-          }
-          if (memoTyp.length > 0) {
-            editResp['&main.a.&object.&object_reqs.&editreq_memo'] = {
-              typ:      memoTyp,
-              disabled: memoTyp.map(() => ''),
-              val:      memoVal,
-            };
-          }
-          if (fileReqid.length > 0) {
+            if (arrTyp.length > 0) {
+              editResp['&main.a.&object.&object_reqs.&editreq_array'] = {
+                typ:              arrTyp,
+                '_parent_.id':    arrParentId,
+                '_parent_.arr_num': arrParentNum,
+              };
+            }
+            if (memoTyp.length > 0) {
+              editResp['&main.a.&object.&object_reqs.&editreq_memo'] = {
+                typ:      memoTyp,
+                disabled: memoTyp.map(() => ''),
+                val:      memoVal,
+              };
+            }
+            // &editreq_file: one entry per &object_reqs position;
+            // use fileReqIds[i] ?? '' for each position
             editResp['&main.a.&object.&object_reqs.&editreq_file'] = {
-              reqid: fileReqid,
+              reqid: objReqsTyp.map((_, i) => fileReqIds[i] ?? ''),
             };
           }
         }
