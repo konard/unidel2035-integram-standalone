@@ -1,1287 +1,480 @@
-// Tests for Legacy PHP Backend Compatibility Layer
-// Issue #121: Enable legacy HTML site to work with new Node.js backend
+/**
+ * Legacy PHP Compatibility Layer — Vitest tests
+ *
+ * Covers the key routes in legacy-compat.js with a mocked MySQL pool.
+ * The pool mock is set up at the top of each describe block via mockQuery().
+ */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import express from 'express';
+import request from 'supertest';
 import crypto from 'crypto';
 
-// Mock mysql2/promise before importing the route
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+const PHP_SALT = 'DronedocSalt2025';
+const DB = 'testdb';
+
+function phpCompatibleHash(username, password, db) {
+  const saltedValue = PHP_SALT + username.toUpperCase() + db + password;
+  return crypto.createHash('sha1').update(saltedValue).digest('hex');
+}
+
+function generateXsrf(a, b, db) {
+  const saltedValue = PHP_SALT + a.toUpperCase() + db + b;
+  return crypto.createHash('sha1').update(saltedValue).digest('hex').substring(0, 22);
+}
+
+// ─── mock cookie-parser (not in package.json) ────────────────────────────────
+
+vi.mock('cookie-parser', () => ({
+  default: () => (req, _res, next) => {
+    // Parse Cookie header into req.cookies
+    req.cookies = {};
+    const raw = req.headers.cookie || '';
+    for (const pair of raw.split(';')) {
+      const [k, ...v] = pair.trim().split('=');
+      if (k) req.cookies[k.trim()] = v.join('=').trim();
+    }
+    next();
+  },
+}));
+
+// ─── mock mysql2/promise ─────────────────────────────────────────────────────
+
+// We intercept mysql.createPool so that when legacy-compat.js calls it, it
+// gets back our mock pool whose query function we can control per test.
+let mockQueryFn = vi.fn();
+
 vi.mock('mysql2/promise', () => ({
   default: {
     createPool: vi.fn(() => ({
-      query: vi.fn().mockResolvedValue([[]]),
+      query: (...args) => mockQueryFn(...args),
     })),
   },
 }));
 
-// Mock logger
+// ─── mock logger ─────────────────────────────────────────────────────────────
+
 vi.mock('../../../utils/logger.js', () => ({
   default: {
     info: vi.fn(),
-    warn: vi.fn(),
     error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
   },
 }));
 
-describe('Legacy Compatibility Layer', () => {
-  describe('Database name validation', () => {
-    it('should accept valid database names', () => {
-      const validNames = ['my', 'test', 'a2025', 'mydb123', 'MyDB'];
-      validNames.forEach(name => {
-        expect(/^[a-z]\w{1,14}$/i.test(name)).toBe(true);
-      });
-    });
+// ─── import router AFTER mocks ────────────────────────────────────────────────
 
-    it('should reject invalid database names', () => {
-      // Empty, starts with number, too short (less than 2), too long (more than 15), contains special chars
-      const invalidNames = ['', '1test', 'a', 'verylongdatabasename16chars', 'test-db', 'test.db'];
-      invalidNames.forEach(name => {
-        expect(/^[a-z]\w{1,14}$/i.test(name)).toBe(false);
-      });
-    });
+const { default: legacyRouter } = await import('../legacy-compat.js');
+
+// ─── app factory ─────────────────────────────────────────────────────────────
+
+function makeApp() {
+  const app = express();
+  app.use(express.json());
+  app.use(legacyRouter);
+  return app;
+}
+
+// ─── convenience: set up query sequence ──────────────────────────────────────
+
+function mockQuery(...responseSequence) {
+  let idx = 0;
+  mockQueryFn.mockImplementation(async () => {
+    const resp = responseSequence[idx] ?? responseSequence[responseSequence.length - 1];
+    idx++;
+    return resp;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:db/auth
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('POST /:db/auth', () => {
+  const app = makeApp();
+  const token = 'test-token-abc';
+  const xsrf  = generateXsrf(token, DB, DB);
+  const pwdHash = phpCompatibleHash('alice', 'Password1!', DB);
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns _xsrf, token, id on valid credentials', async () => {
+    // dbExists check
+    const showTablesResp  = [[{ Tables_in_integram: DB }]];
+    // user row
+    const userRow = { uid: 5, username: 'alice', password_hash: pwdHash, pwd_id: 6, token, token_id: 7, xsrf, xsrf_id: 8 };
+    const userResp = [[userRow]];
+    // token update / xsrf update (not strictly needed but may be called)
+    const updateResp = [{ affectedRows: 1 }];
+
+    mockQuery(showTablesResp, userResp, updateResp, updateResp);
+
+    const res = await request(app)
+      .post(`/${DB}/auth?JSON`)
+      .send({ login: 'alice', pwd: 'Password1!' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ _xsrf: expect.any(String), token: expect.any(String), id: 5 });
   });
 
-  describe('PHP-compatible password hashing', () => {
-    it('should generate consistent SHA1 hashes', () => {
-      // Test the hashing algorithm
-      const username = 'testuser';
-      const password = 'testpass123';
-      const salt = 'INTEGRAM_SALT';
+  it('returns error on wrong credentials', async () => {
+    const showTablesResp  = [[{ Tables_in_integram: DB }]];
+    const userRow = { uid: 5, username: 'alice', password_hash: 'badhash', pwd_id: 6, token, token_id: 7, xsrf, xsrf_id: 8 };
 
-      const saltedValue = username + salt + password;
-      const innerHash = crypto.createHash('sha1').update(saltedValue).digest('hex');
-      const expectedHash = crypto.createHash('sha1').update(innerHash).digest('hex');
+    mockQuery(showTablesResp, [[userRow]]);
 
-      // Hash should be 40 characters (SHA1 hex)
-      expect(expectedHash.length).toBe(40);
+    const res = await request(app)
+      .post(`/${DB}/auth?JSON`)
+      .send({ login: 'alice', pwd: 'wrongpw' });
 
-      // Same input should produce same output
-      const innerHash2 = crypto.createHash('sha1').update(saltedValue).digest('hex');
-      const hash2 = crypto.createHash('sha1').update(innerHash2).digest('hex');
-      expect(hash2).toBe(expectedHash);
-    });
+    expect(res.status).toBe(200);
+    expect(res.body[0].error).toMatch(/Wrong credentials/i);
   });
 
-  describe('Token generation', () => {
-    it('should generate MD5 tokens (32 chars)', () => {
-      const microtime = Date.now() / 1000;
-      const token = crypto.createHash('md5').update(microtime.toString() + Math.random().toString()).digest('hex');
+  it('returns error when user not found', async () => {
+    mockQuery([[{ Tables_in_integram: DB }]], [[]]);
 
-      expect(token.length).toBe(32);
-    });
+    const res = await request(app)
+      .post(`/${DB}/auth?JSON`)
+      .send({ login: 'nobody', pwd: 'x' });
 
-    it('should generate unique tokens', () => {
-      const tokens = new Set();
+    expect(res.status).toBe(200);
+    expect(res.body[0].error).toMatch(/Wrong credentials/i);
+  });
+});
 
-      for (let i = 0; i < 100; i++) {
-        const microtime = Date.now() / 1000;
-        const token = crypto.createHash('md5').update(microtime.toString() + Math.random().toString()).digest('hex');
-        tokens.add(token);
-      }
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /:db/xsrf
+// ─────────────────────────────────────────────────────────────────────────────
 
-      // All tokens should be unique
-      expect(tokens.size).toBe(100);
-    });
+describe('GET /:db/xsrf', () => {
+  const app = makeApp();
+  const token = 'my-session-token';
+  const xsrf  = generateXsrf(token, DB, DB);
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns xsrf for valid token cookie', async () => {
+    // The xsrf route query returns: uid, uname, xsrf_val, role_val
+    const userRow = { uid: 3, uname: 'alice', xsrf_val: xsrf, role_val: null };
+    mockQuery([[userRow]]);
+
+    const res = await request(app)
+      .get(`/${DB}/xsrf`)
+      .set('Cookie', `${DB}=${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ _xsrf: expect.any(String), token: expect.any(String) });
+    expect(res.body.id).toBe(3);
   });
 
-  describe('XSRF token generation', () => {
-    it('should generate XSRF tokens consistently', () => {
-      const token = 'abc123';
-      const db = 'mydb';
-      const xsrf = crypto.createHash('md5').update(token + db + 'XSRF').digest('hex');
-
-      expect(xsrf.length).toBe(32);
-
-      // Same input should produce same XSRF
-      const xsrf2 = crypto.createHash('md5').update(token + db + 'XSRF').digest('hex');
-      expect(xsrf2).toBe(xsrf);
-    });
+  it('redirects when no cookie (catch-all handles unauthenticated GETs)', async () => {
+    // Without a cookie, the /:db/:page* catch-all redirects to login first
+    const res = await request(app).get(`/${DB}/xsrf`);
+    expect([200, 302]).toContain(res.status);
   });
+});
 
-  describe('TYPE constants', () => {
-    it('should have correct PHP type constants', () => {
-      const TYPE = {
-        USER: 18,
-        PASSWORD: 20,
-        PHONE: 30,
-        XSRF: 40,
-        EMAIL: 41,
-        ROLE: 42,
-        ACTIVITY: 124,
-        TOKEN: 125,
-        SECRET: 130,
-        DATABASE: 271,
-      };
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /:db/terms
+// ─────────────────────────────────────────────────────────────────────────────
 
-      expect(TYPE.USER).toBe(18);
-      expect(TYPE.PASSWORD).toBe(20);
-      expect(TYPE.TOKEN).toBe(125);
-      expect(TYPE.XSRF).toBe(40);
-    });
+describe('GET /:db/terms', () => {
+  const app = makeApp();
+  const token = 'terms-token';
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns type list when authenticated', async () => {
+    // token validation in terms route
+    const userRow = { id: 1, username: 'admin', role_id: null };
+    const termsRows = [
+      { id: 100, val: 'Client', t: 8, reqs_t: null },
+      { id: 101, val: 'Product', t: 8, reqs_t: null },
+    ];
+    mockQuery(
+      [[userRow]],  // token → user lookup
+      [[]], // getGrants inner query
+      [termsRows],  // terms query
+      // grant1Level — one per visible type
+      [[{ id: 1 }]], [[{ id: 1 }]],
+    );
+
+    const res = await request(app)
+      .get(`/${DB}/terms`)
+      .set('Cookie', `${DB}=${token}`);
+
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
   });
+});
 
-  describe('Legacy API actions', () => {
-    it('should handle DML actions', () => {
-      const dmlActions = ['_m_new', '_m_save', '_m_del', '_m_set', '_m_move'];
-      dmlActions.forEach(action => {
-        expect(action.startsWith('_m_')).toBe(true);
-      });
-    });
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /:db/metadata/:typeId
+// ─────────────────────────────────────────────────────────────────────────────
 
-    it('should handle DDL actions', () => {
-      const ddlActions = ['_d_new', '_d_save', '_d_del', '_d_req', '_d_alias', '_d_null', '_d_multi'];
-      ddlActions.forEach(action => {
-        expect(action.startsWith('_d_')).toBe(true);
-      });
-    });
+describe('GET /:db/metadata/:typeId', () => {
+  const app = makeApp();
+  const token = 'meta-token';
 
-    it('should handle query actions', () => {
-      const queryActions = ['_dict', '_list', '_d_main', 'terms', 'xsrf', '_ref_reqs', '_connect'];
-      expect(queryActions.length).toBe(7);
-    });
-  });
+  beforeEach(() => { vi.clearAllMocks(); });
 
-  describe('Page routing', () => {
-    it('should map page names to templates', () => {
-      const pageMap = {
-        'dict': 'templates/dict.html',
-        'object': 'templates/object.html',
-        'edit': 'templates/edit_obj.html',
-        'report': 'templates/report.html',
-        'types': 'templates/edit_types.html',
-        'form': 'templates/form.html',
-        'upload': 'templates/upload.html',
-        'sql': 'templates/sql.html',
-        'admin': 'templates/dir_admin.html',
-        'info': 'templates/info.html',
-        'quiz': 'templates/quiz.html',
-      };
+  it('returns metadata with reqs array', async () => {
+    // Fields must match the SQL aliases: id, up, t, uniq (=ord), val,
+    //   req_id, req_type, req_attrs, req_ord, base_typ, req_val, ref_id, arr_id
+    const metaRows = [
+      {
+        id: 200, up: 0, t: 8, uniq: 1, val: 'Employee',
+        req_id: 201, req_type: 8, req_attrs: null, req_ord: 1,
+        base_typ: 8, req_val: 'Name', arr_id: null, ref_id: null,
+      },
+    ];
+    mockQuery([metaRows]);
 
-      expect(Object.keys(pageMap).length).toBe(11);
-      expect(pageMap['dict']).toBe('templates/dict.html');
-      expect(pageMap['object']).toBe('templates/object.html');
-    });
-  });
+    const res = await request(app)
+      .get(`/${DB}/metadata/200`)
+      .set('Cookie', `${DB}=${token}`);
 
-  describe('JSON mode detection', () => {
-    it('should detect JSON mode from query params', () => {
-      const jsonParams = ['JSON', 'json', 'JSON_KV', 'JSON_DATA', 'JSON_CR', 'JSON_HR'];
-
-      jsonParams.forEach(param => {
-        const isJSON = param === 'JSON' || param === 'json' || param === 'JSON_KV' || param === 'JSON_DATA' || param === 'JSON_CR' || param === 'JSON_HR';
-        expect(isJSON).toBe(true);
-      });
-    });
-  });
-
-  describe('Phase 1 MVP - Attribute extraction', () => {
-    it('should extract type attributes from request body', () => {
-      // Simulates t{id}=value format from PHP forms
-      const body = {
-        val: 'Test Object',
-        t: '18',
-        t20: 'password123',
-        t30: '1234567890',
-        t41: 'test@example.com',
-        other: 'ignored',
-      };
-
-      const attributes = {};
-      for (const [key, value] of Object.entries(body)) {
-        if (key.startsWith('t') && /^t\d+$/.test(key)) {
-          const typeId = parseInt(key.substring(1), 10);
-          attributes[typeId] = value;
-        }
-      }
-
-      expect(Object.keys(attributes).length).toBe(3);
-      expect(attributes[20]).toBe('password123');
-      expect(attributes[30]).toBe('1234567890');
-      expect(attributes[41]).toBe('test@example.com');
-    });
-
-    it('should handle empty attributes', () => {
-      const body = { val: 'Test', t: '18' };
-
-      const attributes = {};
-      for (const [key, value] of Object.entries(body)) {
-        if (key.startsWith('t') && /^t\d+$/.test(key)) {
-          const typeId = parseInt(key.substring(1), 10);
-          attributes[typeId] = value;
-        }
-      }
-
-      expect(Object.keys(attributes).length).toBe(0);
-    });
-  });
-
-  describe('Phase 1 MVP - Requisite modifier parsing', () => {
-    it('should parse :ALIAS=xxx: modifier', () => {
-      let name = ':ALIAS=email:Электронная почта';
-      let alias = null;
-
-      const aliasMatch = name.match(/:ALIAS=(.*?):/);
-      if (aliasMatch) {
-        alias = aliasMatch[1];
-        name = name.replace(aliasMatch[0], '');
-      }
-
-      expect(alias).toBe('email');
-      expect(name).toBe('Электронная почта');
-    });
-
-    it('should parse :!NULL: modifier', () => {
-      let name = ':!NULL:Обязательное поле';
-      let required = false;
-
-      if (name.includes(':!NULL:')) {
-        required = true;
-        name = name.replace(':!NULL:', '');
-      }
-
-      expect(required).toBe(true);
-      expect(name).toBe('Обязательное поле');
-    });
-
-    it('should parse :MULTI: modifier', () => {
-      let name = ':MULTI:Множественный выбор';
-      let multi = false;
-
-      if (name.includes(':MULTI:')) {
-        multi = true;
-        name = name.replace(':MULTI:', '');
-      }
-
-      expect(multi).toBe(true);
-      expect(name).toBe('Множественный выбор');
-    });
-
-    it('should parse combined modifiers', () => {
-      let name = ':ALIAS=roles::!NULL::MULTI:Роли пользователя';
-      let alias = null;
-      let required = false;
-      let multi = false;
-
-      const aliasMatch = name.match(/:ALIAS=(.*?):/);
-      if (aliasMatch) {
-        alias = aliasMatch[1];
-        name = name.replace(aliasMatch[0], '');
-      }
-
-      if (name.includes(':!NULL:')) {
-        required = true;
-        name = name.replace(':!NULL:', '');
-      }
-
-      if (name.includes(':MULTI:')) {
-        multi = true;
-        name = name.replace(':MULTI:', '');
-      }
-
-      expect(alias).toBe('roles');
-      expect(required).toBe(true);
-      expect(multi).toBe(true);
-      expect(name).toBe('Роли пользователя');
-    });
-  });
-
-  describe('Phase 1 MVP - Response format', () => {
-    it('should format _m_new response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 1001,
-        val: 'Test User',
-        up: 1,
-        t: 18,
-        ord: 1,
-      };
-
-      expect(response.status).toBe('Ok');
-      expect(response.id).toBe(1001);
-      expect(response.val).toBe('Test User');
-      expect(response.t).toBe(18);
-    });
-
-    it('should format _list response correctly', () => {
-      const response = {
-        data: [
-          { id: 1, val: 'Item 1', up: 0, t: 18, ord: 1 },
-          { id: 2, val: 'Item 2', up: 0, t: 18, ord: 2 },
-        ],
-        total: 100,
-        limit: 50,
-        offset: 0,
-      };
-
-      expect(Array.isArray(response.data)).toBe(true);
-      expect(response.data.length).toBe(2);
-      expect(response.total).toBe(100);
-      expect(response.limit).toBe(50);
-    });
-
-    it('should format _d_main response correctly', () => {
-      const response = {
-        id: 18,
-        name: 'Пользователь',
-        baseType: 8,
-        order: 17,
-        requisites: [
-          { id: 20, name: 'Пароль', alias: 'pwd', type: 6, order: 1, required: true, multi: false },
-          { id: 30, name: 'Телефон', alias: 'phone', type: 8, order: 2, required: false, multi: false },
-        ],
-      };
-
-      expect(response.id).toBe(18);
-      expect(response.name).toBe('Пользователь');
-      expect(Array.isArray(response.requisites)).toBe(true);
-      expect(response.requisites[0].required).toBe(true);
-    });
-
-    it('should format _ref_reqs response as key-value pairs', () => {
-      const response = {
-        1: 'Admin',
-        2: 'User',
-        3: 'Guest',
-      };
-
-      expect(response[1]).toBe('Admin');
-      expect(response[2]).toBe('User');
-      expect(Object.keys(response).length).toBe(3);
-    });
-  });
-
-  describe('Phase 2 - DDL Actions modifier building', () => {
-    // Helper function to build modifier string
-    function buildModifiers(name, alias, required, multi) {
-      let val = '';
-      if (alias) val += `:ALIAS=${alias}:`;
-      if (required) val += ':!NULL:';
-      if (multi) val += ':MULTI:';
-      val += name;
-      return val;
+    expect(res.status).toBe(200);
+    // metadata route returns an object (not array)
+    if (Array.isArray(res.body)) {
+      expect(res.body[0]).not.toHaveProperty('error');
+    } else {
+      expect(res.body).toHaveProperty('id');
     }
+  });
+});
 
-    // Helper function to parse modifiers
-    function parseModifiers(val) {
-      let name = val || '';
-      let alias = null;
-      let required = false;
-      let multi = false;
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:db/_m_new/:up
+// ─────────────────────────────────────────────────────────────────────────────
 
-      const aliasMatch = name.match(/:ALIAS=(.*?):/);
-      if (aliasMatch) {
-        alias = aliasMatch[1];
-        name = name.replace(aliasMatch[0], '');
-      }
+describe('POST /:db/_m_new/:up', () => {
+  const app = makeApp();
 
-      if (name.includes(':!NULL:')) {
-        required = true;
-        name = name.replace(':!NULL:', '');
-      }
+  beforeEach(() => { vi.clearAllMocks(); });
 
-      if (name.includes(':MULTI:')) {
-        multi = true;
-        name = name.replace(':MULTI:', '');
-      }
+  it('creates object and returns api_dump response', async () => {
+    // getNextOrder query
+    const ordResp = [[{ max_ord: 2 }]];
+    // insertRow query
+    const insertResp = [{ insertId: 42 }];
+    // check if type has requisites
+    const reqCheck = [[]];
 
-      return { name: name.trim(), alias, required, multi };
-    }
+    mockQuery(ordResp, insertResp, reqCheck);
 
-    it('should build modifier string correctly', () => {
-      // Test building with all modifiers
-      const val = buildModifiers('Email', 'email', true, false);
-      expect(val).toBe(':ALIAS=email::!NULL:Email');
+    const res = await request(app)
+      .post(`/${DB}/_m_new/1`)
+      .send({ t: '100', val: 'New Object' });
 
-      // Test with only alias
-      const val2 = buildModifiers('Phone', 'phone', false, false);
-      expect(val2).toBe(':ALIAS=phone:Phone');
-
-      // Test with only required
-      const val3 = buildModifiers('Name', null, true, false);
-      expect(val3).toBe(':!NULL:Name');
-
-      // Test with only multi
-      const val4 = buildModifiers('Roles', null, false, true);
-      expect(val4).toBe(':MULTI:Roles');
-
-      // Test with no modifiers
-      const val5 = buildModifiers('Description', null, false, false);
-      expect(val5).toBe('Description');
-
-      // Test with all modifiers
-      const val6 = buildModifiers('Tags', 'tags', true, true);
-      expect(val6).toBe(':ALIAS=tags::!NULL::MULTI:Tags');
-    });
-
-    it('should parse modifiers correctly', () => {
-      // Test parsing with all modifiers
-      const parsed1 = parseModifiers(':ALIAS=email::!NULL:Email');
-      expect(parsed1.alias).toBe('email');
-      expect(parsed1.required).toBe(true);
-      expect(parsed1.multi).toBe(false);
-      expect(parsed1.name).toBe('Email');
-
-      // Test round-trip
-      const original = ':ALIAS=tags::!NULL::MULTI:User Tags';
-      const parsed = parseModifiers(original);
-      const rebuilt = buildModifiers(parsed.name, parsed.alias, parsed.required, parsed.multi);
-      const reparsed = parseModifiers(rebuilt);
-
-      expect(reparsed.name).toBe(parsed.name);
-      expect(reparsed.alias).toBe(parsed.alias);
-      expect(reparsed.required).toBe(parsed.required);
-      expect(reparsed.multi).toBe(parsed.multi);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 42,
+      obj: 42,
+      next_act: expect.any(String),
+      args: expect.any(String),
     });
   });
 
-  describe('Phase 2 - DDL response formats', () => {
-    it('should format _d_new response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 500,
-        val: 'NewType',
-        t: 8,
-        up: 0,
-        ord: 10,
-      };
+  it('returns error when type ID is missing', async () => {
+    const res = await request(app)
+      .post(`/${DB}/_m_new/1`)
+      .send({ val: 'No type' });
 
-      expect(response.status).toBe('Ok');
-      expect(response.id).toBe(500);
-      expect(response.val).toBe('NewType');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toHaveProperty('error');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:db/_m_save/:id
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('POST /:db/_m_save/:id', () => {
+  const app = makeApp();
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('saves object and returns api_dump response', async () => {
+    // updateRowValue
+    const updateResp = [{ affectedRows: 1 }];
+    // getRequisiteByType for each attribute
+    const existingReq = [[{ id: 301, val: 'old' }]];
+    // updateRowValue for requisite
+    const updateReq = [{ affectedRows: 1 }];
+    // final SELECT t, up
+    const objInfo = [[{ t: 100, up: 1 }]];
+
+    mockQuery(updateResp, existingReq, updateReq, objInfo);
+
+    const res = await request(app)
+      .post(`/${DB}/_m_save/300`)
+      .send({ val: 'Updated', t201: 'reqval' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 300,
+      obj: 100,
+      next_act: 'object',
+      warnings: '',
     });
+  });
+});
 
-    it('should format _d_req response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 501,
-        val: ':ALIAS=field1::!NULL:Field Name',
-        t: 8,
-        up: 500,
-        ord: 1,
-      };
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:db/_m_del/:id
+// ─────────────────────────────────────────────────────────────────────────────
 
-      expect(response.status).toBe('Ok');
-      expect(response.id).toBe(501);
-      expect(response.up).toBe(500);
+describe('POST /:db/_m_del/:id', () => {
+  const app = makeApp();
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('deletes object and returns api_dump response', async () => {
+    // Fetch type/up before delete
+    const objInfo = [[{ t: 100, up: 5 }]];
+    // deleteRow
+    const deleteResp = [{ affectedRows: 1 }];
+
+    mockQuery(objInfo, deleteResp);
+
+    const res = await request(app)
+      .post(`/${DB}/_m_del/300`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 100,      // type ID in PHP format
+      obj: 300,     // deleted ID
+      next_act: 'object',
+      warnings: '',
     });
+  });
+});
 
-    it('should format _d_alias response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 501,
-        alias: 'new_alias',
-      };
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:db/_m_id/:id
+// ─────────────────────────────────────────────────────────────────────────────
 
-      expect(response.alias).toBe('new_alias');
-    });
+describe('POST /:db/_m_id/:id', () => {
+  const app = makeApp();
 
-    it('should format _d_null response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 501,
-        required: true,
-      };
+  beforeEach(() => { vi.clearAllMocks(); });
 
-      expect(response.required).toBe(true);
-    });
+  it('renames ID and returns api_dump response', async () => {
+    // SELECT old object exists + get up
+    const oldObj = [[{ id: 100, up: 5 }]];
+    // SELECT new id not in use
+    const noExisting = [[]];
+    // 3 UPDATEs
+    const upd = [{ affectedRows: 1 }];
 
-    it('should format _d_multi response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 501,
-        multi: true,
-      };
+    mockQuery(oldObj, noExisting, upd, upd, upd);
 
-      expect(response.multi).toBe(true);
-    });
+    const res = await request(app)
+      .post(`/${DB}/_m_id/100`)
+      .send({ new_id: '999' });
 
-    it('should format _d_attrs response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 501,
-        name: 'Updated Name',
-        alias: 'updated_alias',
-        required: true,
-        multi: false,
-      };
-
-      expect(response.name).toBe('Updated Name');
-      expect(response.alias).toBe('updated_alias');
-      expect(response.required).toBe(true);
-      expect(response.multi).toBe(false);
-    });
-
-    it('should format _d_ord response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 501,
-        ord: 5,
-      };
-
-      expect(response.ord).toBe(5);
-    });
-
-    it('should format _d_ref response correctly', () => {
-      const response = {
-        status: 'Ok',
-        id: 502,
-        val: 'User Reference',
-        t: 18, // Referenced type ID (User)
-        up: 500,
-        ord: 2,
-      };
-
-      expect(response.t).toBe(18);
-      expect(response.val).toBe('User Reference');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 999,
+      obj: 999,
+      next_act: 'object',
+      warnings: '',
     });
   });
 
-  describe('Phase 2 - DDL actions list', () => {
-    it('should define all Phase 2 DDL actions', () => {
-      const phase2Actions = [
-        '_d_new',      // Create type
-        '_d_save',     // Save type
-        '_d_del',      // Delete type
-        '_d_req',      // Add requisite
-        '_d_alias',    // Set alias
-        '_d_null',     // Toggle NOT NULL
-        '_d_multi',    // Toggle MULTI
-        '_d_attrs',    // Set all modifiers
-        '_d_up',       // Move up
-        '_d_ord',      // Set order
-        '_d_del_req',  // Delete requisite
-        '_d_ref',      // Create reference
-      ];
+  it('returns error when new_id is already in use', async () => {
+    const oldObj = [[{ id: 100, up: 5 }]];
+    const existingNew = [[{ id: 999 }]];
 
-      expect(phase2Actions.length).toBe(12);
-      phase2Actions.forEach(action => {
-        expect(action.startsWith('_d_')).toBe(true);
-      });
-    });
+    mockQuery(oldObj, existingNew);
 
-    it('should define Phase 2 additional DML actions', () => {
-      const additionalDmlActions = [
-        '_m_up',   // Move object up
-        '_m_ord',  // Set object order
-        '_m_id',   // Change ID (restricted)
-      ];
+    const res = await request(app)
+      .post(`/${DB}/_m_id/100`)
+      .send({ new_id: '999' });
 
-      expect(additionalDmlActions.length).toBe(3);
-      additionalDmlActions.forEach(action => {
-        expect(action.startsWith('_m_')).toBe(true);
-      });
-    });
+    expect(res.status).toBe(200);
+    expect(res.body[0].error).toMatch(/already in use/i);
   });
 
-  describe('Phase 3 - Metadata and Query Actions', () => {
-    it('should define obj_meta response format', () => {
-      const response = {
-        id: '1001',
-        up: '1',
-        type: '18',
-        val: 'TestUser',
-        reqs: {
-          '1': {
-            id: '2001',
-            val: 'Пароль',
-            type: '6',
-            attrs: ':!NULL:'
-          },
-          '2': {
-            id: '2002',
-            val: 'Email',
-            type: '8',
-            attrs: ':ALIAS=email:'
-          }
-        }
-      };
+  it('returns error when new_id is missing', async () => {
+    const res = await request(app)
+      .post(`/${DB}/_m_id/100`)
+      .send({});
 
-      expect(response.id).toBe('1001');
-      expect(response.reqs['1'].val).toBe('Пароль');
-      expect(Object.keys(response.reqs).length).toBe(2);
-    });
+    expect(res.status).toBe(200);
+    expect(res.body[0].error).toMatch(/positive integer/i);
+  });
+});
 
-    it('should define metadata response format for single type', () => {
-      const response = {
-        id: '18',
-        up: '0',
-        type: '8',
-        val: 'Пользователь',
-        unique: '10',
-        reqs: [
-          { num: 1, id: '20', val: 'Пароль', orig: '6', type: '6' },
-          { num: 2, id: '30', val: 'Телефон', orig: '8', type: '8' }
-        ]
-      };
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:db/_d_new
+// ─────────────────────────────────────────────────────────────────────────────
 
-      expect(response.id).toBe('18');
-      expect(Array.isArray(response.reqs)).toBe(true);
-      expect(response.reqs[0].num).toBe(1);
-    });
+describe('POST /:db/_d_new', () => {
+  const app = makeApp();
 
-    it('should define metadata response format for all types', () => {
-      const response = [
-        { id: '18', up: '0', type: '8', val: 'Пользователь', unique: '10', reqs: [] },
-        { id: '42', up: '0', type: '8', val: 'Роль', unique: '11', reqs: [] },
-        { id: '125', up: '0', type: '8', val: 'Токен', unique: '12', reqs: [] }
-      ];
+  beforeEach(() => { vi.clearAllMocks(); });
 
-      expect(Array.isArray(response)).toBe(true);
-      expect(response.length).toBe(3);
-      expect(response[0].val).toBe('Пользователь');
+  it('creates type and returns api_dump response', async () => {
+    // getNextOrder for new type (up=0)
+    const ordResp = [[{ max_ord: 3 }]];
+    // insertRow for type
+    const insertResp = [{ insertId: 200 }];
+
+    mockQuery(ordResp, insertResp);
+
+    const res = await request(app)
+      .post(`/${DB}/_d_new`)
+      .send({ val: 'NewType', t: '8' });
+
+    expect(res.status).toBe(200);
+    // _d_new returns {id, obj, next_act:"edit_types", ...}
+    expect(res.body).toMatchObject({
+      next_act: 'edit_types',
     });
   });
+});
 
-  describe('Phase 3 - JWT and Authentication', () => {
-    it('should define jwt response format', () => {
-      const response = {
-        success: true,
-        valid: true,
-        user: {
-          id: 1001,
-          login: 'testuser',
-          role: 'admin',
-          role_id: 42
-        },
-        xsrf: 'abc123',
-        token: 'xyz789'
-      };
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /:db/backup
+// ─────────────────────────────────────────────────────────────────────────────
 
-      expect(response.success).toBe(true);
-      expect(response.user.id).toBe(1001);
-      expect(response.xsrf).toBe('abc123');
-    });
+describe('GET /:db/backup', () => {
+  const app = makeApp();
 
-    it('should define confirm response format', () => {
-      const response = {
-        success: true,
-        message: 'Password updated successfully'
-      };
+  beforeEach(() => { vi.clearAllMocks(); });
 
-      expect(response.success).toBe(true);
-      expect(response.message).toBe('Password updated successfully');
-    });
+  it('returns 200 with zip content-type for admin user', async () => {
+    const token = 'admin-token';
+    // token lookup returns admin user
+    const userRow = { id: 1, username: 'admin', role_id: null };
+    const tokenResp = [[userRow]];
+    // grants query
+    const grantsResp = [[]];
+    // DB rows query (batched — no rows)
+    const rowsResp = [[]];
+
+    mockQuery(tokenResp, grantsResp, rowsResp);
+
+    const res = await request(app)
+      .get(`/${DB}/backup`)
+      .set('Cookie', `${DB}=${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/zip');
+    expect(res.headers['content-disposition']).toContain('.dmp.zip');
   });
 
-  describe('Phase 3 - File Management', () => {
-    it('should define upload response format', () => {
-      const response = {
-        success: true,
-        message: 'File uploaded successfully',
-        path: '/download/mydb/'
-      };
-
-      expect(response.success).toBe(true);
-      expect(response.path).toContain('download');
-    });
-
-    it('should define dir_admin response format', () => {
-      const response = {
-        success: true,
-        folder: 'download',
-        path: '/path/to/files',
-        add_path: '',
-        directories: [
-          { name: 'folder1', type: 'directory' },
-          { name: 'folder2', type: 'directory' }
-        ],
-        files: [
-          { name: 'file1.txt', type: 'file', size: 1024, modified: '2024-01-01T00:00:00.000Z' },
-          { name: 'file2.pdf', type: 'file', size: 2048, modified: '2024-01-02T00:00:00.000Z' }
-        ]
-      };
-
-      expect(response.success).toBe(true);
-      expect(Array.isArray(response.directories)).toBe(true);
-      expect(Array.isArray(response.files)).toBe(true);
-      expect(response.files[0].size).toBe(1024);
-    });
-
-    it('should validate filename to prevent directory traversal', () => {
-      const validFilenames = ['file.txt', 'document.pdf', 'image.png'];
-      const invalidFilenames = ['../file.txt', 'folder/file.txt', '..\\file.txt'];
-
-      validFilenames.forEach(filename => {
-        expect(filename.includes('..') || filename.includes('/')).toBe(false);
-      });
-
-      invalidFilenames.forEach(filename => {
-        expect(filename.includes('..') || filename.includes('/')).toBe(true);
-      });
-    });
-  });
-
-  describe('Phase 3 - Reports and Export', () => {
-    it('should define report list response format', () => {
-      const response = {
-        success: true,
-        reports: [
-          { id: 100, name: 'Sales Report', order: 1 },
-          { id: 101, name: 'User Activity', order: 2 }
-        ]
-      };
-
-      expect(response.success).toBe(true);
-      expect(Array.isArray(response.reports)).toBe(true);
-      expect(response.reports.length).toBe(2);
-    });
-
-    it('should define report detail response format', () => {
-      const response = {
-        success: true,
-        report: {
-          id: 100,
-          name: 'Sales Report',
-          columns: [
-            { id: 201, name: 'Date', type: 9, order: 1 },
-            { id: 202, name: 'Amount', type: 13, order: 2 },
-            { id: 203, name: 'Customer', type: 18, order: 3 }
-          ]
-        }
-      };
-
-      expect(response.report.id).toBe(100);
-      expect(Array.isArray(response.report.columns)).toBe(true);
-      expect(response.report.columns[0].name).toBe('Date');
-    });
-
-    it('should format CSV export correctly', () => {
-      const rows = [
-        { id: 1, val: 'Item 1', up: 0, ord: 1 },
-        { id: 2, val: 'Item "with quotes"', up: 0, ord: 2 }
-      ];
-
-      const csvHeader = 'id,value,parent,order\n';
-      const csvRows = rows.map(r => `${r.id},"${(r.val || '').replace(/"/g, '""')}",${r.up},${r.ord}`).join('\n');
-      const csv = csvHeader + csvRows;
-
-      expect(csv).toContain('id,value,parent,order');
-      expect(csv).toContain('"Item ""with quotes"""'); // Properly escaped quotes
-    });
-  });
-
-  describe('Phase 3 - Database Creation', () => {
-    it('should validate new database name', () => {
-      const USER_DB_MASK = /^[a-z][a-z0-9]{2,14}$/i;
-
-      const validNames = ['mydb', 'test123', 'ABC', 'NewDatabase'];
-      const invalidNames = ['12db', 'ab', 'verylongdatabasenameover15', 'test-db', 'test.db'];
-
-      validNames.forEach(name => {
-        expect(USER_DB_MASK.test(name)).toBe(true);
-      });
-
-      invalidNames.forEach(name => {
-        expect(USER_DB_MASK.test(name)).toBe(false);
-      });
-    });
-
-    it('should define reserved database names', () => {
-      const reservedNames = ['my', 'admin', 'root', 'system', 'test', 'demo', 'api', 'health'];
-
-      expect(reservedNames.includes('my')).toBe(true);
-      expect(reservedNames.includes('admin')).toBe(true);
-      expect(reservedNames.length).toBe(8);
-    });
-
-    it('should define _new_db response format', () => {
-      const response = {
-        status: 'Ok',
-        id: 'newdatabase',
-        database: 'newdatabase',
-        template: 'empty',
-        message: 'Database "newdatabase" created successfully'
-      };
-
-      expect(response.status).toBe('Ok');
-      expect(response.database).toBe('newdatabase');
-    });
-  });
-
-  describe('Phase 3 actions list', () => {
-    it('should define all Phase 3 actions', () => {
-      const phase3Actions = [
-        // Metadata
-        'obj_meta',
-        'metadata',
-        // Auth
-        'jwt',
-        'confirm',
-        'login',
-        // Database
-        '_new_db',
-        // Files
-        'upload',
-        'download',
-        'dir_admin',
-        // Reports
-        'report',
-        'export'
-      ];
-
-      expect(phase3Actions.length).toBe(11);
-    });
-  });
-
-  // ============================================================================
-  // PHP Legacy Compatibility fixes (PR fix/legacy-php-compat)
-  // ============================================================================
-
-  describe('PHP Salt() and XSRF formula', () => {
-    const PHP_SALT = 'DronedocSalt2025';
-
-    function phpSalt(token, db) {
-      return PHP_SALT + token.toUpperCase() + db + db;
-    }
-
-    function generateXsrf(token, db) {
-      return crypto.createHash('sha1').update(phpSalt(token, db)).digest('hex').substring(0, 22);
-    }
-
-    it('should produce a 22-character XSRF token', () => {
-      const xsrf = generateXsrf('abc123token', 'mydb');
-      expect(xsrf.length).toBe(22);
-    });
-
-    it('should be deterministic for the same token and db', () => {
-      const xsrf1 = generateXsrf('mytokenvalue', 'testdb');
-      const xsrf2 = generateXsrf('mytokenvalue', 'testdb');
-      expect(xsrf1).toBe(xsrf2);
-    });
-
-    it('should differ when token changes', () => {
-      const xsrf1 = generateXsrf('token_a', 'testdb');
-      const xsrf2 = generateXsrf('token_b', 'testdb');
-      expect(xsrf1).not.toBe(xsrf2);
-    });
-
-    it('should differ when db changes', () => {
-      const xsrf1 = generateXsrf('sametoken', 'db_one');
-      const xsrf2 = generateXsrf('sametoken', 'db_two');
-      expect(xsrf1).not.toBe(xsrf2);
-    });
-
-    it('should be case-insensitive on token (PHP strtoupper)', () => {
-      // PHP Salt() calls strtoupper($token), so upper/lower token → same XSRF
-      const xsrfLower = generateXsrf('abcdef123', 'mydb');
-      const xsrfUpper = generateXsrf('ABCDEF123', 'mydb');
-      expect(xsrfLower).toBe(xsrfUpper);
-    });
-
-    it('should produce only hex characters', () => {
-      const xsrf = generateXsrf('anytoken', 'anydb');
-      expect(/^[0-9a-f]{22}$/.test(xsrf)).toBe(true);
-    });
-
-    it('phpSalt builds correct string', () => {
-      const salt = phpSalt('mytoken', 'mydb');
-      expect(salt).toBe('DronedocSalt2025' + 'MYTOKEN' + 'mydb' + 'mydb');
-    });
-  });
-
-  describe('PHP-compatible password hashing', () => {
-    const PHP_SALT = 'DronedocSalt2025';
-
-    function phpCompatibleHash(username, password, db) {
-      const saltedValue = PHP_SALT + username.toUpperCase() + db + password;
-      return crypto.createHash('sha1').update(saltedValue).digest('hex');
-    }
-
-    it('should produce a 40-character hex SHA1 hash', () => {
-      const hash = phpCompatibleHash('admin', 'secret', 'mydb');
-      expect(hash.length).toBe(40);
-      expect(/^[0-9a-f]{40}$/.test(hash)).toBe(true);
-    });
-
-    it('should be deterministic', () => {
-      const h1 = phpCompatibleHash('user', 'pass123', 'testdb');
-      const h2 = phpCompatibleHash('user', 'pass123', 'testdb');
-      expect(h1).toBe(h2);
-    });
-
-    it('should be case-insensitive on username (PHP strtoupper)', () => {
-      // PHP: $u = strtolower(login), then Salt() does strtoupper($u)
-      // So "admin" and "ADMIN" should produce the same hash
-      const h1 = phpCompatibleHash('admin', 'pass', 'db');
-      const h2 = phpCompatibleHash('ADMIN', 'pass', 'db');
-      expect(h1).toBe(h2);
-    });
-
-    it('should differ for different passwords', () => {
-      const h1 = phpCompatibleHash('user', 'pass1', 'db');
-      const h2 = phpCompatibleHash('user', 'pass2', 'db');
-      expect(h1).not.toBe(h2);
-    });
-
-    it('should differ for different databases', () => {
-      const h1 = phpCompatibleHash('user', 'pass', 'db1');
-      const h2 = phpCompatibleHash('user', 'pass', 'db2');
-      expect(h1).not.toBe(h2);
-    });
-
-    it('should incorporate db in hash (matches PHP Salt with global $z)', () => {
-      // PHP Salt($u, $p) = SALT + strtoupper($u) + $z(global db) + $p
-      const username = 'testuser';
-      const password = 'testpass';
-      const db = 'testdb';
-      const expected = crypto.createHash('sha1')
-        .update('DronedocSalt2025' + username.toUpperCase() + db + password)
-        .digest('hex');
-      expect(phpCompatibleHash(username, password, db)).toBe(expected);
-    });
-  });
-
-  describe('Auth response format', () => {
-    it('should return PHP-compatible auth response shape', () => {
-      // PHP: api_dump(json_encode(array("_xsrf"=>...,"token"=>...,"id"=>...,"msg"=>...)))
-      const response = {
-        _xsrf: 'a1b2c3d4e5f6g7h8i9j0ab',
-        token: 'md5hashtoken1234567890abcdef',
-        id: 42,
-        msg: '',
-      };
-
-      expect(response).toHaveProperty('_xsrf');   // underscore prefix
-      expect(response).toHaveProperty('token');
-      expect(response).toHaveProperty('id');
-      expect(response).toHaveProperty('msg');
-      expect(response).not.toHaveProperty('success'); // no wrapper
-      expect(response).not.toHaveProperty('user');    // no nested user object
-      expect(response).not.toHaveProperty('xsrf');   // xsrf must be _xsrf
-      expect(response._xsrf.length).toBeGreaterThan(0);
-    });
-
-    it('should return PHP-compatible error format', () => {
-      // PHP: my_die(msg) → [{"error":"msg"}] with HTTP 200
-      const errorResponse = [{ error: 'Wrong credentials for user foo in mydb' }];
-
-      expect(Array.isArray(errorResponse)).toBe(true);
-      expect(errorResponse[0]).toHaveProperty('error');
-      expect(errorResponse[0]).not.toHaveProperty('success');
-    });
-  });
-
-  describe('safePath — directory traversal prevention', () => {
-    const os = { sep: '/' }; // use forward slash for cross-platform test logic
-
-    function safePath(base, userInput) {
-      const path = { resolve: (...args) => args.join('/').replace(/\/+/g, '/'), sep: '/' };
-      // Simplified inline version for unit testing
-      const resolvedBase = base.replace(/\/$/, '');
-      const joined = base + '/' + userInput;
-      // Normalize: remove . and .. segments
-      const parts = joined.split('/').filter(Boolean);
-      const stack = [];
-      for (const p of parts) {
-        if (p === '..') stack.pop();
-        else if (p !== '.') stack.push(p);
-      }
-      const resolved = '/' + stack.join('/');
-      if (resolved !== resolvedBase && !resolved.startsWith(resolvedBase + '/')) {
-        throw new Error('Invalid path');
-      }
-      return resolved;
-    }
-
-    it('should allow valid paths within base', () => {
-      expect(() => safePath('/base/dir', 'file.txt')).not.toThrow();
-      expect(() => safePath('/base/dir', 'subdir/file.pdf')).not.toThrow();
-    });
-
-    it('should reject simple .. traversal', () => {
-      expect(() => safePath('/base/dir', '../etc/passwd')).toThrow('Invalid path');
-      expect(() => safePath('/base/dir', '../../root')).toThrow('Invalid path');
-    });
-
-    it('should reject traversal that lands on base itself via deeper path', () => {
-      // Traversal that exits but returns: still outside scope of a file
-      expect(() => safePath('/base/dir', '../dir/../../../etc')).toThrow('Invalid path');
-    });
-
-    it('should allow subdirectory access', () => {
-      expect(() => safePath('/base/dir', 'subdir')).not.toThrow();
-    });
-  });
-
-  describe('xsrf endpoint response format', () => {
-    it('should include all PHP-compatible fields in xsrf response', () => {
-      // PHP: {"_xsrf":"...","token":"...","user":"...","role":"...","id":...,"msg":""}
-      const xsrfResponse = {
-        _xsrf: 'a1b2c3d4e5f6g7h8i9j0ab',
-        token: 'somemd5token',
-        user: 'admin',
-        role: 'ADMIN',
-        id: 1,
-        msg: '',
-      };
-
-      expect(xsrfResponse).toHaveProperty('_xsrf');
-      expect(xsrfResponse).toHaveProperty('token');
-      expect(xsrfResponse).toHaveProperty('user');
-      expect(xsrfResponse).toHaveProperty('role');
-      expect(xsrfResponse).toHaveProperty('id');
-      expect(xsrfResponse).toHaveProperty('msg');
-      expect(xsrfResponse).not.toHaveProperty('success'); // no wrapper
-    });
-
-    it('should return empty fields when not authenticated', () => {
-      // PHP xsrf with no valid token returns defaults
-      const unauthResponse = {
-        _xsrf: '',
-        token: null,
-        user: '',
-        role: '',
-        id: 0,
-        msg: '',
-      };
-
-      expect(unauthResponse._xsrf).toBe('');
-      expect(unauthResponse.token).toBeNull();
-      expect(unauthResponse.id).toBe(0);
-    });
-  });
-
-  describe('getcode endpoint response format', () => {
-    it('should return {msg:"ok"} when user exists', () => {
-      // PHP: api_dump(json_encode(array("msg"=>"ok")))
-      const response = { msg: 'ok' };
-      expect(response).toHaveProperty('msg', 'ok');
-      expect(response).not.toHaveProperty('success');
-      expect(response).not.toHaveProperty('message');
-    });
-
-    it('should return {msg:"new"} when user not found', () => {
-      // PHP: api_dump(json_encode(array("msg"=>"new")))
-      const response = { msg: 'new' };
-      expect(response).toHaveProperty('msg', 'new');
-      expect(response).not.toHaveProperty('success');
-    });
-
-    it('should return {error:"invalid user"} when bad email format', () => {
-      // PHP: my_die("invalid user") → {"error":"invalid user"} at HTTP 200
-      const response = { error: 'invalid user' };
-      expect(response).toHaveProperty('error', 'invalid user');
-      expect(response).not.toHaveProperty('msg');
-    });
-
-    it('should validate email format', () => {
-      const emailRegex = /^.+@.+\..+$/;
-      expect(emailRegex.test('user@example.com')).toBe(true);
-      expect(emailRegex.test('notanemail')).toBe(false);
-      expect(emailRegex.test('')).toBe(false);
-    });
-  });
-
-  describe('checkcode endpoint response format', () => {
-    it('should return {token, _xsrf} on success', () => {
-      // PHP: {"token":"...","_xsrf":"..."}
-      const response = { token: 'newmd5token', _xsrf: 'a1b2c3d4e5f6g7h8i9j0ab' };
-
-      expect(response).toHaveProperty('token');
-      expect(response).toHaveProperty('_xsrf');
-      expect(response).not.toHaveProperty('success');
-      expect(response).not.toHaveProperty('valid');
-    });
-
-    it('should return {error} when code is wrong', () => {
-      // PHP: {"error":"..."}
-      const response = { error: 'user not found' };
-      expect(response).toHaveProperty('error');
-      expect(response).not.toHaveProperty('token');
-    });
-
-    it('code matching should be first-4-chars prefix', () => {
-      // PHP: tok.val LIKE ? with code + '%' — matches on first 4 chars of token
-      const tokenInDb = 'abcd1234567890abcdef';
-      const userCode = 'abcd';
-      expect(tokenInDb.startsWith(userCode)).toBe(true);
-
-      const wrongCode = 'xyz1';
-      expect(tokenInDb.startsWith(wrongCode)).toBe(false);
-    });
-  });
-
-  describe('auth?reset response format', () => {
-    it('should return PHP login() response format on reset', () => {
-      // PHP: api_dump(json_encode(["message"=>$message,"db"=>$z,"login"=>$u,"details"=>$details]))
-      const response = {
-        message: 'MAIL',
-        db: 'mydb',
-        login: 'user@example.com',
-        details: 'Email sent to u****@example.com',
-      };
-
-      expect(response).toHaveProperty('message');
-      expect(response).toHaveProperty('db');
-      expect(response).toHaveProperty('login');
-      expect(response).toHaveProperty('details');
-      expect(response).not.toHaveProperty('success');
-      expect(response).not.toHaveProperty('_xsrf');
-    });
-
-    it('message should be one of the PHP login() message types', () => {
-      // PHP login() returns MAIL, NEW_PWD, or SMS in message field
-      const validMessages = ['MAIL', 'NEW_PWD', 'SMS'];
-      validMessages.forEach(msg => {
-        expect(typeof msg).toBe('string');
-        expect(msg.length).toBeGreaterThan(0);
-      });
-    });
-  });
-
-  describe('_m_new response format', () => {
-    it('should return PHP-compatible _m_new response', () => {
-      // PHP: {"id":$i,"obj":$obj,"ord":$ord,"next_act":"...","args":"...","val":"..."}
-      const response = {
-        id: 42,
-        obj: 42,
-        ord: 10,
-        next_act: 'edit_obj',
-        args: 'new1=1&',
-        val: '',
-      };
-
-      expect(response).toHaveProperty('id');
-      expect(response).toHaveProperty('obj');
-      expect(response).toHaveProperty('ord');
-      expect(response).toHaveProperty('next_act');
-      expect(response).toHaveProperty('args');
-      expect(response).toHaveProperty('val');
-      expect(response).not.toHaveProperty('status');  // no {status:'Ok'} wrapper
-    });
-
-    it('next_act should be edit_obj when type has requisites', () => {
-      const hasReqs = true;
-      const next_act = hasReqs ? 'edit_obj' : 'object';
-      expect(next_act).toBe('edit_obj');
-    });
-
-    it('next_act should be object when type has no requisites', () => {
-      const hasReqs = false;
-      const next_act = hasReqs ? 'edit_obj' : 'object';
-      expect(next_act).toBe('object');
-    });
-
-    it('obj field should equal id', () => {
-      const id = 99;
-      const response = { id, obj: id };
-      expect(response.obj).toBe(response.id);
-    });
-  });
-
-  describe('terms endpoint filtering', () => {
-    it('should exclude CALCULATABLE base type (t=15)', () => {
-      const TYPE_CALCULATABLE = 15;
-      const REV_BASE = { 15: 'CALCULATABLE', 7: 'BUTTON', 3: 'SHORT' };
-
-      const rows = [
-        { id: 100, val: 'CalcType', t: TYPE_CALCULATABLE, reqs_t: null },
-        { id: 101, val: 'ShortType', t: 3, reqs_t: null },
-      ];
-
-      const base = {}, typ = {}, req = {};
-      for (const row of rows) {
-        const revBt = REV_BASE[row.t];
-        if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
-        base[row.id] = row.t;
-        if (!req[row.id]) typ[row.id] = row.val;
-        if (row.reqs_t) { delete typ[row.reqs_t]; req[row.reqs_t] = true; }
-      }
-
-      expect(Object.keys(typ)).not.toContain('100');
-      expect(Object.keys(typ)).toContain('101');
-    });
-
-    it('should exclude BUTTON base type (t=7)', () => {
-      const REV_BASE = { 7: 'BUTTON', 3: 'SHORT' };
-
-      const rows = [
-        { id: 200, val: 'ButtonType', t: 7, reqs_t: null },
-        { id: 201, val: 'NormalType', t: 3, reqs_t: null },
-      ];
-
-      const base = {}, typ = {}, req = {};
-      for (const row of rows) {
-        const revBt = REV_BASE[row.t];
-        if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
-        base[row.id] = row.t;
-        if (!req[row.id]) typ[row.id] = row.val;
-        if (row.reqs_t) { delete typ[row.reqs_t]; req[row.reqs_t] = true; }
-      }
-
-      expect(Object.keys(typ)).not.toContain('200');
-      expect(Object.keys(typ)).toContain('201');
-    });
-
-    it('should remove type used as requisite of another type', () => {
-      // If type A has a requisite of type B (reqs_t = B.id), then B is removed
-      const REV_BASE = { 3: 'SHORT' };
-
-      const rows = [
-        { id: 300, val: 'TypeA', t: 3, reqs_t: 301 }, // A has requisite of type 301
-        { id: 301, val: 'TypeB', t: 3, reqs_t: null }, // B is used as requisite
-      ];
-
-      const base = {}, typ = {}, req = {};
-      for (const row of rows) {
-        const revBt = REV_BASE[row.t];
-        if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
-        base[row.id] = row.t;
-        if (!req[row.id]) typ[row.id] = row.val;
-        if (row.reqs_t) { delete typ[row.reqs_t]; req[row.reqs_t] = true; }
-      }
-
-      expect(Object.keys(typ)).toContain('300');  // A remains
-      expect(Object.keys(typ)).not.toContain('301'); // B removed (used as req)
-    });
-
-    it('should return array of {id, type, name} objects', () => {
-      const types = [{ id: 100, type: 3, name: 'MyType' }];
-      expect(Array.isArray(types)).toBe(true);
-      expect(types[0]).toHaveProperty('id');
-      expect(types[0]).toHaveProperty('type');
-      expect(types[0]).toHaveProperty('name');
-      expect(types[0]).not.toHaveProperty('val'); // PHP terms returns name not val
-    });
-  });
-
-  describe('POST /:db route (login form submit)', () => {
-    it('should handle post-auth form submission without redirect', () => {
-      // PHP: after AJAX auth sets cookie, login.html does form.submit() to /:db
-      // The response must be HTML (main.html or login.html), NOT a 302 redirect
-      // This test verifies the expected behavior specification
-      const EXPECTED_BEHAVIOR = 'serve_html_directly';
-      expect(EXPECTED_BEHAVIOR).toBe('serve_html_directly');
-    });
-
-    it('should serve login page when no token cookie present', () => {
-      const token = undefined; // no cookie
-      const shouldServeMain = token !== undefined;
-      expect(shouldServeMain).toBe(false);
-    });
-
-    it('should serve main page when valid token cookie present', () => {
-      const token = 'validtoken123';
-      const shouldServeMain = token !== undefined;
-      expect(shouldServeMain).toBe(true);
-    });
-  });
-
-  describe('Error response HTTP codes', () => {
-    it('PHP my_die() returns HTTP 200 with array error format', () => {
-      // PHP: die("[{\"error\":\"$msg\"}]") in API mode — always HTTP 200
-      const errorBody = [{ error: 'Some error message' }];
-      const httpStatus = 200; // always 200 in PHP API mode
-
-      expect(httpStatus).toBe(200);
-      expect(Array.isArray(errorBody)).toBe(true);
-      expect(errorBody[0]).toHaveProperty('error');
-    });
-
-    it('error response must not use HTTP 400 or 500 in API mode', () => {
-      // The legacy PHP API never uses 400/500 — always wraps in 200 + array
-      const NON_PHP_CODES = [400, 500];
-      const PHP_API_CODE = 200;
-      expect(NON_PHP_CODES).not.toContain(PHP_API_CODE);
-    });
+  it('redirects or denies without auth', async () => {
+    // Without cookie, the /:db/:page* catch-all redirects to login (302),
+    // so the backup handler never runs to produce a 403.
+    const res = await request(app).get(`/${DB}/backup`);
+    expect([302, 403]).toContain(res.status);
   });
 });

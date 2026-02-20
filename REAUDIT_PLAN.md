@@ -1,0 +1,273 @@
+# Legacy PHP→Node.js Re-Audit Plan
+
+> **Branch**: `issue-65-c78c49fee862`
+> **Date**: 2026-02-20
+> **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
+
+---
+
+## 1. Endpoints Coverage
+
+### ✅ Auth Endpoints
+
+| PHP Action | Node.js Route | Status | Notes |
+|------------|--------------|--------|-------|
+| `POST /:db/auth` (password) | `router.post('/:db/auth')` | ✅ | Password hash, token/xsrf create, cookie set |
+| `POST /:db/auth?reset` | Same route, `?reset` branch | ✅ | Login lookup only; no actual email/SMS |
+| `GET /:db/auth` (secret) | `router.all('/:db/auth')` GET branch | ✅ | secret→xsrf flow |
+| `GET /:db/xsrf` | `router.all('/:db/xsrf')` | ✅ | Returns full session row |
+| `GET /:db/validate` | `router.get('/:db/validate')` | ✅ | Token validation |
+| `POST /:db/getcode` | `router.post('/:db/getcode')` | ⚠️ | Returns `{msg:'ok'}` — no real email send |
+| `POST /:db/checkcode` | `router.post('/:db/checkcode')` | ⚠️ | OTP verify but no code generation |
+| `POST /my/register` | `router.post('/my/register')` | ⚠️ | Mock only; no DB insertion |
+| `GET /:db/exit` | `router.all('/:db/exit')` | ✅ | Deletes token, clears cookie |
+| `POST /:db/jwt` | `router.post('/:db/jwt')` | ✅ | JWT exchange |
+| `POST /:db/confirm` | `router.post('/:db/confirm')` | ✅ | Password confirmation |
+
+### ✅ Object DML Endpoints
+
+| PHP Action | Node.js Route | Status | Notes |
+|------------|--------------|--------|-------|
+| `POST /:db/_m_new/:up` | `router.post('/:db/_m_new/:up?', upload.any(), ...)` | ✅ | File upload, requisite insert |
+| `POST /:db/_m_save/:id` | `router.post('/:db/_m_save/:id')` | ✅ | PASSWORD hash fixed |
+| `POST /:db/_m_del/:id` | `router.post('/:db/_m_del/:id')` | ✅ | Cascade delete |
+| `POST /:db/_m_set/:id` | `router.post('/:db/_m_set/:id')` | ✅ | Batch attribute set |
+| `POST /:db/_m_move/:id` | `router.post('/:db/_m_move/:id')` | ✅ | Move with next-order |
+| `POST /:db/_m_up/:id` | `router.post('/:db/_m_up/:id')` | ✅ | Swap with previous sibling |
+| `POST /:db/_m_ord/:id` | `router.post('/:db/_m_ord/:id')` | ✅ | Set explicit ord value |
+| `POST /:db/_m_id/:id` | `router.post('/:db/_m_id/:id')` | ✅ | 3-table id rename |
+
+### ✅ Type DDL Endpoints
+
+| PHP Action | Node.js Route | Status | Notes |
+|------------|--------------|--------|-------|
+| `POST /:db/_d_new` | `router.post('/:db/_d_new/:parentTypeId?')` | ✅ | |
+| `POST /:db/_d_save/:id` | `router.post('/:db/_d_save/:typeId')` | ✅ | |
+| `POST /:db/_d_del/:id` | `router.post('/:db/_d_del/:typeId')` | ✅ | |
+| `POST /:db/_d_req/:id` | `router.post('/:db/_d_req/:typeId')` | ✅ | Builds modifier string |
+| `POST /:db/_d_alias/:id` | `router.post('/:db/_d_alias/:reqId')` | ✅ | |
+| `POST /:db/_d_null/:id` | `router.post('/:db/_d_null/:reqId')` | ✅ | Toggle `:!NULL:` |
+| `POST /:db/_d_multi/:id` | `router.post('/:db/_d_multi/:reqId')` | ✅ | Toggle `:MULTI:` |
+| `POST /:db/_d_attrs/:id` | `router.post('/:db/_d_attrs/:reqId')` | ✅ | Combined modifier update |
+| `POST /:db/_d_up/:id` | `router.post('/:db/_d_up/:reqId')` | ✅ | Swap with previous sibling |
+| `POST /:db/_d_ord/:id` | `router.post('/:db/_d_ord/:reqId')` | ✅ | Set explicit ord |
+| `POST /:db/_d_del_req/:id` | `router.post('/:db/_d_del_req/:reqId')` | ✅ | |
+| `POST /:db/_d_ref/:id` | `router.post('/:db/_d_ref/:parentTypeId')` | ✅ | Reference column |
+
+### ✅ Query/Listing Endpoints
+
+| PHP Action | Node.js Route | Status | Notes |
+|------------|--------------|--------|-------|
+| `GET /:db/terms` | `router.get('/:db/terms')` | ✅ | Grant-filtered |
+| `GET /:db/metadata/:id` | `router.all('/:db/metadata/:typeId?')` | ✅ | |
+| `GET /:db/obj_meta/:id` | `router.all('/:db/obj_meta/:id')` | ✅ | |
+| `GET /:db/_list/:id` | `router.all('/:db/_list/:typeId')` | ✅ | Paginated |
+| `GET /:db/_list_join/:id` | `router.all('/:db/_list_join/:typeId')` | ✅ | Multi-join |
+| `GET /:db/_dict/:id` | `router.all('/:db/_dict/:typeId?')` | ✅ | |
+| `GET /:db/_d_main/:id` | `router.all('/:db/_d_main/:typeId')` | ✅ | Full type editor data |
+| `GET /:db/_ref_reqs/:id` | `router.get('/:db/_ref_reqs/:refId')` | ⚠️ | Static data only; PHP evaluates dynamic `attrs` formula |
+| `GET /:db/_connect` | `router.all('/:db/_connect')` | ✅ | DB ping |
+
+### ✅ Report Endpoints
+
+| PHP Action | Node.js Route | Status | Notes |
+|------------|--------------|--------|-------|
+| `GET /:db/report` | `router.all('/:db/report/:reportId?')` | ✅ | List all reports |
+| `GET /:db/report/:id` | Same | ✅ | Report definition (columns, types) |
+| `GET /:db/report/:id?execute=1` | Same | ✅ | Full LEFT JOIN execution |
+| `POST /:db action=report` | `router.post('/:db')` | ✅ | Same execute logic |
+
+### ✅ Export/Backup Endpoints
+
+| PHP Action | Node.js Route | Status | Notes |
+|------------|--------------|--------|-------|
+| `GET /:db/export/:typeId` | `router.get('/:db/export/:typeId')` | ✅ | CSV or JSON |
+| `GET /:db/csv_all` | `router.get('/:db/csv_all')` | ✅ | ZIP wrapped |
+| `GET /:db/backup` | `router.get('/:db/backup')` | ✅ | ZIP wrapped, delta-base36 |
+| `POST /:db/restore` | `router.post('/:db/restore')` | ✅ | Returns SQL; not executed |
+
+### ✅ File / Admin Endpoints
+
+| PHP Action | Node.js Route | Status | Notes |
+|------------|--------------|--------|-------|
+| `POST /:db/upload` | `router.post('/:db/upload')` | ✅ | Extension whitelist |
+| `GET /:db/download/:file` | `router.get('/:db/download/:filename')` | ✅ | safePath protected |
+| `GET /:db/dir_admin` | `router.get('/:db/dir_admin')` | ✅ | Listing + download |
+| `POST /my/_new_db` | `router.all('/my/_new_db')` | ✅ | CREATE TABLE + schema init |
+| `GET /:db/grants` | `router.get('/:db/grants')` | ✅ | Role-based grants object |
+| `POST /:db/check_grant` | `router.post('/:db/check_grant')` | ✅ | READ/WRITE check |
+
+---
+
+## 2. Response Format Parity
+
+### 2.1 api_dump() (DML/DDL responses)
+
+**PHP Reference:**
+```php
+function api_dump($id, $obj, $next_act, $args='', $warnings='') {
+  return json_encode(['id'=>$id, 'obj'=>$obj, 'next_act'=>$next_act, 'args'=>$args, 'warnings'=>$warnings]);
+}
+```
+
+| Action family | `id` | `obj` | `next_act` | `args` | Status |
+|---|---|---|---|---|---|
+| `_m_new` | new object id | type id | `edit_obj` (has reqs) or `object` | `new1=1&` or `F_U=<up>` | ✅ |
+| `_m_save` | object id | type id | `object` | `F_U=<up>` if up>1 | ✅ |
+| `_m_del` | type id | deleted id | `object` | `F_U=<up>` | ✅ |
+| `_m_set` | object id | type id | `object` | `F_U=<up>` | ✅ |
+| `_m_move` | object id | new parent id | `object` | `F_U=<up>` | ✅ |
+| `_m_up` | object id | parent id | `object` | `F_U=<up>` | ✅ |
+| `_m_ord` | object id | parent id | `object` | `F_U=<up>` | ✅ |
+| `_m_id` | new_id | new_id | `object` | `F_U=<up>` if up>1 | ✅ |
+| `_d_new` | new type id | parent type id | `edit_types` | `F_U=<up>` if up>1 | ✅ |
+| `_d_save` | type id | type id | `edit_types` | `` | ✅ |
+| `_d_del` | 0 | 0 | `terms` | `` | ✅ |
+| `_d_req/_d_alias/etc` | req id | type id | `edit_types` | `` | ✅ |
+| `_d_del_req` | type id | type id | `edit_types` | `` | ✅ |
+
+### 2.2 Auth Responses
+
+| Route | Expected PHP Fields | Node.js Fields | Status |
+|---|---|---|---|
+| `POST /:db/auth` | `{_xsrf, token, id, msg}` | `{_xsrf, token, id, msg}` | ✅ |
+| `GET /:db/auth` (secret) | `{_xsrf, token, id, msg}` | `{_xsrf, token, id, msg}` | ✅ |
+| `GET /:db/xsrf` | `{_xsrf, token, user, role, id, msg}` | `{_xsrf, token, user, role, id, msg}` | ✅ |
+| `GET /:db/validate` | `{success, valid, user: {id,login}, xsrf}` | Same | ✅ |
+| `POST /:db/checkcode` | `{token, _xsrf}` | `{token, _xsrf}` | ✅ |
+
+### 2.3 Metadata Responses
+
+| Route | Expected `orig`/`attrs` fields | Status |
+|---|---|---|
+| `GET /:db/metadata/:id` | `reqs[].orig` = raw modifier string, `reqs[].attrs` = parsed attrs block | ✅ (fixed in prior session) |
+| `GET /:db/obj_meta/:id` | `reqs[{id}].reqVal`, `.type`, `.baseType`, `.refType` | ✅ |
+
+### 2.4 Report Responses
+
+| Format Param | Expected Structure | Status |
+|---|---|---|
+| (default JSON) | `{columns:[...], data:[[col,val,...],], rownum}` | ✅ |
+| `JSON_KV` | `[{colName:val,...},...]` | ✅ |
+| `JSON_DATA` | `{colName:firstRowVal,...}` | ✅ |
+| `JSON_CR` | `{columns:[...], rows:{idx:{colId:val}}, totalCount}` | ✅ |
+| `JSON_HR` | Same as default but hierarchical parent support | ⚠️ Check |
+| CSV (format=csv) | UTF-8 BOM + semicolon-delimited rows | ✅ |
+
+### 2.5 _ref_reqs Response
+
+| Expected | Status |
+|---|---|
+| `{id: "val / req1 / req2", ...}` keyed object (max 80) | ✅ (static — dynamic formula skipped) |
+
+---
+
+## 3. Known Gaps / Items to Verify
+
+### 3.1 P0 — Critical
+
+| # | Issue | Location | Action |
+|---|---|---|---|
+| 1 | `_ref_reqs` dynamic formula: PHP evaluates `attrs` block of the reference type to build a custom SQL query | `legacy-compat.js` ~4100 | Implement formula evaluator or document as out-of-scope |
+| 2 | `restore` reads from filesystem ZIP: PHP accepts `?backup_file=path` pointing to a ZIP on disk | `legacy-compat.js` restore route | Add multer file upload + unzip to restore route |
+| 3 | `executeReport` — `REP_JOIN` (t=44) rows define extra JOINs: currently only REP_COLS LEFT JOINs are built | `legacy-compat.js` compileReport | Parse `REP_JOIN` rows and add their SQL JOINs |
+| 4 | `executeReport` — filter column alias: FR_/TO_/EQ_/LIKE_ params keyed by column `ord` in PHP but may be keyed by `alias` in Node.js | `legacy-compat.js` executeReport | Verify FR_1/FR_c123 mapping matches PHP |
+| 5 | `_m_save` REFERENCE requisite copy: when `copybtn` set, file requisites not physically copied | `legacy-compat.js` _m_save ~1900 | Copy files or document limitation |
+
+### 3.2 P1 — Important
+
+| # | Issue | Location | Action |
+|---|---|---|---|
+| 6 | `getcode` / `checkcode` / password reset: no real email/SMS | Auth routes | Document limitation; add stub config |
+| 7 | `register` (`/my/register`): mock only, no real DB insert | register route | Implement or document |
+| 8 | `backup` delta encoding: ORD field may not match PHP's compact format exactly | buildZip / backup | Test round-trip: backup → restore → compare |
+| 9 | `terms` grant filter: `grant1Level` applies READ check but may not match PHP's exact `check_grant` recursion | terms route | Manual test with restricted role |
+| 10 | `_m_new` `next_act=edit_obj` condition: PHP uses "type has requisites" check; verify correct | _m_new route | Test: create type with/without reqs |
+
+### 3.3 P2 — Minor / Edge Cases
+
+| # | Issue | Location | Action |
+|---|---|---|---|
+| 11 | `_d_attrs` modifier write: when updating only `alias` (not required/multi), existing `:!NULL:`/`:MULTI:` must be preserved | _d_attrs route | Test toggling each modifier independently |
+| 12 | `_m_up` / `_d_up` at-top no-op: should still return api_dump response with current state | _m_up, _d_up | Verify response when already at top |
+| 13 | `JSON_HR` report format: hierarchical mode for parent-child reports | executeReport | Implement or document |
+| 14 | `_list` `q` search: PHP searches across requisite values too, not just main `val` | _list route | Verify or expand search SQL |
+| 15 | File type validation: Node.js uses extension whitelist; PHP uses MIME type detection | upload route | Add MIME-type verification |
+| 16 | `dir_admin` template mode (`download=0`): PHP reads from `integram-server/templates/custom/{db}` | dir_admin route | Verify path resolution |
+| 17 | `csv_all` val escaping: `;` → `\;` in PHP but values may legitimately contain `;` | csv_all | Test with semicolon in val |
+| 18 | `backup` val escaping: `\n` → `&ritrn;` `\r` → `&ritrr;` must be reversed in restore | backup/restore | Round-trip test |
+
+---
+
+## 4. Verification Test Matrix
+
+Run these manual tests against a live server (`http://localhost:8081`) using `legacy-test.html`:
+
+### Auth Flow
+- [ ] Login with valid creds → get `token` + `_xsrf` in response
+- [ ] Login with wrong pwd → get `msg` error, no token
+- [ ] Login with secret → secret auth flow
+- [ ] `GET /:db/xsrf` with cookie → returns `user`, `role`, `_xsrf`
+- [ ] `GET /:db/validate` with bearer header → `{valid: true}`
+- [ ] `GET /:db/exit` → cookie cleared
+
+### Object CRUD
+- [ ] `_m_new` type without reqs → `next_act=object`
+- [ ] `_m_new` type with reqs → `next_act=edit_obj` + `args=new1=1&`
+- [ ] `_m_new` with file field → file saved to `/download/{db}/`
+- [ ] `_m_save` with PASSWORD type requisite → hash stored
+- [ ] `_m_save` `copybtn` → new object created with incremented ord
+- [ ] `_m_del` cascade=1 → children removed
+- [ ] `_m_id` rename → objects referencing old id updated (up, t columns)
+- [ ] `_m_move` → obj at new parent with next ord
+
+### Type DDL
+- [ ] `_d_new` → `{next_act:'edit_types', obj:parent_id}`
+- [ ] `_d_req` with alias+required → `:ALIAS=x::!NULL:Name` stored in val
+- [ ] `_d_alias` → only alias part updated, required/multi preserved
+- [ ] `_d_null` toggle twice → `!NULL:` appears then disappears
+- [ ] `_d_multi` toggle → `:MULTI:` appears
+- [ ] `_d_del` → `{id:0, obj:0, next_act:'terms'}`
+
+### Reports
+- [ ] List reports → returns `{reports: [{id, name}]}`
+- [ ] Get report definition → returns `{columns: [{id, name, type}...]}`
+- [ ] Execute report (no filter) → rows with column values
+- [ ] Execute report (FR_/TO_ filter) → filtered rows
+- [ ] Execute report as CSV → download with semicolons
+- [ ] Execute report JSON_KV → array of `{colName: val}` objects
+- [ ] Execute report JSON_CR → `{rows: {0: {colId: val}}, totalCount}`
+
+### Export/Backup
+- [ ] `backup` download → ZIP contains `.dmp` file with base36 rows
+- [ ] `restore` → returns `INSERT INTO ...` SQL (not executed)
+- [ ] `csv_all` → ZIP contains `.csv` with all types
+- [ ] `export/:typeId` CSV → header row + data rows
+
+### _ref_reqs
+- [ ] Static (no formula attrs) → `{id: "val / req", ...}` (max 80)
+- [ ] Dynamic formula (if implemented) → custom SQL result
+
+---
+
+## 5. Priority Order for Fixes
+
+| Priority | Item | Effort | Impact |
+|---|---|---|---|
+| P0-1 | `REP_JOIN` parsing in compileReport | M | Reports with multi-table joins |
+| P0-2 | `executeReport` FR_/TO_ filter key mapping | S | All filtered reports |
+| P0-3 | `restore` file upload | M | Backup/restore flow |
+| P1-1 | `_ref_reqs` dynamic formula | L | Dropdowns with custom queries |
+| P1-2 | `_m_save` file copy on `copybtn` | S | Object copy with files |
+| P2-1 | `JSON_HR` report format | M | Hierarchical reports |
+| P2-2 | `_list` search across requisite values | M | Search completeness |
+
+---
+
+## 6. Files to Audit / Touch
+
+| File | Sections |
+|---|---|
+| `backend/monolith/src/api/routes/legacy-compat.js` | compileReport, executeReport, _ref_reqs, restore, _m_save copybtn files |
+| `backend/monolith/src/api/routes/__tests__/legacy-compat.test.js` | Add tests for report execution, _ref_reqs, _m_id edge cases |
+| `backend/monolith/public/legacy-test.html` | Verify all 71 route panels accessible and returning correct data |
