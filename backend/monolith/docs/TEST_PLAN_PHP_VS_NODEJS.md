@@ -345,7 +345,7 @@ curl -s "$NODE/$DB/_list/$TYPE_ID?JSON&up=5&LIMIT=20&F=0" -b "$DB=$TOKEN" | jq .
 ---
 
 ### 3.4 `GET /:db/_list_join/:typeId?JSON` — list with joined refs
-**Status PHP → Node.js:** ⚠️ (Node.js has `_list_join` but format may differ)
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -709,7 +709,7 @@ curl -s "$NODE/$DB/_ref_reqs/$REF_ID?JSON" -b "$DB=$TOKEN" | jq .
 ## 10. Permissions
 
 ### 10.1 `GET /:db/grants?JSON` — list user grants
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -763,7 +763,7 @@ file /tmp/downloaded.pdf
 ## 12. Database management
 
 ### 12.1 `POST /my/_new_db` — create new database
-**Status PHP → Node.js:** ⚠️
+**Status PHP → Node.js:** ✅
 
 **PHP response:**
 ```json
@@ -806,12 +806,14 @@ curl -s "$NODE/$DB/_connect?JSON" -b "$DB=$TOKEN" | jq .status
 | 4 | `GET /:db/:page*` — `?JSON` handling | ✅ | JSON intercepted before HTML fallback |
 | 5 | `GET /:db/terms?JSON` | ✅ | `[{id,name,href,ord}]` |
 | 6 | `GET /:db/_list/:typeId` | ✅ | sort, filter, LIMIT/F pagination |
-| 7 | `GET /:db/report/:id?JSON` | ✅ | metadata with columns |
-| 8 | `POST /:db/report/:id?JSON` | ✅ | column-major data, totals in columns, RECORD_COUNT, LIMIT |
-| 9 | `GET /:db/_ref_reqs/:refId?JSON` | ✅ | `{id: "display str"}` |
-| 10 | `GET /:db/grants?JSON` | ⚠️ | partial |
-| 11 | `GET /:db/csv_all`, `backup`, `restore` | ⚠️ | partial |
-| 12 | `POST /my/_new_db` | ⚠️ | partial |
+| 7 | `GET /:db/_list_join/:typeId` | ✅ | `data` array of arrays, `requisites[].val` |
+| 8 | `GET /:db/report/:id?JSON` | ✅ | metadata with columns |
+| 9 | `POST /:db/report/:id?JSON` | ✅ | column-major data, totals in columns, RECORD_COUNT, LIMIT |
+| 10 | `POST /:db/report/:id` (no ?JSON) | ✅ | row-major data, `columns` at top level (for report.html) |
+| 11 | `GET /:db/_ref_reqs/:refId?JSON` | ✅ | `{id: "display str"}` |
+| 12 | `GET /:db/grants?JSON` | ✅ | `{user: "name", grants: [{id,type}]}` |
+| 13 | `GET /:db/csv_all`, `backup`, `restore` | ⚠️ | partial (export/import) |
+| 14 | `POST /my/_new_db` | ✅ | `{status:"Ok", id: ...}` |
 
 ---
 

@@ -2541,37 +2541,23 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
     const [countRows] = await pool.query(countQuery, countParams);
     const total = countRows[0]?.total || 0;
 
-    // Format results
-    const objects = rows.map(row => {
-      const obj = {
-        id: row.id,
-        val: row.val,
-        up: row.up,
-        t: row.t,
-        ord: row.ord,
-        reqs: {}
-      };
-
-      // Add requisite values
+    // PHP-compatible format: data as array of arrays [id, val, req1_val, req2_val, ...]
+    const dataArrays = rows.map(row => {
+      const arr = [row.id, row.val];
       for (const req of reqsToJoin) {
-        obj.reqs[req.alias] = row[req.alias] || null;
-        // Also add formatted value
-        if (row[req.alias]) {
-          obj.reqs[`${req.alias}_formatted`] = formatValView(req.type, row[req.alias]);
-        }
+        arr.push(row[req.alias] !== undefined ? row[req.alias] : null);
       }
-
-      return obj;
+      return arr;
     });
 
-    logger.info('[Legacy _list_join] Multi-join query', { db, type, joinedReqs: reqsToJoin.length, rows: objects.length });
+    logger.info('[Legacy _list_join] Multi-join query', { db, type, joinedReqs: reqsToJoin.length, rows: dataArrays.length });
 
     res.json({
-      data: objects,
+      data: dataArrays,
       total,
       limit,
       offset,
-      requisites: reqsToJoin.map(r => ({ id: r.id, name: r.name, alias: r.alias, type: r.type }))
+      requisites: reqsToJoin.map(r => ({ id: r.id, val: r.name }))
     });
   } catch (error) {
     logger.error('[Legacy _list_join] Error', { error: error.message, db });
@@ -4777,11 +4763,20 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         return res.json({ columns: cols, data, rownum: results.rownum });
       }
 
-      // Non-API (browser) fallback
+      // Non-API (browser) fallback — report.html reads json.columns and row-major json.data
+      const simpleCols = report.columns.map(col => ({
+        id: col.id, name: col.name, align: col.align || 'LEFT'
+      }));
+      const rowData = results.data.map(row =>
+        report.columns.map(col => row[col.alias] !== undefined ? row[col.alias] : '')
+      );
+      const topTotals = report.columns.map(col =>
+        (results.totals || {})[col.alias] !== undefined ? (results.totals || {})[col.alias] : null
+      );
       return res.json({
-        report: { id: report.id, name: report.header, columns: report.columns },
-        data: formattedData,
-        totals: results.totals,
+        columns: simpleCols,
+        data: rowData,
+        totals: topTotals,
         rownum: results.rownum
       });
     }
@@ -4972,17 +4967,18 @@ router.get('/:db/grants', async (req, res) => {
     // Get grants for the user's role
     const grants = await getGrants(pool, db, user.role_id);
 
-    logger.info('[Legacy grants] Grants retrieved', { db, username: user.username, grantCount: Object.keys(grants).length });
+    // Convert internal grants object {typeId: level, mask:{}, EXPORT:{}, DELETE:{}}
+    // to PHP-compatible array [{id, type}]
+    const grantsArray = Object.entries(grants)
+      .filter(([k]) => /^\d+$/.test(k))
+      .map(([k, v]) => ({ id: parseInt(k, 10), type: v }));
+
+    logger.info('[Legacy grants] Grants retrieved', { db, username: user.username, grantCount: grantsArray.length });
 
     res.json({
       success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        role: user.role_name,
-        roleId: user.role_id
-      },
-      grants: grants
+      user: user.username,
+      grants: grantsArray
     });
   } catch (error) {
     logger.error('[Legacy grants] Error', { error: error.message, db });
