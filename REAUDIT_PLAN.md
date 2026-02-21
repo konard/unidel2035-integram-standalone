@@ -4,7 +4,13 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21, updated session 9)
+## Status Summary (2026-02-21, updated session 10)
+
+### Session 10 Fixes (auth?reset routing)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/auth?reset` | Reset handler never reached — normal auth handler intercepted all POST /:db/auth | Added `if (req.query.reset !== undefined) return next()` to first handler |
 
 ### Session 9 Fixes (format parity sweep)
 
@@ -129,7 +135,7 @@
 | PHP Action | Node.js Route | Status | Notes |
 |------------|--------------|--------|-------|
 | `POST /:db/auth` (password) | `router.post('/:db/auth')` | ✅ | Password hash, token/xsrf create, cookie set |
-| `POST /:db/auth?reset` | Same route, `?reset` branch | ✅ | Login lookup only; no actual email/SMS |
+| `POST /:db/auth?reset` | Same route, `?reset` branch | ✅ | Fixed s10: first handler now skips ?reset; returns PHP login() format (message:MAIL/SMS, db, login, details) |
 | `GET /:db/auth` (secret) | `router.all('/:db/auth')` GET branch | ✅ | secret→xsrf flow |
 | `GET /:db/xsrf` | `router.all('/:db/xsrf')` | ✅ | Returns full session row |
 | `GET /:db/validate` | `router.get('/:db/validate')` | ✅ | Token validation |
@@ -306,7 +312,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | 6 | `getcode` / `checkcode` / password reset: no real email/SMS | Auth routes | Document limitation; add stub config |
 | 7 | ~~`register`~~ | ~~register route~~ | ✅ Fixed s9: up=1, EMAIL/role(164)/date(156) requisites; response matches PHP login() format |
 | 8 | ~~`backup` delta encoding~~ | ~~backup/restore~~ | ✅ Verified s8: round-trip test — 35488 rows backup → restore OK. Format exactly matches PHP (`;`=sequential, `/`=same-up, base36 deltas, ord as-is when !=1) |
-| 9 | `terms` grant filter: `grant1Level` applies READ check but may not match PHP's exact `check_grant` recursion | terms route | Manual test with restricted role |
+| 9 | ~~`terms` grant filter~~ | ~~terms route~~ | ✅ Verified s10: `grant1Level` matches PHP `Grant_1level` exactly (4-step: admin→explicit→ROOT→ref-parent). Test user with ROOT WRITE grant sees all types. Code logic is identical. |
 | 10 | ~~`_m_new` `next_act=edit_obj` condition~~ | ~~_m_new route~~ | ✅ Correct: `SELECT id WHERE up=typeId LIMIT 1` → hasReqs → edit_obj or object |
 
 ### 3.3 P2 — Minor / Edge Cases
