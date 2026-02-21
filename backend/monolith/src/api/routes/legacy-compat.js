@@ -7336,7 +7336,7 @@ router.post('/:db/restore', (req, res, next) => {
       // Parse ord
       delimPos = line.indexOf(';');
       let ord = 1;
-      if (delimPos > 0) ord = parseInt(line.substring(0, delimPos)) || 1;
+      if (delimPos > 0) { const ordVal = parseInt(line.substring(0, delimPos), 10); ord = isNaN(ordVal) ? 1 : ordVal; }
       line = line.substring(delimPos + 1);
 
       // Val is the rest (with newline escaping removed)

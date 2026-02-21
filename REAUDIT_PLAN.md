@@ -17,6 +17,14 @@
 | `GET /:db/metadata` (attrs/val) | `\\u041e` vs `\u041e` — DB stores literal `\uXXXX` | Added `decodeJsonEscapes()` applied to `obj.val` and `req.attrs` (NOT `req_val`) |
 | `GET /:db/obj_meta/:id` | Completely wrong format (keyed by req.t, no val/type) | Full rewrite: keyed by `req.ord` with `{id, val, type, arr_id?, ref?, ref_id?, attrs?}` |
 
+### Session 3 Fixes
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `GET /:db/report/:id?JSON` | SubPage handler intercepted before report API route | Added `next()` pass-through in SubPage for `page=report && subId && isApiRequest` |
+| `GET/POST /:db/_connect/:id` | Route had no `:id` param; 404 for all ID requests | Changed to `/:db/_connect/:id?`; proxies to CONNECT requisite URL |
+| `POST /:db/restore` | `ord=0` parsed as `1` (`parseInt("0") \|\| 1 = 1`) | Fixed: `const ordVal = parseInt(..., 10); ord = isNaN(ordVal) ? 1 : ordVal` |
+
 ### ?JSON Subpage Endpoints — All verified at 0 diffs vs PHP
 
 | Endpoint | Status | Notes |
@@ -125,7 +133,7 @@
 | `GET /:db/export/:typeId` | `router.get('/:db/export/:typeId')` | ✅ | CSV or JSON |
 | `GET /:db/csv_all` | `router.get('/:db/csv_all')` | ✅ | ZIP wrapped |
 | `GET /:db/backup` | `router.get('/:db/backup')` | ✅ | ZIP wrapped, delta-base36 |
-| `POST /:db/restore` | `router.post('/:db/restore')` | ✅ | Returns SQL; not executed |
+| `POST /:db/restore` | `router.post('/:db/restore')` | ✅ | Fully implemented: INSERT IGNORE in batches of 1000 |
 
 ### ✅ File / Admin Endpoints
 
@@ -284,7 +292,7 @@ Run these manual tests against a live server (`http://localhost:8081`) using `le
 
 ### Export/Backup
 - [ ] `backup` download → ZIP contains `.dmp` file with base36 rows
-- [ ] `restore` → returns `INSERT INTO ...` SQL (not executed)
+- [ ] `restore` → INSERT IGNORE in batches; ord=0 bug fixed (session 3)
 - [ ] `csv_all` → ZIP contains `.csv` with all types
 - [ ] `export/:typeId` CSV → header row + data rows
 
@@ -300,7 +308,7 @@ Run these manual tests against a live server (`http://localhost:8081`) using `le
 |---|---|---|---|
 | P0-1 | `REP_JOIN` parsing in compileReport | M | Reports with multi-table joins |
 | P0-2 | `executeReport` FR_/TO_ filter key mapping | S | All filtered reports |
-| P0-3 | `restore` file upload | M | Backup/restore flow |
+| P0-3 | `restore` file upload | M | Backup/restore flow — core implemented; ord=0 bug fixed session 3 |
 | P1-1 | `_ref_reqs` dynamic formula | L | Dropdowns with custom queries |
 | P1-2 | `_m_save` file copy on `copybtn` | S | Object copy with files |
 | P2-1 | `JSON_HR` report format | M | Hierarchical reports |
