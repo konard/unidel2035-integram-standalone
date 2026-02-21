@@ -4,7 +4,19 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21, updated session 7)
+## Status Summary (2026-02-21, updated session 9)
+
+### Session 9 Fixes (format parity sweep)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /my/register` | Wrong parent (115→1), missing EMAIL/role/date requisites | PHP `newUser`: `Insert(1,0,USER,email)` + EMAIL(t=41) + role(t=164,val=115) + date(t=156,val=Ymd) |
+| `POST /my/register` | Response format mismatch | PHP `login()` → `{"message":"toConfirm","db":"my","login":"","details":""}` |
+| `POST /:db/exit` | Response format mismatch | PHP `login()` → `{"message":"","db":"<db>","login":"","details":""}` |
+| `POST /:db/auth` (wrong creds) | Incomplete error message | Missing ". Please send login and password as POST-parameters." suffix |
+| `POST /:db/auth` (after logout) | Login fails after exit | TOKEN/XSRF INSERT was missing `ord` column (NOT NULL) |
+| `POST /:db/_m_set/:id` | Extra fields (next_act, warnings) + obj as number | PHP die(): `{"id":"<reqId>","obj":"<obj>","a":"nul","args":"<path>"}` — no next_act/warnings |
+| `POST /:db/_m_new/:up` | Extra fields (warnings, warning) + ord as string | PHP die(): `{"id":$i,"obj":$obj,"ord":$ord,"next_act":"$a","args":"$arg","val":"<val>"}` — no warnings; ord is int |
 
 ### Session 8 Fixes (_ref_reqs SQL structure + _d_ref id/obj)
 
@@ -123,7 +135,7 @@
 | `GET /:db/validate` | `router.get('/:db/validate')` | ✅ | Token validation |
 | `POST /:db/getcode` | `router.post('/:db/getcode')` | ⚠️ | Returns `{msg:'ok'}` — no real email send |
 | `POST /:db/checkcode` | `router.post('/:db/checkcode')` | ⚠️ | OTP verify but no code generation |
-| `POST /my/register` | `router.post('/my/register')` | ⚠️ | Mock only; no DB insertion |
+| `POST /my/register` | `router.post('/my/register')` | ✅ | Fixed s9: full PHP newUser() flow + correct response format |
 | `GET /:db/exit` | `router.all('/:db/exit')` | ✅ | Deletes token, clears cookie |
 | `POST /:db/jwt` | `router.post('/:db/jwt')` | ✅ | JWT exchange |
 | `POST /:db/confirm` | `router.post('/:db/confirm')` | ✅ | Password confirmation |
@@ -221,7 +233,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_m_save` | **type id** | **object id** | `object` | `"saved1=1&F_U=<up>&F_I=<obj>"` always | ✅ fixed s4+s5 |
 | `_m_save` (copy) | **type id** | **object id** | `object` | `"copied1=1&F_U=<up>&F_I=<obj>"` always | ✅ fixed s4+s5 |
 | `_m_del` | type id | deleted objectId | `object` | `"F_U=<up>"` only for array elements; `""` for refs | ✅ fixed s5 |
-| `_m_set` | `""` (or req id) | object id | (uses `"a"` field in PHP) | `""` or file path | ⚠️ partial |
+| `_m_set` | `""` (or req id as string) | object id (string) | uses `"a"` not `next_act` | `""` or file path | ✅ fixed s9 |
 | `_m_move` | object id | **null** | `object` | `"moved&"` or `"moved&&F_U=<up>"` if up!=1 | ✅ fixed s4+s5 |
 | `_m_up` | **type id** (obj.t) | **null** | `object` | `"F_U=<parent>"` always | ✅ fixed s4+s5 |
 | `_m_ord` | **parent id** | **parent id** | `object` | `"F_U=<parent>"` if parent>1 | ✅ fixed s4 |
@@ -292,8 +304,8 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | # | Issue | Location | Action |
 |---|---|---|---|
 | 6 | `getcode` / `checkcode` / password reset: no real email/SMS | Auth routes | Document limitation; add stub config |
-| 7 | `register` (`/my/register`): mock only, no real DB insert | register route | Implement or document |
-| 8 | `backup` delta encoding: ORD field may not match PHP's compact format exactly | buildZip / backup | Test round-trip: backup → restore → compare |
+| 7 | ~~`register`~~ | ~~register route~~ | ✅ Fixed s9: up=1, EMAIL/role(164)/date(156) requisites; response matches PHP login() format |
+| 8 | ~~`backup` delta encoding~~ | ~~backup/restore~~ | ✅ Verified s8: round-trip test — 35488 rows backup → restore OK. Format exactly matches PHP (`;`=sequential, `/`=same-up, base36 deltas, ord as-is when !=1) |
 | 9 | `terms` grant filter: `grant1Level` applies READ check but may not match PHP's exact `check_grant` recursion | terms route | Manual test with restricted role |
 | 10 | ~~`_m_new` `next_act=edit_obj` condition~~ | ~~_m_new route~~ | ✅ Correct: `SELECT id WHERE up=typeId LIMIT 1` → hasReqs → edit_obj or object |
 
