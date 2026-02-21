@@ -3211,22 +3211,21 @@ router.post('/:db/_m_new/:up?', (req, res, next) => {
     );
     const hasReqs = reqRows.length > 0;
 
-    // PHP _m_new die(): {"id":$newId,"obj":$newId,"ord":$ord,"next_act":"...","args":"...","val":"..."}
-    // id = obj = new objectId (PHP: $id = insertId, obj not set separately → both equal objectId)
-    // args: "new1=1&" when has reqs (prefix for client to show new-object flow)
-    //       "F_U=$up" when up!=1 and no reqs (parent filter for list view)
+    // PHP _m_new die() (line 8547): {"id":$i,"obj":$obj,"ord":$ord,"next_act":"$a","args":"$arg","val":"<htmlentities(val)>"}
+    // No "warnings" or "warning" field — PHP uses direct die() not api_dump() for _m_new
+    // id = obj = new objectId
+    // args: "new1=1&" when has reqs; "F_U=$up" when up!=1 and no reqs; "" otherwise
     const next_act = hasReqs ? 'edit_obj' : 'object';
     const args = hasReqs ? 'new1=1&' : (parentId !== 1 ? `F_U=${parentId}` : '');
 
-    return legacyRespond(req, res, db, {
-      id,
-      obj: id,
-      next_act,
-      args,
-      ord: order,
-      val: value,
-      warning: '',
-    });
+    if (isApiRequest(req)) {
+      return res.json({ id, obj: id, ord: parseInt(order, 10) || 0, next_act, args, val: value });
+    }
+    // Non-JSON: redirect like legacyRespond
+    const idPart  = id  ? `/${id}`   : '';
+    const argPart = args && String(args).length ? `?${args}` : '';
+    const hashPart = id != null ? `#${id}` : '';
+    return res.redirect(`/${db}/${next_act}${idPart}${argPart}${hashPart}`);
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy _m_new] Error');
     return res.status(200).json([{ error: error.message }]);
