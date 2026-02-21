@@ -1081,7 +1081,7 @@ router.post('/:db/auth', async (req, res) => {
       logger.warn('[Legacy Auth] User not found', { db, login });
       if (isJSON) {
         // PHP: my_die("Wrong credentials...") → HTTP 200 [{"error":"..."}]
-        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}` }]);
+        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}. Please send login and password as POST-parameters.` }]);
       }
       return res.status(401).send('Invalid credentials');
     }
@@ -1137,7 +1137,7 @@ router.post('/:db/auth', async (req, res) => {
 
       logger.warn('[Legacy Auth] Password mismatch', { db, login });
       if (isJSON) {
-        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}` }]);
+        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}. Please send login and password as POST-parameters.` }]);
       }
       return res.status(401).send('Invalid credentials');
     }
@@ -1553,9 +1553,10 @@ router.post('/my/register', async (req, res) => {
 
   logger.info('[Legacy Register] Success', { email });
 
-  // PHP calls login($db, "", "toConfirm") which returns {message:"toConfirm",...}
+  // PHP calls login($db, "", "toConfirm") which with isApi() returns:
+  // {"message":"toConfirm","db":"my","login":"","details":""}
   if (isJSON) {
-    return res.json({ success: true, message: 'toConfirm' });
+    return res.json({ message: 'toConfirm', db: 'my', login: '', details: '' });
   }
 
   return res.redirect('/my');
@@ -1587,8 +1588,10 @@ router.all('/:db/exit', async (req, res) => {
 
   logger.info('[Legacy Exit] Logout', { db });
 
+  // PHP exit calls login($z) which with isApi() returns:
+  // {"message":"","db":"<db>","login":"","details":""}
   if (isApiRequest(req)) {
-    return res.json({ success: true, message: 'Logged out' });
+    return res.json({ message: '', db, login: '', details: '' });
   }
 
   // Redirect to login page
