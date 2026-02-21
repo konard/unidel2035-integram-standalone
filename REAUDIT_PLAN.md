@@ -1,8 +1,35 @@
 # Legacy PHP→Node.js Re-Audit Plan
 
 > **Branch**: `issue-65-c78c49fee862`
-> **Date**: 2026-02-20
+> **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
+
+## Status Summary (2026-02-21)
+
+### ?JSON Subpage Endpoints — All verified at 0 diffs vs PHP
+
+| Endpoint | Status | Notes |
+|---|---|---|
+| `GET /:db/object/:id?JSON` | ✅ 0 diffs | Full edit_obj response with myrolemenu |
+| `GET /:db/dict?JSON` | ✅ 0 diffs | Flat {id: htmlEsc(val)} for independent types |
+| `GET /:db/sql?JSON` | ✅ 0 diffs | myrolemenu + &functions + &formats |
+| `GET /:db/info?JSON` | ✅ 0 diffs | myrolemenu only |
+| `GET /:db/upload?JSON` | ✅ 0 diffs | myrolemenu only |
+| `GET /:db/form?JSON` | ✅ 0 diffs | myrolemenu + edit_types (with PHP block artifacts) + types + editable |
+| `GET /:db/table?JSON` | ✅ 0 diffs | myrolemenu only |
+| `GET /:db/table/:id?JSON` | ✅ 0 diffs | myrolemenu only |
+| `GET /:db/smartq?JSON` | ✅ 0 diffs | myrolemenu only |
+| `GET /:db/types?JSON` | ✅ 0 diffs | myrolemenu only (no types.html in PHP → falls back to info.html) |
+| `GET /:db/edit_types?JSON` | ✅ 0 diffs | Full: myrolemenu + &main.a.&types (PHP order) + &main.a.&editables + edit_types + types + editable |
+| `GET /:db/report?JSON` | ✅ 0 diffs | Report list |
+
+**Key implementation findings:**
+- PHP `$blocks[$block]` stores `PARENT`, `CONTENT` (template text), AND numeric+named column aliases from `mysqli_fetch_array` — all must be reproduced
+- `form.html` and `edit_types.html` have different `&Edit_Typs` block CONTENT strings
+- PHP `$GLOBALS["basics"]` insertion order: 3,8,9,13,14,11,12,4,10,2,7,6,5,15,16,17 (must be hardcoded array)
+- `action=types` falls back to `info.html` (no `types.html`), returning only myrolemenu
+- `sql` block IDs must be strings (PHP block builder quirk)
+- `getMenuForToken()` shared helper extracted for all subpage JSON handlers
 
 ---
 
