@@ -1523,9 +1523,16 @@ router.post('/my/register', async (req, res) => {
         return res.status(400).send('This email is already registered.');
       }
 
-      // PHP newUser($email, $email, "115", "", "") — inserts USER row under parent 115
-      const nextOrd = await getNextOrder('my', 115, TYPE.USER);
-      const userId = await insertRow('my', 115, nextOrd, TYPE.USER, email.toLowerCase());
+      // PHP newUser($email, $email, "115", "", "") — Insert(1, 0, USER, email, ...)
+      // up=1 (root), ord=0 (literal), NOT under parent 115
+      const userId = await insertRow('my', 1, 0, TYPE.USER, email.toLowerCase());
+
+      // PHP newUser also inserts: EMAIL, role link (164), date (156) — all ord=1
+      const today = new Date();
+      const dateYmd = `${today.getFullYear()}${String(today.getMonth()+1).padStart(2,'0')}${String(today.getDate()).padStart(2,'0')}`;
+      await insertRow('my', userId, 1, TYPE.EMAIL, email.toLowerCase());
+      await insertRow('my', userId, 1, 164, '115');
+      await insertRow('my', userId, 1, 156, dateYmd);
 
       // Insert raw password (PHP inserts plaintext first; on confirm, it hashes it)
       await insertRow('my', userId, 1, TYPE.PASSWORD, regpwd);
@@ -3607,6 +3614,7 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
     }
 
     let uploadedFilePath = null;
+    let lastReqId = '';
 
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
       const typeIdNum = parseInt(attrTypeId, 10);
@@ -3627,31 +3635,24 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
       if (existing) {
         await updateRowValue(db, existing.id, finalValue);
+        lastReqId = String(existing.id);
       } else {
         const attrOrder = await getNextOrder(db, objectId, typeIdNum);
-        await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
+        const newId = await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
+        lastReqId = String(newId);
       }
     }
 
-    // Fetch type and parent for PHP api_dump() response
-    const [objInfo] = await pool.query(
-      `SELECT t, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
-    );
-    const objType = objInfo.length > 0 ? objInfo[0].t : 0;
-    const objUp   = objInfo.length > 0 ? objInfo[0].up : 0;
-
     logger.info('[Legacy _m_set] Attributes set', { db, id: objectId });
 
-    // PHP _m_set die() format: {"id":"<reqId>", "obj":"<objectId>", "a":"nul", "args":"<filePath>"}
-    // PHP: $id = "" initially (gets set to req id inside loop); $obj = objectId
-    // PHP args: file path for uploads, "" otherwise (no F_U)
-    // We include both "a" (PHP format) and "next_act" (Node.js standard) for compatibility
-    legacyRespond(req, res, db, {
-      id: '',
-      obj: objectId,
-      next_act: 'nul',
-      args: uploadedFilePath || '',
+    // PHP _m_set die() format (line 9170): {"id":"<reqId>", "obj":"<objectId>", "a":"nul", "args":"<filePath>"}
+    // PHP: $id = "" initially (gets set to last req id inside loop); $obj = objectId (string)
+    // PHP args: file path for uploads, "" otherwise (no F_U, no next_act, no warnings)
+    return res.json({
+      id: lastReqId,
+      obj: String(objectId),
       a: 'nul',
+      args: uploadedFilePath || '',
     });
   } catch (error) {
     logger.error('[Legacy _m_set] Error', { error: error.message, db });
