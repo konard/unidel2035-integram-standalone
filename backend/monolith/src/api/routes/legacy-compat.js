@@ -1183,14 +1183,14 @@ router.post('/:db/auth', async (req, res) => {
       token = generateToken();
       xsrf = generateXsrf(token, db, db);
       await pool.query(
-        `INSERT INTO ${db} (up, t, val) VALUES (?, ${TYPE.TOKEN}, ?)`,
+        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
         [user.uid, token]
       );
     }
 
     if (!user.xsrf) {
       await pool.query(
-        `INSERT INTO ${db} (up, t, val) VALUES (?, ${TYPE.XSRF}, ?)`,
+        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`,
         [user.uid, xsrf]
       );
     } else {
