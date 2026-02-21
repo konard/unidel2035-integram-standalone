@@ -370,6 +370,60 @@ const REV_BASE_TYPE = {
   [TYPE.SIGNED]: 'SIGNED',
 };
 
+// Format a raw DB value for PHP-compatible object list display
+function formatObjVal(base, rawVal) {
+  if (rawVal === null || rawVal === undefined) return '';
+  const v = String(rawVal);
+  if (base === 'DATE') {
+    if (/^\d{8}$/.test(v)) return `${v.slice(6,8)}.${v.slice(4,6)}.${v.slice(0,4)}`;
+    const num = parseFloat(v);
+    if (!isNaN(num) && v.length > 8) {
+      const d = new Date(Math.floor(num) * 1000);
+      return `${String(d.getUTCDate()).padStart(2,'0')}.${String(d.getUTCMonth()+1).padStart(2,'0')}.${d.getUTCFullYear()}`;
+    }
+    return v;
+  }
+  if (base === 'DATETIME') {
+    const num = parseFloat(v);
+    if (!isNaN(num)) {
+      const d = new Date(Math.floor(num) * 1000);
+      const p = n => String(n).padStart(2, '0');
+      return `${p(d.getUTCDate())}.${p(d.getUTCMonth()+1)}.${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+    }
+    return v;
+  }
+  if (base === 'PWD') return '******';
+  return v;
+}
+
+// HTML-escape special chars (PHP htmlspecialchars equivalent)
+function htmlEsc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// PHP GetSha(i) = sha1(Salt(z, i)) = sha1(SALT + z.toUpperCase() + z + i)
+function fileGetSha(db, i) {
+  return crypto.createHash('sha1').update(phpSalt(db, String(i), db)).digest('hex');
+}
+
+// Build PHP-compatible file download link for object list view
+// PHP: <a target="_blank" href="/GetSubdir(id)/GetFilename(id).ext">filename</a>
+function buildObjFileLink(db, rowId, val) {
+  if (!val) return '';
+  const fileId = Number(rowId);
+  if (!fileId || isNaN(fileId)) return String(val);
+  const ext = val.includes('.') ? val.split('.').pop() : '';
+  const folderNum = Math.floor(fileId / 1000);
+  const folder = `${folderNum}${fileGetSha(db, folderNum).slice(0, 8)}`;
+  const fileNum = ('00' + fileId).slice(-3);
+  const filename = `${fileNum}${fileGetSha(db, fileId).slice(0, 8)}`;
+  return `<a target="_blank" href="/download/${db}/${folder}/${filename}.${ext}">${val}</a>`;
+}
+
 // Store for grants per request (thread-local simulation)
 const grantStore = new Map();
 
@@ -1774,20 +1828,20 @@ router.get('/:db/:page*', async (req, res, next) => {
         const orderByVal = allObjParams.order_val === 'val';
         const descOrder  = String(allObjParams.desc) === '1';
 
-        // LIMIT (format: "N" or "offset,N")
-        let objLimit = null, objOffset = 0;
+        // LIMIT (format: "N" or "offset,N"; PHP default = 20)
+        let objLimit = 20, objOffset = 0;  // PHP default limit
         const rawObjLimit = allObjParams.LIMIT || allObjParams.limit;
         if (rawObjLimit !== undefined) {
           const parts = String(rawObjLimit).split(',');
           if (parts.length === 2) {
             objOffset = parseInt(parts[0], 10) || 0;
-            objLimit  = parseInt(parts[1], 10) || 100;
+            objLimit  = parseInt(parts[1], 10) || 20;
           } else {
-            objLimit = parseInt(parts[0], 10) || 100;
+            objLimit = parseInt(parts[0], 10) || 20;
           }
         }
 
-        const objWhereParts  = ['t = ?'];
+        const objWhereParts  = ['t = ?', 'up != 0'];  // up=0 = type root row, excluded like PHP
         const objWhereParams = [subId];
         if (filterVal !== null) {
           objWhereParts.push('val = ?');
@@ -1799,10 +1853,8 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
         const objOrderStr = orderByVal
           ? `val ${descOrder ? 'DESC' : 'ASC'}`
-          : 'ord';
-        const objLimitStr = objLimit !== null
-          ? ` LIMIT ${objOffset}, ${objLimit}`
-          : '';
+          : 'id';
+        const objLimitStr = ` LIMIT ${objOffset}, ${objLimit}`;
 
         const [objRows] = await pool.query(
           `SELECT id, val, up, t AS base, ord FROM \`${db}\` WHERE ${objWhereParts.join(' AND ')} ORDER BY ${objOrderStr}${objLimitStr}`,
@@ -1853,120 +1905,132 @@ router.get('/:db/:page*', async (req, res, next) => {
           [subId]
         );
 
-        // ── 2. Req field definitions with PHP-compatible key computation ───
-        // Key rule (from DB analysis):
-        //   If type_def is a root-level user type (up<=1, id!=t): key = req.t
-        //   Otherwise (base/internal type):                        key = req.id
-        // type_def.val = the req name (e.g. "Panel", "Description")
-        // req.val      = the attrs string (e.g. ":ALIAS=Имя:")
+        // ── 2. Req field definitions — PHP-compatible SQL (index.php line 5770) ──
+        // Key = typs.id when arr child exists (ord=1); a.id otherwise.
+        // ref_id set when type refs a non-self-referential type (rare).
+        // arr_id set when no ref and type has a first child.
         const [reqDefStd] = await pool.query(
-          `SELECT req.id AS req_id,
-                  req.t  AS req_t,
-                  req.val AS req_attrs_val,
-                  req.ord,
-                  type_def.val  AS type_name,
-                  type_def.up   AS type_up,
-                  type_def.t    AS type_def_t,
-                  COALESCE(type_def.t, req.t) AS resolved_base,
-                  CASE
-                    WHEN type_def.id IS NOT NULL
-                         AND type_def.id != type_def.t
-                         AND type_def.up <= 1
-                    THEN req.t
-                    ELSE req.id
-                  END AS req_key
-           FROM \`${db}\` req
-           LEFT JOIN \`${db}\` type_def ON type_def.id = req.t
-           WHERE req.up = ?
-           ORDER BY req.ord`,
+          `SELECT CASE WHEN arrs.id IS NULL THEN a.id ELSE typs.id END AS t,
+                  CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ,
+                  CASE WHEN refs.id IS NULL THEN typs.val ELSE refs.val END AS type_val,
+                  refs.id AS ref_id, arrs.id AS arr_id, a.val AS attrs,
+                  a.id AS req_row_id, a.t AS req_t
+           FROM \`${db}\` a, \`${db}\` typs
+           LEFT JOIN \`${db}\` refs ON refs.id=typs.t AND refs.t!=refs.id
+           LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
+           WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`,
           [subId]
         );
 
-        // ── 3. Build req_base / req_base_id / req_type / req_order / req_attrs ──
+        // ── 3. Build req_base / req_base_id / req_type / req_order / req_attrs / arr_type / ref_type ──
         const req_base    = {};
         const req_base_id = {};
         const req_type    = {};
         const req_attrs   = {};
         const req_order   = [];
+        const arr_type    = {};
+        const ref_type    = {};
         for (const rd of reqDefStd) {
-          const k        = String(rd.req_key);
-          const baseTypId = rd.resolved_base || rd.req_t;
-          req_base[k]    = REV_BASE_TYPE[baseTypId] || 'SHORT';
-          req_base_id[k] = String(baseTypId);
-          req_type[k]    = rd.type_name || String(rd.req_t);
-          req_attrs[k]   = rd.req_attrs_val || '';
+          const k = String(rd.t);
+          // PHP: base_typ=0 → 'TAB_DELIMITER' in req_base (section separator)
+          req_base[k]    = rd.base_typ === 0 ? 'TAB_DELIMITER' : (REV_BASE_TYPE[rd.base_typ] || 'SHORT');
+          req_base_id[k] = String(rd.base_typ);
+          // PHP: FetchAlias extracts :ALIAS=xxx: from attrs, uses as display name
+          const aliasMatch = (rd.attrs || '').match(/:ALIAS=(.*?):/u);
+          req_type[k]    = aliasMatch ? aliasMatch[1] : (rd.type_val || String(rd.req_t));
+          req_attrs[k]   = rd.attrs || '';
           req_order.push(k);
-        }
-
-        // ── 4. arr_type: first child row ID for each user-type req ─────────
-        const userTypeReqs = reqDefStd.filter(rd =>
-          rd.type_def_t !== null && rd.req_t !== rd.resolved_base  // req.t is a user type
-        );
-        const arr_type = {};
-        const ref_type = {};
-        if (userTypeReqs.length > 0) {
-          const userTypeIds = userTypeReqs.map(rd => rd.req_t);
-          const phUT = userTypeIds.map(() => '?').join(',');
-          // First child of each user type (gives arr_type value)
-          const [arrRows] = await pool.query(
-            `SELECT c.up AS parent_id, c.id AS child_id
-             FROM \`${db}\` c
-             WHERE c.up IN (${phUT}) AND c.id != c.t
-             ORDER BY c.up, c.ord`,
-            userTypeIds
-          );
-          const firstChildMap = {};
-          for (const r of arrRows) {
-            if (firstChildMap[r.parent_id] === undefined) {
-              firstChildMap[r.parent_id] = r.child_id;
-            }
-          }
-          for (const rd of userTypeReqs) {
-            const k = String(rd.req_key);
-            const firstChild = firstChildMap[rd.req_t];
-            if (firstChild !== undefined) arr_type[k] = String(firstChild);
-            // ref_type: req.t when it is a user type (not base)
-            ref_type[k] = String(rd.req_t);
-          }
+          if (rd.arr_id != null) arr_type[k] = String(rd.arr_id);
+          if (rd.ref_id != null) ref_type[k] = String(rd.ref_id);
         }
 
         // ── 5. Fetch req values for objects (reqs map) ─────────────────────
-        // PHP reqs = {objId: {reqKey: value}}
-        // Data rows: {up=objId, t=reqKey (=req.t for user types, req.id for base types)}
-        const reqKeyByReqT  = {};  // req.t → req_key
-        const reqKeyByReqId = {};  // req.id → req_key (for base-type reqs)
-        for (const rd of reqDefStd) {
-          const k = String(rd.req_key);
-          reqKeyByReqT[rd.req_t]   = k;
-          reqKeyByReqId[rd.req_id] = k;
-        }
-
-        const reqsStd = {};
+        // arr-type reqs: count children (data row t = key) → integer count
+        // non-arr reqs: first val where data row t = req_t → string val
+        const reqsStd    = {};
+        let   refDataStd = {};  // {oKey: {k: {ref_obj_id, ref_obj_name}}} for view_reqs links
         if (objRows.length > 0 && reqDefStd.length > 0) {
           const objIds = objRows.map(r => r.id);
           const ph     = objIds.map(() => '?').join(',');
-          const [reqVals] = await pool.query(
-            `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`,
-            objIds
-          );
-          // Index by (up, t)
-          const rawMap = {};
-          for (const rv of reqVals) {
-            if (!rawMap[rv.up]) rawMap[rv.up] = {};
-            rawMap[rv.up][rv.t] = rv.val;
-          }
-          for (const o of objRows) {
-            const entry = {};
-            for (const rd of reqDefStd) {
-              const k = String(rd.req_key);
-              // Try req_key first (matches t=reqKey for user-type data rows)
-              const val = rawMap[o.id]?.[rd.req_key] ??
-                          rawMap[o.id]?.[rd.req_t]   ??
-                          rawMap[o.id]?.[rd.req_id]  ??
-                          undefined;
-              if (val !== undefined && val !== '') entry[k] = val;
+
+          // Arr-type: key = typs.id = data row's t → COUNT
+          const arrDefs = reqDefStd.filter(rd => rd.arr_id != null);
+          if (arrDefs.length > 0) {
+            const arrKeys = arrDefs.map(rd => rd.t);
+            const phArr   = arrKeys.map(() => '?').join(',');
+            const [cntRows] = await pool.query(
+              `SELECT up, t, COUNT(*) AS cnt FROM \`${db}\`
+               WHERE up IN (${ph}) AND t IN (${phArr}) GROUP BY up, t`,
+              [...objIds, ...arrKeys]
+            );
+            for (const cr of cntRows) {
+              const oKey = String(cr.up);
+              const k    = String(cr.t);
+              if (!reqsStd[oKey]) reqsStd[oKey] = {};
+              reqsStd[oKey][k] = Number(cr.cnt);
             }
-            if (Object.keys(entry).length > 0) reqsStd[o.id] = entry;
+          }
+
+          // Non-arr non-ref: data row's t = rd.t (req def id), val = stored value
+          const nonRefNonArrDefs = reqDefStd.filter(rd => rd.arr_id == null && rd.ref_id == null);
+          if (nonRefNonArrDefs.length > 0) {
+            const nonArrKeys = nonRefNonArrDefs.map(rd => rd.t);
+            const phNA       = nonArrKeys.map(() => '?').join(',');
+            const [valRows] = await pool.query(
+              `SELECT up, id, t, val FROM \`${db}\`
+               WHERE up IN (${ph}) AND t IN (${phNA}) AND val != '' ORDER BY up, ord`,
+              [...objIds, ...nonArrKeys]
+            );
+            for (const vr of valRows) {
+              const k    = String(vr.t);
+              const oKey = String(vr.up);
+              if (!reqsStd[oKey]) reqsStd[oKey] = {};
+              if (reqsStd[oKey][k] === undefined) {
+                if (req_base[k] === 'FILE') {
+                  // PHP: reqs val = Format_Val_View(FILE, req_id+':'+val) = <a href="...">name</a>
+                  reqsStd[oKey][k] = buildObjFileLink(db, vr.id, vr.val);
+                } else {
+                  reqsStd[oKey][k] = formatObjVal(req_base[k] || 'SHORT', vr.val);
+                }
+              }
+            }
+          }
+
+          // Non-arr ref: data row's val = req key (rd.t), t = referenced object id
+          // PHP: for ref reqs, reqs[objId][k] = refObjName, reqs[objId][ref_k] = refTypeId:refObjId
+          const refDefs = reqDefStd.filter(rd => rd.arr_id == null && rd.ref_id != null);
+          if (refDefs.length > 0) {
+            const refKeys    = refDefs.map(rd => String(rd.t));
+            const allKnownT  = reqDefStd.map(rd => rd.t);  // exclude known req def ids from ref matches
+            const phRef      = refKeys.map(() => '?').join(',');
+            const phExclude  = allKnownT.map(() => '?').join(',');
+            const [refRows] = await pool.query(
+              `SELECT d.up, d.val AS req_key, d.t AS ref_obj_id, o.val AS ref_obj_name
+               FROM \`${db}\` d
+               JOIN \`${db}\` o ON o.id = d.t
+               WHERE d.up IN (${ph}) AND d.val IN (${phRef}) AND d.t NOT IN (${phExclude})
+               ORDER BY d.up, d.ord`,
+              [...objIds, ...refKeys, ...allKnownT]
+            );
+            for (const rr of refRows) {
+              const oKey = String(rr.up);
+              const k    = String(rr.req_key);
+              if (!reqsStd[oKey]) reqsStd[oKey] = {};
+              if (!refDataStd[oKey]) refDataStd[oKey] = {};
+              const refObjName = String(rr.ref_obj_name || '').replace(/,/g, '&comma;');
+              const refObjId   = String(rr.ref_obj_id);
+              if (reqsStd[oKey][k] === undefined) {
+                // First ref value
+                reqsStd[oKey][k]           = refObjName;
+                reqsStd[oKey][`ref_${k}`]  = `${ref_type[k] || ''}:${refObjId}`;
+                refDataStd[oKey][k] = { ref_obj_id: rr.ref_obj_id, ref_obj_name: rr.ref_obj_name || '' };
+              } else {
+                // Multi-ref: comma-join (PHP: implode(",", $val) / implode(",", $ref_id))
+                reqsStd[oKey][k]          = String(reqsStd[oKey][k]) + ',' + refObjName;
+                reqsStd[oKey][`ref_${k}`] = String(reqsStd[oKey][`ref_${k}`]) + ',' + refObjId;
+                refDataStd[oKey][k] = { multi: true };  // multi → view_reqs shows ""
+              }
+            }
           }
         }
 
@@ -1974,19 +2038,40 @@ router.get('/:db/:page*', async (req, res, next) => {
         let mainMyrolemenu = { href: [], name: [] };
         if (token) {
           try {
-            const [uRows] = await pool.query(
-              `SELECT role_def.id AS role_obj_id
-               FROM \`${db}\` u
-               JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
-               LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
-                 ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
-               WHERE u.t = ${TYPE.USER} LIMIT 1`,
-              [token]
-            );
-            if (uRows.length > 0) {
+            let uRows;
+            if (token.startsWith('Basic ')) {
+              const decoded  = Buffer.from(token.slice(6), 'base64').toString('utf8');
+              const colonIdx = decoded.indexOf(':');
+              if (colonIdx > 0) {
+                const basicLogin = decoded.slice(0, colonIdx);
+                const basicPwd   = decoded.slice(colonIdx + 1);
+                const pwdHash    = phpCompatibleHash(basicLogin, basicPwd, db);
+                [uRows] = await pool.query(
+                  `SELECT role_def.id AS role_obj_id
+                   FROM \`${db}\` u
+                   JOIN \`${db}\` pwd ON pwd.up = u.id AND pwd.t = ${TYPE.PASSWORD} AND pwd.val = ?
+                   LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+                     ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+                   WHERE u.t = ${TYPE.USER} AND u.val = ? LIMIT 1`,
+                  [pwdHash, basicLogin]
+                );
+              }
+            } else {
+              [uRows] = await pool.query(
+                `SELECT role_def.id AS role_obj_id
+                 FROM \`${db}\` u
+                 JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
+                 LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+                   ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+                 WHERE u.t = ${TYPE.USER} LIMIT 1`,
+                [token]
+              );
+            }
+            console.error('[myrolemenu debug] uRows:', JSON.stringify(uRows));
+            if (uRows && uRows.length > 0) {
               mainMyrolemenu = await buildMyrolemenu(pool, db, uRows[0].role_obj_id || null);
             }
-          } catch (_e) { /* ignore myrolemenu errors */ }
+          } catch (_e) { console.error('[myrolemenu object error]', _e.message, _e.stack); }
         }
 
         // ── 7. Build response ───────────────────────────────────────────────
@@ -1997,7 +2082,8 @@ router.get('/:db/:page*', async (req, res, next) => {
           ? 'unique' : '';
         const typeId  = typeRow ? typeRow.id  : subId;
         const typeVal = typeRow ? typeRow.val  : '';
-        const typeUp  = typeRow ? typeRow.up   : 0;
+        // PHP computes up=1 for user-defined types (id != t), up=0 for base types
+        const typeUp  = typeRow ? (typeRow.id !== typeRow.base_type_id ? 1 : 0) : 0;
 
         // Filter params for uni_obj
         const fuParam = allObjParams.F_U !== undefined ? String(allObjParams.F_U) : '';
@@ -2012,21 +2098,25 @@ router.get('/:db/:page*', async (req, res, next) => {
             arr_type: [], ref_type: [], typ: [], base_typ: [], id: [], filter: [], val: []
           };
           for (const rd of reqDefStd) {
-            const k     = String(rd.req_key);
-            const isArr = arr_type[k] !== undefined;
-            const isRef = ref_type[k] !== undefined;
+            const k     = String(rd.t);
+            const isArr = rd.arr_id != null;
+            const isRef = rd.ref_id != null;
+            const attrs = rd.attrs || '';
             head.ref.push(isRef ? 't-ref' : '');
-            head.multi.push('');
+            // PHP: multi = 't-multi' when ref_id set AND attrs has ':MULTI:'
+            head.multi.push(isRef && attrs.includes(':MULTI:') ? 't-multi' : '');
             head.array.push(isArr ? 'arr' : '');
-            head.mandatory.push('');
+            // PHP: mandatory = 'mandatory' when attrs has ':!NULL:'
+            head.mandatory.push(attrs.includes(':!NULL:') ? 'mandatory' : '');
             head.grant.push('');
             head.arr_type.push(isArr ? `arr-type="${k}"` : '');
             head.ref_type.push(isRef ? `ref-type="${ref_type[k]}"` : '');
-            head.typ.push(String(rd.req_id));   // head.typ = actual row ID
-            head.base_typ.push(String(rd.resolved_base || rd.req_t));
+            head.typ.push(String(rd.req_row_id));  // actual req row id (a.id)
+            head.base_typ.push(String(rd.base_typ));
             head.id.push(String(typeId));
             head.filter.push('');
-            head.val.push(rd.type_name || String(rd.req_t));
+            // PHP: FetchAlias extracts :ALIAS=xxx: from attrs for display name
+            head.val.push(req_type[k]);  // already computed with alias above
           }
           return head;
         })() : null;
@@ -2038,20 +2128,63 @@ router.get('/:db/:page*', async (req, res, next) => {
           val:   objRows.map(r => r.val || ''),
         };
 
-        // &object_reqs and view_reqs: first req value displayed per object
+        // &object_reqs and view_reqs: for each object × each req type
+        // arr-type → HTML count link (always, even count=0)
+        // non-arr  → stored val or ""
         const objReqs = {};
         const viewReqsAlign = [];
         const viewReqsBase  = [];
         const viewReqsVal   = [];
-        if (hasReqs && Object.keys(reqsStd).length > 0) {
-          const firstReqKey = req_order[0];
+        const hasArrReqs = reqDefStd.some(rd => rd.arr_id != null);
+        if (hasReqs) {
           for (const o of objRows) {
-            if (reqsStd[o.id] && reqsStd[o.id][firstReqKey] !== undefined) {
-              const v = String(reqsStd[o.id][firstReqKey]);
-              objReqs[o.id] = [v];
-              viewReqsAlign.push('LEFT');
-              viewReqsBase.push(req_base[firstReqKey] || 'SHORT');
-              viewReqsVal.push(v);
+            const oKey    = String(o.id);
+            const rowVals = [];
+            for (const rd of reqDefStd) {
+              const k = String(rd.t);
+              if (rd.arr_id != null) {
+                // Arr-type: always emit count link (count=0 if no data)
+                const cnt = (reqsStd[oKey] && reqsStd[oKey][k] != null)
+                  ? reqsStd[oKey][k] : 0;
+                rowVals.push(`<A HREF="/${db}/object/${k}/?F_U=${o.id}">(${cnt})</A>`);
+              } else if (rd.ref_id != null) {
+                // Ref-type: PHP generates <A HREF="/{db}/object/{ref_type}/?F_I={ref_obj_id}">{name}</A>
+                // Multi refs (>1) → PHP shows "" for cell; missing → ""
+                const refInfo = refDataStd[oKey]?.[k];
+                if (refInfo && !refInfo.multi) {
+                  const refTypeId = ref_type[k] || '';
+                  const name = htmlEsc(refInfo.ref_obj_name);
+                  rowVals.push(`<A HREF="/${db}/object/${refTypeId}/?F_I=${refInfo.ref_obj_id}">${name}</A>`);
+                } else {
+                  rowVals.push('');
+                }
+              } else {
+                // Non-arr non-ref: stored val (already formatted, including FILE links)
+                const v = (reqsStd[oKey] && reqsStd[oKey][k] != null)
+                  ? String(reqsStd[oKey][k]) : '';
+                rowVals.push(v);
+              }
+            }
+            // Always include when arr-type reqs exist; otherwise only if some val
+            const hasData = hasArrReqs || rowVals.some(v => v !== '');
+            if (hasData) {
+              objReqs[oKey] = rowVals;
+              for (let i = 0; i < req_order.length; i++) {
+                const k = req_order[i];
+                const rd = reqDefStd[i];
+                const isArr = rd.arr_id != null;
+                // PHP uses 'REFERENCE' for base_typ=0 only; ref-type reqs use their actual base (SHORT)
+                const base = isArr ? 'SHORT' : (rd.base_typ === 0 ? 'REFERENCE' : (req_base[k] || 'SHORT'));
+                // PHP aligns: DATE/PWD → CENTER, NUMBER/SIGNED → RIGHT, DATETIME → LEFT, others → LEFT
+                let align = 'LEFT';
+                if (!isArr) {
+                  if (base === 'DATE' || base === 'PWD') align = 'CENTER';
+                  else if (base === 'NUMBER' || base === 'SIGNED') align = 'RIGHT';
+                }
+                viewReqsAlign.push(align);
+                viewReqsBase.push(base);
+                viewReqsVal.push(rowVals[i]);
+              }
             }
           }
         }
@@ -2104,15 +2237,29 @@ router.get('/:db/:page*', async (req, res, next) => {
           response['&main.a.&uni_obj.&uni_obj_head_filter'] = {
             typ: req_order,
           };
+          // filter_req_rcm: text-filterable reqs (not DATE/DATETIME/NUMBER/SIGNED)
+          // filter_req_dns: range-filterable reqs (DATE/DATETIME/NUMBER/SIGNED) with FR_/TO_ keys
+          const DNS_BASES = new Set(['DATE', 'DATETIME', 'NUMBER', 'SIGNED']);
+          const FILTER_EXCLUDED_BASES = new Set(['DATE', 'DATETIME', 'NUMBER', 'SIGNED', 'BOOLEAN']);
+          const rcmKeys = req_order.filter(k => !FILTER_EXCLUDED_BASES.has(req_base[k]));
           response['&main.a.&uni_obj.&uni_obj_head_filter.&filter_req_rcm'] = {
-            f_typ:         req_order.map(k => `F_${k}`),
-            '_parent_.ref': req_order.map(k => k),
-            filter:        req_order.map(() => ''),
-            '_parent_.dd': req_order.map(() => ''),
+            f_typ:          rcmKeys.map(k => `F_${k}`),
+            '_parent_.ref': rcmKeys.map(k => ref_type[k] || k),
+            filter:         rcmKeys.map(() => ''),
+            '_parent_.dd':  rcmKeys.map(k => ref_type[k] ? 'dropdown-toggle' : ''),
           };
+          const dnsKeys = req_order.filter(k => DNS_BASES.has(req_base[k]));
+          if (dnsKeys.length > 0) {
+            response['&main.a.&uni_obj.&uni_obj_head_filter.&filter_req_dns'] = {
+              f_typ_fr:  dnsKeys.map(k => `FR_${k}`),
+              filter_fr: dnsKeys.map(() => ''),
+              f_typ_to:  dnsKeys.map(k => `TO_${k}`),
+              filter_to: dnsKeys.map(() => ''),
+            };
+          }
         }
 
-        response['object']                             = objRows.map(r => ({ id: r.id, val: r.val, up: r.up, base: r.base }));
+        response['object']                             = objRows.map(r => ({ id: String(r.id), val: r.val, up: String(r.up), base: String(r.base) }));
         response['&main.a.&uni_obj.&uni_obj_all']      = uniObjAll;
 
         if (hasReqs && Object.keys(reqsStd).length > 0) {
@@ -2124,6 +2271,16 @@ router.get('/:db/:page*', async (req, res, next) => {
             align: viewReqsAlign,
             base:  viewReqsBase,
             val:   viewReqsVal,
+          };
+        }
+
+        // PHP includes &no_page only when page is full (objRows.length >= limit)
+        if (objRows.length >= (objLimit || 20)) {
+          response['&main.a.&uni_obj.&no_page'] = {
+            id:    [String(typeId)],
+            lnx:   [''],
+            f_u:   [fuParam || '1'],
+            limit: [String(objLimit || 20)],
           };
         }
 
@@ -2661,7 +2818,8 @@ router.get('/:db/:page*', async (req, res, next) => {
         return res.json(editResp);
       }
     } catch (err) {
-      logger.error('[Legacy page JSON] Error', { error: err.message, db, page });
+      logger.error('[Legacy page JSON] Error', { error: err.message, stack: err.stack, db, page });
+      console.error('[DEBUG JSON Error]', err);
       return res.status(200).json([{ error: err.message }]);
     }
   }

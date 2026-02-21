@@ -1,5 +1,5 @@
 <?php
-$connection = mysqli_connect("localhost", "integram", "integram123", "integram") or die("Couldn't connect.");
+$connection = mysqli_connect("127.0.0.1", "integram", "integram123", "integram", 3307) or die("Couldn't connect.");
 $connection->set_charset("utf8mb4");
 
 global $mail_config;
