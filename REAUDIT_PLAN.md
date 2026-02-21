@@ -106,7 +106,8 @@
 | `GET /:db/_dict/:id` | `router.all('/:db/_dict/:typeId?')` | ✅ | |
 | `GET /:db/_d_main/:id` | `router.all('/:db/_d_main/:typeId')` | ✅ | Full type editor data |
 | `GET /:db/_ref_reqs/:id` | `router.get('/:db/_ref_reqs/:refId')` | ⚠️ | Static data only; PHP evaluates dynamic `attrs` formula |
-| `GET /:db/_connect` | `router.all('/:db/_connect')` | ✅ | DB ping |
+| `GET /:db/_connect` | `router.all('/:db/_connect')` | ✅ | DB ping (no id) |
+| `GET /:db/_connect/:id` | `router.all('/:db/_connect/:id?')` | ✅ fixed session 3 | Fetches CONNECT requisite URL and proxies request |
 
 ### ✅ Report Endpoints
 

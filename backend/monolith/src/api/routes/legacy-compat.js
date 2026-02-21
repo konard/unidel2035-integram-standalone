@@ -4500,17 +4500,47 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
 });
 
 /**
- * _connect - Check database connection
- * GET/POST /:db/_connect
+ * _connect - Check database connection (or proxy to CONNECT requisite URL if id given)
+ * GET/POST /:db/_connect[/:id]
  */
-router.all('/:db/_connect', async (req, res) => {
-  const { db } = req.params;
+router.all('/:db/_connect/:id?', async (req, res) => {
+  const { db, id: idParam } = req.params;
 
   if (!isValidDbName(db)) {
     return res.status(200).json([{ error: 'Invalid database'  }]);
   }
 
+  const objectId = parseInt(idParam || '0', 10);
+
   try {
+    const pool = getPool();
+
+    // PHP: if $id == 0 → error; else fetch CONNECT requisite URL and proxy
+    if (objectId) {
+      const [[row]] = await pool.query(
+        `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CONNECT} LIMIT 1`,
+        [objectId]
+      );
+      if (!row || !row.val) {
+        return res.status(200).send('');
+      }
+      // Build proxy URL: append all GET params (PHP: foreach($_GET as $k=>$v) $url .= "&$k=$v")
+      const connectorUrl = row.val;
+      const extraParams = new URLSearchParams(req.query).toString();
+      const sep = connectorUrl.includes('?') ? '&' : '?';
+      const proxyUrl = connectorUrl + (extraParams ? sep + extraParams : '');
+
+      // Use native fetch (Node.js 18+) or fall back to debug response
+      const fetchFn = typeof fetch !== 'undefined' ? fetch : null;
+      if (!fetchFn) {
+        return res.status(200).send(JSON.stringify({ proxy: proxyUrl }));
+      }
+      const upstream = await fetchFn(proxyUrl, { headers: { 'User-Agent': 'Integram' } });
+      const body = await upstream.text();
+      return res.status(upstream.ok ? 200 : upstream.status).send(body);
+    }
+
+    // No id — DB ping (legacy behaviour)
     if (await dbExists(db)) {
       res.json({ status: 'Ok', message: 'Connection successful' });
     } else {
