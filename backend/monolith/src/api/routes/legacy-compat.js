@@ -5127,8 +5127,9 @@ router.post('/:db/_d_ref/:parentTypeId', async (req, res) => {
 
     logger.info('[Legacy _d_ref] Reference created', { db, id, parentId, refTypeId, name });
 
-    // PHP api_dump(): {id, obj:parent_type_id, next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: parentId, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:parentId (original $id), obj:newRefId ($obj=Insert result), next_act:"edit_types", args:"ext"}
+    // PHP _d_ref: $id stays as original type id (parentTypeId); $obj = Insert() result (new ref row id)
+    legacyRespond(req, res, db, { id: parentId, obj: id, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ref] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);

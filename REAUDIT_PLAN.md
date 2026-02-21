@@ -4,7 +4,15 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21, updated session 6)
+## Status Summary (2026-02-21, updated session 7)
+
+### Session 7 Fixes (_d_ref id/obj swap)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/_d_ref/:parentTypeId` | `id: newRefId, obj: parentId` → `id: parentId, obj: newRefId` | PHP: `$id` stays as original type id; `$obj = Insert()` result (new ref row id) |
+| `_d_new` ⚠️ → ✅ | Verified correct — `id: parentId, obj: newTypeId` | PHP: `$id` stays as original req id; `$obj = Insert()` result |
+| `_d_ref` ⚠️ → ✅ | Fixed id/obj swap | See above |
 
 ### Session 6 Fixes (DDL api_dump args + id/obj from PHP source)
 
@@ -212,14 +220,14 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_m_up` | **type id** (obj.t) | **null** | `object` | `"F_U=<parent>"` always | ✅ fixed s4+s5 |
 | `_m_ord` | **parent id** | **parent id** | `object` | `"F_U=<parent>"` if parent>1 | ✅ fixed s4 |
 | `_m_id` | new_id | new_id | `object` | `"F_U=<up>"` if up>1 | ✅ |
-| `_d_new` | parent id (from req) | new type id | `edit_types` | `"ext"` | ⚠️ check |
+| `_d_new` | parent id (from req) | new type id | `edit_types` | `"ext"` | ✅ verified s7 |
 | `_d_save` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_del` | typeId (original) | null | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_up` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_ord` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_req/_d_alias/_d_null/_d_multi/_d_attrs` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_del_req` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
-| `_d_ref` | parent id? | new ref id | `edit_types` | `"ext"` | ⚠️ check |
+| `_d_ref` | **parent id** (type id) | **new ref id** | `edit_types` | `"ext"` | ✅ fixed s7 |
 
 ### 2.2 Auth Responses
 
