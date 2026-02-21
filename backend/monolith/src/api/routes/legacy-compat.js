@@ -4643,8 +4643,9 @@ router.post('/:db/_d_new/:parentTypeId?', async (req, res) => {
 
     logger.info('[Legacy _d_new] Type created', { db, id, name, baseType, parentId });
 
-    // PHP api_dump(): {id, obj:new_type_id, next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: id, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:parentId, obj:newTypeId, next_act:"edit_types", args:"ext"}
+    // PHP: $id stays as original $id (parent type id, from request), $obj = Insert() result (new type id)
+    legacyRespond(req, res, db, { id: parentId, obj: id, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_new] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
