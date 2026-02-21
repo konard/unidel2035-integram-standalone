@@ -29,26 +29,42 @@ Node.js ответы `GET /:db/object/:typeId?JSON` должны точно со
 
 ### ✅ DONE — Часть 2: myrolemenu из DB
 - GRANT (t=5) rows под ролью — это НЕ menu items
-- Menu items хранятся как: up=roleRowId, t=MenuTypeId(151), val=displayName
+- Menu items хранятся как: up=roleObjId(145), t=MenuTypeId(151), val=displayName
 - href берётся из дочерних rows: up=menuItemId, t=AddressTypeId(153), val=hrefURL
 - Логи подтвердили: _m_save t151=name; t153=href (req types для Menu type)
-- Исправлен buildMyrolemenu() helper: queries children of roleRow + their children
+- Исправлен buildMyrolemenu() helper: queries children of roleObjId + their children
 - Обновлены все 3 места: root handler, object handler, edit_obj handler
 - Старый запрос `WHERE t = TYPE.GRANT(5)` был полностью неверным
+- **Доп. fix (CROSS JOIN)**: role assignment rows имеют `t = roleObjId (145)`, НЕ `t = TYPE.ROLE (42)`.
+  Старый LEFT JOIN `role.t = TYPE.ROLE` никогда не совпадал. Исправлено через паттерн из PHP:
+  `LEFT JOIN (db r CROSS JOIN db role_def) ON r.up=u.id AND role_def.id=r.t AND role_def.t=TYPE.ROLE`
+  Теперь `role_def.id = 145` передаётся в buildMyrolemenu как roleObjId.
 
-### ✅ DONE — Часть 3: edit_obj endpoint
-- `GET /:db/edit_obj/:id?JSON` — PHP-формат реализован
-- obj: {id, val, parent, typ, typ_name, base_typ}
-- &main.myrolemenu — через role token
-- &main.a.&object — {typ x2, up, typ_name x2, val x2, id, disabled}
-- &main.a.&object.&edit_req — {type, typ, _parent_.val, _parent_.disabled}
-- reqs: {reqKey: {type, order, value, base, arr, arr_type}} — только непустые значения
-- &main.a.&object.&object_reqs — все не-FILE req поля
-- &main.a.&object.&object_reqs.&editreq_memo — MEMO req поля
-- &main.a.&object.&object_reqs.&editreq_file — FILE req поля (reqid)
+### ✅ DONE — Часть 3: edit_obj endpoint (полный переписан)
+- `GET /:db/edit_obj/:id?JSON` — PHP-формат полностью реализован
+- Точное SQL: PHP GetObjectReqs Query 1 — LEFT JOIN refs + arrs, CASE base_typ/type_val
+- reqsMeta как Map (не объект) — сохраняет порядок вставки от SQL ORDER BY a.ord
+  (обычные объекты сортируют целые ключи "117","135","154" вместо "117","154","135")
+- fetchAlias(attrs, orig): извлекает :ALIAS=xxx: из attrs для ref-type reqs
+- formatDate(v): YYYYMMDD → DD.MM.YYYY; Unix ts → через UTC
+- formatDatetime(v): Unix ts → DD.MM.YYYY HH:MM:SS UTC (PHP сервер UTC timezone)
+- buildFileLink(rowId, val): PHP GetSubdir/GetFilename алгоритм → <a href="/download/...">
+- arr: для ARR_typs — Number (int), для обычных значений — String (MySQL string)
+- add_obj_ref_reqs: JOIN pars WHERE pars.up!=0 (исключает корневые объекты) + UNION для выбранных
+- Убрана неверная фильтрация multiselectedIds (PHP не фильтрует их из dropdown)
+- reqs field ordering: reqsMetaOrder array, loop with reqsMeta.get(k)
 
 ### ✅ DONE — Часть 4: Bearer token dedup
 - extractToken(req, db) helper добавлен, 5 дублей убраны
+
+### ✅ DONE — Часть 5: myrolemenu полный фикс
+- buildMyrolemenu: фильтр по `menu_typ.t = TYPE.SHORT (3)` вместо `m.id != m.t`
+  Причина: дети role object с t=116 (ROLE_OBJECT/GRANT) некорректно включались в меню
+  Правило: только дети с типом где `typ.t = 3 (SHORT)` — это menu item rows (t=151)
+- edit_obj myrolemenu: поддержка Basic auth (Authorization: Basic base64(login:pwd))
+  Ранее: extractToken возвращал строку "Basic ZDpk", query не совпадал с tok.val → пустое меню
+  Фикс: если token.startsWith('Basic '), декодируем login:pwd, верифицируем хэш пароля,
+  делаем отдельный запрос через pwd JOIN вместо tok JOIN
 
 ## Ключевые находки из анализа DB
 
