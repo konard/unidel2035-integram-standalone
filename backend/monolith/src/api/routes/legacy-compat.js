@@ -123,6 +123,49 @@ async function buildMyrolemenu(pool, db, roleObjId) {
 }
 
 /**
+ * Resolve myrolemenu for a session token (Basic or bearer/cookie).
+ * Returns {href:[], name:[]} – same shape as buildMyrolemenu.
+ */
+async function getMenuForToken(pool, db, token) {
+  const empty = { href: [], name: [] };
+  if (!token) return empty;
+  try {
+    let uRows;
+    if (token.startsWith('Basic ')) {
+      const decoded  = Buffer.from(token.slice(6), 'base64').toString('utf8');
+      const colonIdx = decoded.indexOf(':');
+      if (colonIdx <= 0) return empty;
+      const basicLogin = decoded.slice(0, colonIdx);
+      const basicPwd   = decoded.slice(colonIdx + 1);
+      const pwdHash    = phpCompatibleHash(basicLogin, basicPwd, db);
+      [uRows] = await pool.query(
+        `SELECT role_def.id AS role_obj_id
+         FROM \`${db}\` u
+         JOIN \`${db}\` pwd ON pwd.up = u.id AND pwd.t = ${TYPE.PASSWORD} AND pwd.val = ?
+         LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+           ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+         WHERE u.t = ${TYPE.USER} AND u.val = ? LIMIT 1`,
+        [pwdHash, basicLogin]
+      );
+    } else {
+      [uRows] = await pool.query(
+        `SELECT role_def.id AS role_obj_id
+         FROM \`${db}\` u
+         JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
+         LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+           ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+         WHERE u.t = ${TYPE.USER} LIMIT 1`,
+        [token]
+      );
+    }
+    if (uRows && uRows.length > 0) {
+      return buildMyrolemenu(pool, db, uRows[0].role_obj_id || null);
+    }
+  } catch (_e) { /* ignore */ }
+  return empty;
+}
+
+/**
  * PHP-compatible mutation response helper.
  * – JSON API requests (?JSON / ?JSON_DATA etc.): return JSON
  * – Plain form POSTs: redirect to next_act URL (mirrors PHP index.php lines 9169-9180)
@@ -368,6 +411,9 @@ const REV_BASE_TYPE = {
   [TYPE.MEMO]: 'MEMO',
   [TYPE.NUMBER]: 'NUMBER',
   [TYPE.SIGNED]: 'SIGNED',
+  [TYPE.CALCULATABLE]: 'CALCULATABLE',   // 15 – PHP $GLOBALS["basics"] includes these
+  [TYPE.REPORT_COLUMN]: 'REPORT_COLUMN', // 16
+  [TYPE.PATH]: 'PATH',                   // 17
 };
 
 // Format a raw DB value for PHP-compatible object list display
@@ -2036,43 +2082,7 @@ router.get('/:db/:page*', async (req, res, next) => {
 
         // ── 6. &main.myrolemenu ─────────────────────────────────────────────
         let mainMyrolemenu = { href: [], name: [] };
-        if (token) {
-          try {
-            let uRows;
-            if (token.startsWith('Basic ')) {
-              const decoded  = Buffer.from(token.slice(6), 'base64').toString('utf8');
-              const colonIdx = decoded.indexOf(':');
-              if (colonIdx > 0) {
-                const basicLogin = decoded.slice(0, colonIdx);
-                const basicPwd   = decoded.slice(colonIdx + 1);
-                const pwdHash    = phpCompatibleHash(basicLogin, basicPwd, db);
-                [uRows] = await pool.query(
-                  `SELECT role_def.id AS role_obj_id
-                   FROM \`${db}\` u
-                   JOIN \`${db}\` pwd ON pwd.up = u.id AND pwd.t = ${TYPE.PASSWORD} AND pwd.val = ?
-                   LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
-                     ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
-                   WHERE u.t = ${TYPE.USER} AND u.val = ? LIMIT 1`,
-                  [pwdHash, basicLogin]
-                );
-              }
-            } else {
-              [uRows] = await pool.query(
-                `SELECT role_def.id AS role_obj_id
-                 FROM \`${db}\` u
-                 JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
-                 LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
-                   ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
-                 WHERE u.t = ${TYPE.USER} LIMIT 1`,
-                [token]
-              );
-            }
-            console.error('[myrolemenu debug] uRows:', JSON.stringify(uRows));
-            if (uRows && uRows.length > 0) {
-              mainMyrolemenu = await buildMyrolemenu(pool, db, uRows[0].role_obj_id || null);
-            }
-          } catch (_e) { console.error('[myrolemenu object error]', _e.message, _e.stack); }
-        }
+        mainMyrolemenu = await getMenuForToken(pool, db, token);
 
         // ── 7. Build response ───────────────────────────────────────────────
         const typeBaseTypeName = typeRow
@@ -2287,12 +2297,19 @@ router.get('/:db/:page*', async (req, res, next) => {
         return res.json(response);
       }
 
-      // ── GET /:db/types?JSON (edit_types endpoint)
-      // PHP: index.php &edit_typs case (lines 4293-4318)
-      // Returns: {edit_types: {...}, types: {...basic_types...}, editable: 1}
-      if (page === 'types' || page === 'edit_types') {
-        // Get all types with their requisites (PHP query at line 4295-4304)
-        const [typeRows] = await pool.query(
+      // ── GET /:db/types?JSON
+      // PHP: action="types" → no types.html exists → falls back to info.html
+      // info.html only has &main.myrolemenu → returns just the menu
+      if (page === 'types') {
+        const mainMyrolemenu = await getMenuForToken(pool, db, token);
+        return res.json({ '&main.myrolemenu': mainMyrolemenu });
+      }
+
+      // ── GET /:db/edit_types?JSON
+      // PHP: index.php &edit_typs case (lines 4293-4318), processes edit_types.html
+      // Returns: &main.myrolemenu + &main.a.&types + &main.a.&editables + edit_types + types + editable
+      if (page === 'edit_types') {
+        const [etRows] = await pool.query(
           `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
                   CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END AS val,
                   reqs.id AS req_id, reqs.t AS req_t, reqs.ord, reqs.val AS attrs, ref_typs.t AS reft
@@ -2304,36 +2321,39 @@ router.get('/:db/:page*', async (req, res, next) => {
            WHERE typs.up = 0 AND typs.id != typs.t
            ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`
         );
-
-        // Build edit_types object matching PHP $blocks[$block] structure
-        const editTypes = {
-          id: [], t: [], ref_val: [], uniq: [], val: [],
-          req_id: [], req_t: [], ord: [], attrs: [], reft: []
-        };
-        for (const row of typeRows) {
-          editTypes.id.push(row.id ?? '');
-          editTypes.t.push(row.t ?? '');
-          editTypes.ref_val.push(row.ref_val ?? '');
-          editTypes.uniq.push(row.uniq ?? '');
-          editTypes.val.push((row.val ?? '').replace(/\\/g, '\\\\'));
-          editTypes.req_id.push(row.req_id ?? '');
-          editTypes.req_t.push(row.req_t ?? '');
-          editTypes.ord.push(row.ord ?? '');
-          editTypes.attrs.push((row.attrs ?? '').replace(/\\/g, '\\\\'));
-          editTypes.reft.push(row.reft ?? '');
+        // PHP: $blocks[$block] includes PARENT, CONTENT, numeric+named cols from mysqli_fetch_array
+        // edit_types.html &Edit_Typs block content (PHP CONTENT field)
+        const ET_CONTENT = 'if(t[{ID}]===undefined) t[{ID}]={t:{T},r:"{REF_VAL}",u:{UNIQ},v:"{VAL}"};\n' +
+          'if(0{ORD}){if(r[{ID}]===undefined) r[{ID}]={};r[{ID}]["{ORD}"]={ i:"{REQ_ID}",t:"{REQ_T}",a:"{ATTRS}",r:"{REFT}"};}\n';
+        // cols in PHP SQL order: id(0), t(1), ref_val(2), uniq(3), val(4), req_id(5), req_t(6), ord(7), attrs(8), reft(9)
+        const editTypesET = { PARENT: '&main.a', CONTENT: ET_CONTENT,
+          0: [], id: [], 1: [], t: [], 2: [], ref_val: [], 3: [], uniq: [], 4: [], val: [],
+          5: [], req_id: [], 6: [], req_t: [], 7: [], ord: [], 8: [], attrs: [], 9: [], reft: [] };
+        for (const row of etRows) {
+          const cols = [
+            String(row.id ?? ''), String(row.t ?? ''), String(row.ref_val ?? ''), String(row.uniq ?? ''),
+            (row.val ?? '').replace(/\\/g, '\\\\'), String(row.req_id ?? ''), String(row.req_t ?? ''),
+            String(row.ord ?? ''), (row.attrs ?? '').replace(/\\/g, '\\\\'), String(row.reft ?? ''),
+          ];
+          const names = ['id','t','ref_val','uniq','val','req_id','req_t','ord','attrs','reft'];
+          for (let i = 0; i < 10; i++) { editTypesET[i].push(cols[i]); editTypesET[names[i]].push(cols[i]); }
         }
-
-        // Build response matching PHP (line 4312-4316)
-        const response = {
-          edit_types: editTypes,
-          types: REV_BASE_TYPE, // PHP: $GLOBALS["basics"]
-        };
-
-        // TODO: Check_Types_Grant() == "WRITE" → add editable: 1
-        // For now, assume editable since user is authenticated
-        response.editable = 1;
-
-        return res.json(response);
+        // &main.a.&types: base type list (PHP &types block handler, line 4325)
+        const typBlock = { typ: [], val: [] };
+        // PHP $GLOBALS["basics"] insertion order (3,8,9,13,14,11,12,4,10,2,7,6,5,15,16,17)
+        const PHP_BASICS_ORDER = [3,8,9,13,14,11,12,4,10,2,7,6,5,15,16,17];
+        for (const k of PHP_BASICS_ORDER) {
+          if (REV_BASE_TYPE[k]) { typBlock.typ.push(String(k)); typBlock.val.push(REV_BASE_TYPE[k]); }
+        }
+        const mainMyrolemenu = await getMenuForToken(pool, db, token);
+        return res.json({
+          '&main.myrolemenu':   mainMyrolemenu,
+          '&main.a.&types':     typBlock,
+          '&main.a.&editables': { ok: [''] },
+          edit_types: editTypesET,
+          types: REV_BASE_TYPE,
+          editable: 1,
+        });
       }
 
       // ── GET /:db/edit_obj/:id?JSON → PHP format
@@ -2817,6 +2837,122 @@ router.get('/:db/:page*', async (req, res, next) => {
 
         return res.json(editResp);
       }
+
+      // ── GET /:db/dict?JSON → PHP &uni_obj_list: {id: htmlspecialchars(val), ...}
+      // PHP source: index.php case "&uni_obj_list" (line 5069)
+      // Returns flat {typeId: typeName, ...} for all top-level independent types
+      // (up=0, id!=t, val!='', t!=0), excluding CALCULATABLE & BUTTON base types,
+      // excluding types that are only used as requisites of other types.
+      if (page === 'dict') {
+        const CALCULATABLE = TYPE.CALCULATABLE;  // 15
+        const BUTTON_TYPE  = TYPE.BUTTON;        // 7
+        const [typeRows] = await pool.query(
+          `SELECT a.id, a.val, a.t, reqs.t AS reqs_t, reqs.up
+           FROM \`${db}\` a
+           LEFT JOIN \`${db}\` reqs ON reqs.up = a.id
+           WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
+           ORDER BY a.val`
+        );
+        // Build typ dict following PHP logic:
+        // track which IDs are req-only (have been used as a req child of another type)
+        const base = {};   // id → t (base type id)
+        const req  = {};   // ids that are requisite-only (unset from typ)
+        const typMap = {}; // id → val (display map)
+        for (const row of typeRows) {
+          if (row.t === CALCULATABLE || row.t === BUTTON_TYPE) continue;
+          base[row.id] = row.t;
+          if (!req[row.id]) typMap[row.id] = row.val;  // only if not marked as req-only
+          if (row.reqs_t && row.reqs_t !== row.up) {
+            delete typMap[row.reqs_t];
+            req[row.reqs_t] = true;
+          }
+        }
+        // Build JSON response as {id: htmlspecialchars(val), ...}
+        const dictJson = {};
+        for (const [id, val] of Object.entries(typMap)) {
+          dictJson[id] = htmlEsc(val);
+        }
+        return res.json(dictJson);
+      }
+
+      // ── GET /:db/sql?JSON → &main.myrolemenu + &main.a.&functions + &main.a.&formats
+      // PHP source: templates/sql.html processes &functions and &formats blocks
+      // &functions: SELECT id,val FROM $z WHERE t=REP_COL_FUNC AND up=1 ORDER BY val
+      // &formats:   SELECT id,val FROM $z WHERE t=REP_COL_FORMAT AND up=1 ORDER BY val
+      if (page === 'sql') {
+        const [funRows] = await pool.query(
+          `SELECT id, val FROM \`${db}\` WHERE t = ? AND up = 1 ORDER BY val`,
+          [63]  // REP_COL_FUNC constant from PHP index.php
+        );
+        const [fmtRows] = await pool.query(
+          `SELECT id, val FROM \`${db}\` WHERE t = ? AND up = 1 ORDER BY val`,
+          [29]  // REP_COL_FORMAT constant from PHP index.php
+        );
+        const mainMyrolemenu = await getMenuForToken(pool, db, token);
+        // PHP: id values are strings (json_encode converts PHP ints from DB to JSON numbers,
+        // but the block array builder stores them as PHP strings via array push)
+        const funBlock = funRows.length > 0
+          ? { id: funRows.map(r => String(r.id)), val: funRows.map(r => r.val) }
+          : {};
+        const fmtBlock = fmtRows.length > 0
+          ? { id: fmtRows.map(r => String(r.id)), val: fmtRows.map(r => r.val) }
+          : {};
+        return res.json({
+          '&main.myrolemenu':    mainMyrolemenu,
+          '&main.a.&functions':  funBlock,
+          '&main.a.&formats':    fmtBlock,
+        });
+      }
+
+      // ── GET /:db/form?JSON → &main.myrolemenu + edit_types + types + editable
+      // PHP: form.html includes &Edit_Typs block which populates edit_types and then dies.
+      // PHP $blocks[$block] includes PARENT, CONTENT (template artifacts) + numeric+named column aliases.
+      if (page === 'form') {
+        const [formTypeRows] = await pool.query(
+          `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
+                  CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END AS val,
+                  reqs.id AS req_id, reqs.t AS req_t, reqs.ord, reqs.val AS attrs, ref_typs.t AS reft
+           FROM \`${db}\` typs
+           LEFT JOIN \`${db}\` refs ON refs.id = typs.t AND refs.id != refs.t
+           LEFT JOIN \`${db}\` reqs ON reqs.up = typs.id
+           LEFT JOIN \`${db}\` req_typs ON req_typs.id = reqs.t AND req_typs.id != req_typs.t
+           LEFT JOIN \`${db}\` ref_typs ON ref_typs.id = req_typs.t AND ref_typs.id != ref_typs.t
+           WHERE typs.up = 0 AND typs.id != typs.t
+           ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`
+        );
+        // PHP: CONTENT = form.html's &Edit_Typs template block content
+        // Exact bytes from the template (} closes inner object, ; ends stmt, } closes outer if)
+        const FORM_ET_CONTENT = '\nt[{ID}]={t:{T},r:"{REF_VAL}",u:{UNIQ},v:"{VAL}"};\n' +
+          'if("{ORD}"){if(r[{ID}]===undefined)r[{ID}]={};r[{ID}]["{ORD}"]={i:"{REQ_ID}",t:"{REQ_T}",a:"{ATTRS}",r:"{REFT}"};}\n';
+        const formEditTypes = { PARENT: '&main.a', CONTENT: FORM_ET_CONTENT,
+          0: [], id: [], 1: [], t: [], 2: [], ref_val: [], 3: [], uniq: [], 4: [], val: [],
+          5: [], req_id: [], 6: [], req_t: [], 7: [], ord: [], 8: [], attrs: [], 9: [], reft: [] };
+        for (const row of formTypeRows) {
+          const cols = [
+            String(row.id ?? ''), String(row.t ?? ''), String(row.ref_val ?? ''), String(row.uniq ?? ''),
+            (row.val ?? '').replace(/\\/g, '\\\\'), String(row.req_id ?? ''), String(row.req_t ?? ''),
+            String(row.ord ?? ''), (row.attrs ?? '').replace(/\\/g, '\\\\'), String(row.reft ?? ''),
+          ];
+          const names = ['id','t','ref_val','uniq','val','req_id','req_t','ord','attrs','reft'];
+          for (let i = 0; i < 10; i++) { formEditTypes[i].push(cols[i]); formEditTypes[names[i]].push(cols[i]); }
+        }
+        const mainMyrolemenu = await getMenuForToken(pool, db, token);
+        return res.json({
+          '&main.myrolemenu': mainMyrolemenu,
+          edit_types: formEditTypes,
+          types: REV_BASE_TYPE,
+          editable: 1,
+        });
+      }
+
+      // ── GET /:db/{info|upload|table|smartq}?JSON → just &main.myrolemenu
+      // PHP: these pages render templates that only contain &main.myrolemenu in the API array
+      const MENU_ONLY_PAGES = new Set(['info', 'upload', 'table', 'smartq']);
+      if (MENU_ONLY_PAGES.has(page)) {
+        const mainMyrolemenu = await getMenuForToken(pool, db, token);
+        return res.json({ '&main.myrolemenu': mainMyrolemenu });
+      }
+
     } catch (err) {
       logger.error('[Legacy page JSON] Error', { error: err.message, stack: err.stack, db, page });
       console.error('[DEBUG JSON Error]', err);
@@ -2838,6 +2974,7 @@ router.get('/:db/:page*', async (req, res, next) => {
     'admin': 'templates/dir_admin.html',
     'info': 'templates/info.html',
     'quiz': 'templates/quiz.html',
+    'smartq': 'templates/smartq.html',
   };
 
   const templatePath = pageMap[page];
