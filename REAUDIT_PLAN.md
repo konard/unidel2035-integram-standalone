@@ -4,7 +4,18 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21, updated session 5)
+## Status Summary (2026-02-21, updated session 6)
+
+### Session 6 Fixes (DDL api_dump args + id/obj from PHP source)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| All `_d_*` endpoints (11 handlers) | `args: ""` → `args: "ext"` | PHP always appends "ext" for all DDL actions (line 9176) |
+| `POST /:db/_d_del/:id` | `next_act: "terms"` → `"edit_types"`, `obj: 0` → `null` | PHP: next_act defaults to "edit_types"; $obj not set → null |
+| `POST /:db/_d_up/:id` | `id: reqId` → `id: parentId` | PHP: `$id = $row["up"]` (parent), `$obj = $id` (also parent) |
+| `POST /:db/_d_ord/:id` | `id: reqId` → `id: parentId` | PHP: `$id = $row["up"]` (parent), `$obj = $id` (also parent) |
+
+### Session 5 Fixes (DML api_dump args fields — from PHP source audit)
 
 ### Session 5 Fixes (DML api_dump args fields — from PHP source audit)
 
@@ -201,11 +212,14 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_m_up` | **type id** (obj.t) | **null** | `object` | `"F_U=<parent>"` always | ✅ fixed s4+s5 |
 | `_m_ord` | **parent id** | **parent id** | `object` | `"F_U=<parent>"` if parent>1 | ✅ fixed s4 |
 | `_m_id` | new_id | new_id | `object` | `"F_U=<up>"` if up>1 | ✅ |
-| `_d_new` | new type id | parent type id | `edit_types` | `F_U=<up>` if up>1 | ✅ |
-| `_d_save` | type id | type id | `edit_types` | `` | ✅ |
-| `_d_del` | 0 | 0 | `terms` | `` | ✅ |
-| `_d_req/_d_alias/etc` | req id | type id | `edit_types` | `` | ✅ |
-| `_d_del_req` | type id | type id | `edit_types` | `` | ✅ |
+| `_d_new` | parent id (from req) | new type id | `edit_types` | `"ext"` | ⚠️ check |
+| `_d_save` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_del` | typeId (original) | null | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_up` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_ord` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_req/_d_alias/_d_null/_d_multi/_d_attrs` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_del_req` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_ref` | parent id? | new ref id | `edit_types` | `"ext"` | ⚠️ check |
 
 ### 2.2 Auth Responses
 
