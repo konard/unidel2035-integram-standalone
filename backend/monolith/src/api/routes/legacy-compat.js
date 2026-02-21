@@ -1863,6 +1863,11 @@ router.get('/:db/:page*', async (req, res, next) => {
       return res.status(200).json({ error: `typeId required: /${db}/${page}/{id}?JSON` });
     }
 
+    // report with subId: pass to the dedicated report API route
+    if (page === 'report' && subId) {
+      return next();
+    }
+
     try {
       const pool = getPool();
 

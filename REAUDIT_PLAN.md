@@ -4,7 +4,18 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21)
+## Status Summary (2026-02-21, updated session 2)
+
+### Session 2 Fixes (xsrf / terms / metadata / obj_meta — all now 0 diffs)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `GET /:db/xsrf` | `role` returned empty; `id` as number | Added CROSS JOIN to resolve role definition name; `id: String(uid)` |
+| `GET /:db/terms` | Wrong insertion order; extra `href`/`ord` fields | Changed `typ`/`base` to `Map`, `reqMap` to `Set` for PHP-compatible order; removed extra fields |
+| `GET /:db/metadata` (all types) | 434 vs 158 items — missing req-only type filter | Two-pass `usedAsReqType` Set to skip types with no own reqs used as req.t |
+| `GET /:db/metadata/:id` | `type:"0"` became `type:""` (falsy check on 0) | Changed `row.base_typ ?` → `row.base_typ != null ?` |
+| `GET /:db/metadata` (attrs/val) | `\\u041e` vs `\u041e` — DB stores literal `\uXXXX` | Added `decodeJsonEscapes()` applied to `obj.val` and `req.attrs` (NOT `req_val`) |
+| `GET /:db/obj_meta/:id` | Completely wrong format (keyed by req.t, no val/type) | Full rewrite: keyed by `req.ord` with `{id, val, type, arr_id?, ref?, ref_id?, attrs?}` |
 
 ### ?JSON Subpage Endpoints — All verified at 0 diffs vs PHP
 
@@ -21,7 +32,8 @@
 | `GET /:db/smartq?JSON` | ✅ 0 diffs | myrolemenu only |
 | `GET /:db/types?JSON` | ✅ 0 diffs | myrolemenu only (no types.html in PHP → falls back to info.html) |
 | `GET /:db/edit_types?JSON` | ✅ 0 diffs | Full: myrolemenu + &main.a.&types (PHP order) + &main.a.&editables + edit_types + types + editable |
-| `GET /:db/report?JSON` | ✅ 0 diffs | Report list |
+| `GET /:db/report?JSON` | ⚠️ PHP SQL error | PHP broken for this; Node.js returns `{error}` |
+| `GET /:db/report/:id?JSON` | ✅ fixed session 3 | Now passes to report API route (SubPage handler routes to next()) |
 
 **Key implementation findings:**
 - PHP `$blocks[$block]` stores `PARENT`, `CONTENT` (template text), AND numeric+named column aliases from `mysqli_fetch_array` — all must be reproduced
@@ -30,6 +42,7 @@
 - `action=types` falls back to `info.html` (no `types.html`), returning only myrolemenu
 - `sql` block IDs must be strings (PHP block builder quirk)
 - `getMenuForToken()` shared helper extracted for all subpage JSON handlers
+- `report/:id?JSON` — SubPage handler must call `next()` for report with subId+JSON to reach report API route
 
 ---
 
@@ -165,10 +178,13 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 
 ### 2.3 Metadata Responses
 
-| Route | Expected `orig`/`attrs` fields | Status |
+| Route | Expected format | Status |
 |---|---|---|
 | `GET /:db/metadata/:id` | `reqs[].orig` = raw modifier string, `reqs[].attrs` = parsed attrs block | ✅ (fixed in prior session) |
-| `GET /:db/obj_meta/:id` | `reqs[{id}].reqVal`, `.type`, `.baseType`, `.refType` | ✅ |
+| `GET /:db/metadata` (all) | `{types:[{id,val,type,...,reqs:{ord:{id,val,type,...}}}]}` — req-only types filtered | ✅ (fixed session 2) |
+| `GET /:db/obj_meta/:id` | `reqs` keyed by `ord`: `{id, val, type, arr_id?, ref?, ref_id?, attrs?}` | ✅ (fixed session 2) |
+| `GET /:db/terms` | `[{id, type, name}]` in PHP array insertion order (alphabetical by name) | ✅ (fixed session 2) |
+| `GET /:db/xsrf` | `{_xsrf, token, user, role (lowercase), id (string), msg}` | ✅ (fixed session 2) |
 
 ### 2.4 Report Responses
 
