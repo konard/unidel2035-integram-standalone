@@ -964,7 +964,8 @@ router.all('/:db/auth', async (req, res, next) => {
     logger.info('[Legacy SecretAuth] Success', { db, uid: user.uid, username: user.username });
 
     if (isJSON) {
-      return res.status(200).json({ _xsrf: xsrf, token: tokenVal, id: user.uid, msg: '' });
+      // PHP line 7573: {_xsrf, token, id, user} — returns user field, NOT msg
+      return res.status(200).json({ _xsrf: xsrf, token: tokenVal, id: user.uid, user: user.username });
     }
 
     const uri = req.body.uri || req.query.uri || `/${db}`;
@@ -4834,7 +4835,8 @@ router.post('/:db/_d_alias/:reqId', async (req, res) => {
     logger.info('[Legacy _d_alias] Alias set', { db, id, alias: newAlias });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP line 8625: $id = $obj = $up; (both set to parent type ID)
+    legacyRespond(req, res, db, { id: obj.up, obj: obj.up, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_alias] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);

@@ -4,7 +4,14 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21, updated session 10)
+## Status Summary (2026-02-21, updated session 11)
+
+### Session 11 Fixes (Claude Opus 4.5 re-audit)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/_d_alias/:reqId` | `id: reqId` → `id: parentTypeId` | PHP (line 8625): `$id = $obj = $up;` — both must be parent type ID, not requisite ID |
+| `GET /:db/auth?secret` | Response missing `user` field, had extra `msg` | PHP (line 7573): `{_xsrf, token, id, user}` — no `msg` field, includes `user` |
 
 ### Session 10 Fixes (verification matrix sweep)
 
