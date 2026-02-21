@@ -4144,40 +4144,38 @@ router.get('/:db/terms', async (req, res) => {
     // - Skip CALCULATABLE (t=15) and BUTTON (t=7) base types
     // - Track which type IDs are used as requisite types ($req)
     // - Only show types not used as requisites elsewhere
-    const base = {}; // id -> t
-    const typ  = {}; // id -> val (types to display)
-    const ord  = {}; // id -> ord
-    const reqMap = {};  // id -> true (types used as requisites)
+    // Use Map to preserve insertion order (SQL ORDER BY a.val → alphabetical like PHP)
+    // Plain objects in JS sort numeric keys ascending, breaking PHP ordering.
+    const base   = new Map(); // id -> t
+    const typ    = new Map(); // id -> val (insertion-ordered, like PHP array)
+    const reqMap = new Set(); // ids used as requisites
 
     for (const row of rows) {
       const revBt = REV_BASE_TYPE[row.t] || null;
       if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
 
-      base[row.id] = row.t;
-      ord[row.id]  = row.ord;
-      if (!reqMap[row.id]) {
-        typ[row.id] = row.val;
+      base.set(row.id, row.t);
+      if (!reqMap.has(row.id)) {
+        typ.set(row.id, row.val);
       }
       if (row.reqs_t) {
-        delete typ[row.reqs_t];
-        reqMap[row.reqs_t] = true;
+        typ.delete(row.reqs_t);
+        reqMap.add(row.reqs_t);
       }
     }
 
-    // Build response array matching PHP: [{id, name, href, ord}]
+    // Build response array matching PHP: [{id, type, name}]
+    // PHP line 8939: {"id":$id,"type":$base[$id],"name":htmlspecialchars($val)}
     // PHP: if(Grant_1level($id)) $json .= ...
     const types = [];
-    for (const id of Object.keys(typ)) {
-      const numId = Number(id);
+    for (const [id, val] of typ) {
       // Apply Grant_1level filtering (PHP line 8938)
-      const grantLevel = await grant1Level(pool, db, grants, numId, username);
+      const grantLevel = await grant1Level(pool, db, grants, id, username);
       if (grantLevel) {
         types.push({
-          id: numId,
-          name: typ[id],
-          href: String(numId),
-          ord: ord[id] || 0,
-          type: base[id],
+          id,
+          type: base.get(id),
+          name: val,
         });
       }
     }
@@ -4208,12 +4206,16 @@ router.get('/:db/xsrf', async (req, res) => {
 
   try {
     const pool = getPool();
+    // PHP uses CROSS JOIN to resolve role definition name via role link:
+    // LEFT JOIN ($z r CROSS JOIN $z role_def) ON r.up=u.id AND role_def.id=r.t AND role_def.t=ROLE
+    // role_def.val = role name (lowercased by PHP strtolower)
     const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uname, xsrf.val xsrf_val, role.val role_val
+      `SELECT u.id uid, u.val uname, xsrf.val xsrf_val, role_def.val role_val
        FROM ${db} u
        JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
        LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
-       LEFT JOIN ${db} role ON role.up=u.id AND role.t=${TYPE.ROLE}
+       LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
+         ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
        WHERE u.t=${TYPE.USER}
        LIMIT 1`,
       [token]
@@ -4222,7 +4224,7 @@ router.get('/:db/xsrf', async (req, res) => {
     if (rows.length === 0) {
       // Invalid token — clear cookie, return empty session
       res.clearCookie(db, { path: '/' });
-      return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: 0, msg: '' });
+      return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: '0', msg: '' });
     }
 
     const user = rows[0];
@@ -4234,8 +4236,10 @@ router.get('/:db/xsrf', async (req, res) => {
       _xsrf: xsrf,
       token,
       user: user.uname,
-      role: user.role_val || '',
-      id: user.uid,
+      // PHP: strtolower($row["role"]) where role = role_def.val
+      role: (user.role_val || '').toLowerCase(),
+      // PHP: $row["id"] from mysqli_fetch_array returns strings
+      id: String(user.uid),
       msg: '',
     });
   } catch (error) {
@@ -5260,15 +5264,22 @@ router.all('/:db/obj_meta/:id', async (req, res) => {
     const pool = getPool();
     const objectId = parseInt(id, 10);
 
-    // Get object with its requisites and type information
+    // PHP obj_meta query (index.php line 8827):
+    // SELECT obj.id, obj.up, obj.t, obj.val,
+    //   req.id req_t, req.t ref_id, refs.id ref, req.val attrs, req.ord,
+    //   CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END base_typ,
+    //   CASE WHEN refs.id IS NULL THEN typs.val ELSE refs.val END req_val,
+    //   CASE WHEN arrs.id IS NULL THEN NULL ELSE typs.id END arr_id
+    // FROM $z obj LEFT JOIN $z req ON req.up=$id ...
+    // WHERE obj.id=$id ORDER BY req.ord
+    // Response keyed by req.ord: {"1": {id, val, type, arr_id?, ref?, ref_id?, attrs?}, ...}
     const query = `
       SELECT
         obj.id, obj.up, obj.t, obj.val,
-        req.id AS req_id, req.t AS req_type, req.val AS req_attrs, req.ord AS req_ord,
-        COALESCE(refs.t, typs.t) AS base_typ,
-        COALESCE(refs.val, typs.val) AS req_val,
-        refs.id AS ref_id,
-        CASE WHEN arrs.id IS NOT NULL THEN typs.id ELSE NULL END AS arr_id
+        req.id AS req_t, req.t AS ref_id, refs.id AS ref_col, req.val AS attrs, req.ord,
+        CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ,
+        CASE WHEN refs.id IS NULL THEN typs.val ELSE refs.val END AS req_val,
+        CASE WHEN arrs.id IS NULL THEN NULL ELSE typs.id END AS arr_id
       FROM ${db} obj
       LEFT JOIN ${db} req ON req.up = ?
       LEFT JOIN ${db} typs ON typs.id = req.t
@@ -5284,24 +5295,31 @@ router.all('/:db/obj_meta/:id', async (req, res) => {
       return res.status(404).json({ error: 'Object not found' });
     }
 
-    // Build response object
+    // Build response matching PHP format (line 8838-8857)
+    // Top-level: id, up, type, val (all as strings from mysqli_fetch_array)
     const meta = {
-      id: rows[0].id.toString(),
-      up: rows[0].up.toString(),
-      type: rows[0].t.toString(),
+      id: String(rows[0].id),
+      up: String(rows[0].up),
+      type: String(rows[0].t),
       val: rows[0].val || '',
       reqs: {}
     };
 
-    // Add requisite stored values.
-    // reqs is keyed by the requisite-definition ID (req.t = req_type) so the
-    // edit_obj.html template can look up values with reqs[reqId].
-    // The stored value itself is req.val (aliased req_attrs in the query).
+    // reqs keyed by req.ord (PHP line 8846: "\"" . $row["ord"] . "\":{...")
     for (const row of rows) {
-      if (row.req_id) {
-        // Plain stored value — what the edit form needs to populate fields
-        meta.reqs[row.req_type.toString()] = row.req_attrs || '';
+      if (row.req_t == null) continue;  // no requisite row joined
+      const reqEntry = {
+        id:   String(row.req_t),
+        val:  row.req_val != null ? String(row.req_val) : '',
+        type: row.base_typ != null ? String(row.base_typ) : '',
+      };
+      if (row.arr_id != null) reqEntry.arr_id = String(row.arr_id);
+      if (row.ref_col != null) {
+        reqEntry.ref    = String(row.ref_col);
+        reqEntry.ref_id = String(row.ref_id);
       }
+      if (row.attrs) reqEntry.attrs = row.attrs;
+      meta.reqs[String(row.ord)] = reqEntry;
     }
 
     logger.info('[Legacy obj_meta] Metadata retrieved', { db, id: objectId });
@@ -5400,7 +5418,8 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
           id: row.req_id.toString(),
           val: row.req_val || '',
           orig: (row.ref_id || row.req_type || '').toString(),
-          type: row.base_typ ? row.base_typ.toString() : '',
+          // PHP: "$row["base_typ"]" — 0 should give "0", only NULL gives ""
+          type: row.base_typ != null ? String(row.base_typ) : '',
         };
         if (row.req_attrs) {
           reqData.attrs = row.req_attrs;
