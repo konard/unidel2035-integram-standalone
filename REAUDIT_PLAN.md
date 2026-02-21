@@ -4,7 +4,17 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21, updated session 4)
+## Status Summary (2026-02-21, updated session 5)
+
+### Session 5 Fixes (DML api_dump args fields — from PHP source audit)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/_m_new/:up` | args for hasReqs was `String(id)` → `"new1=1&"` | PHP: `$arg = "new1=1&$arg"` prefix; condition parentId !== 1 (not > 1) |
+| `POST /:db/_m_save/:id` | args missing `"saved1=1&"` prefix; F_U conditional | PHP: `$arg = "saved1=1&F_U=$up&F_I=$id"` always; `"copied1=1&..."` for copy |
+| `POST /:db/_m_move/:id` | args missing `"moved&"` prefix | PHP: `$arg = "moved&"` always; `"moved&&F_U=$up"` if newParent != 1 |
+| `POST /:db/_m_up/:id` | args conditional on `> 1` | PHP: `$arg = "F_U=$up"` always (unconditional) |
+| `POST /:db/_m_del/:id` | args included F_U for all `up > 1` | PHP: F_U only for array elements (`tup === "0"`), not references |
 
 ### Session 4 Fixes (DML api_dump id/obj fields — systematic fix)
 
@@ -182,14 +192,15 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 
 | Action family | `id` | `obj` | `next_act` | `args` | Status |
 |---|---|---|---|---|---|
-| `_m_new` | new objectId | new objectId (= id) | `edit_obj` (has reqs) or `object` | `String(id)` (edit_obj) or `F_U=<up>` | ✅ fixed s4 |
-| `_m_save` | **type id** | **object id** | `object` | `F_U=<up>&F_I=<obj>` if up>1 else `F_I=<obj>` | ✅ fixed s4 |
-| `_m_del` | type id | deleted objectId | `object` | `F_U=<up>` | ✅ |
-| `_m_set` | **type id** | **object id** | `object` | `F_U=<up>` if up>1 | ✅ fixed s4 |
-| `_m_move` | object id | **null** | `object` | `F_U=<newParent>` if newParent>1 | ✅ fixed s4 |
-| `_m_up` | **type id** (obj.t) | **null** | `object` | `F_U=<parent>` if parent>1 | ✅ fixed s4 |
-| `_m_ord` | **parent id** | **parent id** | `object` | `F_U=<parent>` if parent>1 | ✅ fixed s4 |
-| `_m_id` | new_id | new_id | `object` | `F_U=<up>` if up>1 | ✅ |
+| `_m_new` | new objectId | new objectId (= id) | `edit_obj` (has reqs) or `object` | `"new1=1&"` (edit_obj) or `"F_U=<up>"` if up!=1 | ✅ fixed s4+s5 |
+| `_m_save` | **type id** | **object id** | `object` | `"saved1=1&F_U=<up>&F_I=<obj>"` always | ✅ fixed s4+s5 |
+| `_m_save` (copy) | **type id** | **object id** | `object` | `"copied1=1&F_U=<up>&F_I=<obj>"` always | ✅ fixed s4+s5 |
+| `_m_del` | type id | deleted objectId | `object` | `"F_U=<up>"` only for array elements; `""` for refs | ✅ fixed s5 |
+| `_m_set` | `""` (or req id) | object id | (uses `"a"` field in PHP) | `""` or file path | ⚠️ partial |
+| `_m_move` | object id | **null** | `object` | `"moved&"` or `"moved&&F_U=<up>"` if up!=1 | ✅ fixed s4+s5 |
+| `_m_up` | **type id** (obj.t) | **null** | `object` | `"F_U=<parent>"` always | ✅ fixed s4+s5 |
+| `_m_ord` | **parent id** | **parent id** | `object` | `"F_U=<parent>"` if parent>1 | ✅ fixed s4 |
+| `_m_id` | new_id | new_id | `object` | `"F_U=<up>"` if up>1 | ✅ |
 | `_d_new` | new type id | parent type id | `edit_types` | `F_U=<up>` if up>1 | ✅ |
 | `_d_save` | type id | type id | `edit_types` | `` | ✅ |
 | `_d_del` | 0 | 0 | `terms` | `` | ✅ |
