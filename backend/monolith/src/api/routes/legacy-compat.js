@@ -3343,13 +3343,15 @@ router.post('/:db/_m_save/:id', async (req, res) => {
 
       logger.info('[Legacy _m_save] Object copied', { db, originalId, newId: objectId });
 
-      // PHP api_dump() format for copy: obj = new object ID (used by dubRecDone to filter report)
-      // dubRecDone sends FR_ColNameID=json.obj → filters report WHERE a.id = objectId
+      // PHP api_dump() for copy (lines 8228-8234):
+      //   $arg = "copied1=1&F_U=$up&F_I=$id" (F_I = new objectId)
+      //   $obj = $id (new objectId)
+      //   $id  = $typ (type ID)
       return legacyRespond(req, res, db, {
-        id: objectId,
+        id: original.typ,
         obj: objectId,
         next_act: 'object',
-        args: original.up > 1 ? `F_U=${original.up}` : '',
+        args: `copied1=1&F_U=${original.up}&F_I=${objectId}`,
       });
     }
 
@@ -4790,14 +4792,8 @@ router.post('/:db/_d_req/:typeId', async (req, res) => {
 
     logger.info('[Legacy _d_req] Requisite added', { db, id, parentId, name, reqType });
 
-    // PHP api_dump(): {id:req_id, obj:type_id, next_act:"edit_types", args, warnings}
-    res.json({
-      id,
-      obj: parentId,
-      next_act: 'edit_types',
-      args: '',
-      warnings: '',
-    });
+    // PHP api_dump(): {id:req_id, obj:type_id, next_act:"edit_types", args:"ext", warnings}
+    legacyRespond(req, res, db, { id, obj: parentId, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_req] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
