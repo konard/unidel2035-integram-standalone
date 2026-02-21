@@ -246,7 +246,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | 13 | ~~`JSON_HR` report format~~ | ~~executeReport~~ | ✅ Already: `{columns, groups:{parentId:[rows]}, totalCount}` at line ~7589 |
 | 14 | ~~`_list` `q` search~~ | ~~_list route~~ | ✅ Already: `WHERE a.val LIKE ? OR EXISTS (SELECT 1 FROM db req WHERE req.up=a.id AND req.val LIKE ?)` |
 | 15 | `File type validation`: Node.js uses extension whitelist; PHP uses MIME type detection | upload route | Low priority — extension whitelist is secure enough |
-| 16 | `dir_admin` template mode (`download=0`): PHP reads from `integram-server/templates/custom/{db}` | dir_admin route | Verify path resolution |
+| 16 | ~~`dir_admin` template mode (`download=0`)~~ | ~~dir_admin route~~ | ✅ Verified: path resolves to `integram-server/templates/custom/{db}` correctly |
 | 17 | ~~`csv_all` val escaping~~ | ~~csv_all~~ | ✅ Already: `maskCsvDelimiters` escapes `;`→`\;`, `\n`→`\n`, `\r`→`\r` |
 | 18 | ~~`backup` val escaping~~ | ~~backup/restore~~ | ✅ Already: backup encodes `\n`→`&ritrn;` `\r`→`&ritrr;`; restore decodes at line ~7343 |
 
