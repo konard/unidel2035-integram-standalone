@@ -3206,9 +3206,10 @@ router.post('/:db/_m_new/:up?', (req, res, next) => {
 
     // PHP _m_new die(): {"id":$newId,"obj":$newId,"ord":$ord,"next_act":"...","args":"...","val":"..."}
     // id = obj = new objectId (PHP: $id = insertId, obj not set separately → both equal objectId)
-    // args = new object ID (string) when next_act=edit_obj, or parent filter when returning to list
+    // args: "new1=1&" when has reqs (prefix for client to show new-object flow)
+    //       "F_U=$up" when up!=1 and no reqs (parent filter for list view)
     const next_act = hasReqs ? 'edit_obj' : 'object';
-    const args = hasReqs ? String(id) : (parentId > 1 ? `F_U=${parentId}` : '');
+    const args = hasReqs ? 'new1=1&' : (parentId !== 1 ? `F_U=${parentId}` : '');
 
     return legacyRespond(req, res, db, {
       id,
@@ -3455,12 +3456,14 @@ router.post('/:db/_m_save/:id', async (req, res) => {
 
     // PHP api_dump(): {id, obj, next_act, args, warnings}
     // PHP: $obj = $id (objectId); $id = $typ (typeId) — so id=typeId, obj=objectId
-    // args: "F_U=<parent>&F_I=<objectId>" when parent>1, else "F_I=<objectId>"
+    // PHP args: "saved1=1&F_U=$up&F_I=$id" (always include prefix + F_U + F_I)
+    //           "copied1=1&F_U=$up&F_I=$id" for copy operations
+    const argsPrefix = isCopy ? 'copied1=1&' : 'saved1=1&';
     const response = {
       id: objType,
       obj: objectId,
       next_act: 'object',
-      args: objUp > 1 ? `F_U=${objUp}&F_I=${objectId}` : `F_I=${objectId}`,
+      args: `${argsPrefix}F_U=${objUp}&F_I=${objectId}`,
       warnings: '',
     };
 
@@ -3552,13 +3555,15 @@ router.post('/:db/_m_del/:id', async (req, res) => {
     logger.info('[Legacy _m_del] Object deleted', { db, id: objectId });
 
     // PHP: $id = row.t (type), $obj = objectId, next_act = "object"
+    // PHP args: "F_U=$up" only for array elements (tup==="0"), not for reference elements
     const objType = row.t;
     const objUp   = row.up;
+    const isArrayElement = String(row.tup) === '0';
     legacyRespond(req, res, db, {
       id: objType,
       obj: objectId,
       next_act: 'object',
-      args: objUp > 1 ? `F_U=${objUp}` : '',
+      args: (objUp > 1 && isArrayElement) ? `F_U=${objUp}` : '',
     });
   } catch (error) {
     logger.error('[Legacy _m_del] Error', { error: error.message, db });
@@ -3683,11 +3688,12 @@ router.post('/:db/_m_move/:id', async (req, res) => {
 
     // PHP api_dump(): {id:objectId, obj:null, next_act:"object", args, warnings}
     // PHP: $id not reassigned (stays objectId), $obj = null
+    // PHP args: "moved&" prefix always; if newParent != 1 append "&F_U=$newParent"
     legacyRespond(req, res, db, {
       id: objectId,
       obj: null,
       next_act: 'object',
-      args: newParentId > 1 ? `F_U=${newParentId}` : '',
+      args: newParentId !== 1 ? `moved&&F_U=${newParentId}` : 'moved&',
     });
   } catch (error) {
     logger.error('[Legacy _m_move] Error', { error: error.message, db });
@@ -5154,8 +5160,8 @@ router.post('/:db/_m_up/:id', async (req, res) => {
 
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
-      // PHP: $id = $row["t"] (typeId), $obj = null, args = F_U=parent
-      return legacyRespond(req, res, db, { id: obj.t, obj: null, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
+      // PHP: $id = $row["t"] (typeId), $obj = null, $arg = "F_U=$up" always
+      return legacyRespond(req, res, db, { id: obj.t, obj: null, next_act: 'object', args: `F_U=${obj.up}` });
     }
 
     const prevSibling = siblings[0];
@@ -5166,9 +5172,9 @@ router.post('/:db/_m_up/:id', async (req, res) => {
 
     logger.info('[Legacy _m_up] Object moved up', { db, id: objectId, newOrd: prevSibling.ord });
 
-    // PHP api_dump(): {id:typeId, obj:null, next_act:"object", args:F_U=parent}
-    // PHP: $id = $row["t"] (typeId of the moved object), $obj = null
-    legacyRespond(req, res, db, { id: obj.t, obj: null, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
+    // PHP api_dump(): {id:typeId, obj:null, next_act:"object", args:"F_U=$up" always}
+    // PHP: $id = $row["t"] (typeId of the moved object), $obj = null, $arg = "F_U=$up" always
+    legacyRespond(req, res, db, { id: obj.t, obj: null, next_act: 'object', args: `F_U=${obj.up}` });
   } catch (error) {
     logger.error('[Legacy _m_up] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
