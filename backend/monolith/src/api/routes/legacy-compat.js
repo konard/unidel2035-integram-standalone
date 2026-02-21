@@ -1863,12 +1863,12 @@ router.get('/:db/:page*', async (req, res, next) => {
     const subId = parseInt((fullPath || '').replace(/^\//, ''), 10) || 0;
 
     // JSON requested but page is a template page without required sub-id → JSON error
-    if ((page === 'object' || page === 'edit_obj' || page === 'report') && !subId) {
+    if ((page === 'object' || page === 'edit_obj') && !subId) {
       return res.status(200).json({ error: `typeId required: /${db}/${page}/{id}?JSON` });
     }
 
-    // report with subId: pass to the dedicated report API route
-    if (page === 'report' && subId) {
+    // report + JSON: always pass to the dedicated report API route (list or detail)
+    if (page === 'report') {
       return next();
     }
 
@@ -3204,15 +3204,15 @@ router.post('/:db/_m_new/:up?', (req, res, next) => {
     );
     const hasReqs = reqRows.length > 0;
 
-    // PHP response format: {"id":$newId,"obj":$typeId,"ord":$ord,"next_act":"...","args":"...","val":"..."}
-    // obj = type ID (so client knows which type to navigate back to)
+    // PHP _m_new die(): {"id":$newId,"obj":$newId,"ord":$ord,"next_act":"...","args":"...","val":"..."}
+    // id = obj = new objectId (PHP: $id = insertId, obj not set separately → both equal objectId)
     // args = new object ID (string) when next_act=edit_obj, or parent filter when returning to list
     const next_act = hasReqs ? 'edit_obj' : 'object';
     const args = hasReqs ? String(id) : (parentId > 1 ? `F_U=${parentId}` : '');
 
     return legacyRespond(req, res, db, {
       id,
-      obj: typeId,
+      obj: id,
       next_act,
       args,
       ord: order,
@@ -3454,12 +3454,13 @@ router.post('/:db/_m_save/:id', async (req, res) => {
     const objUp   = objInfoEarly.length > 0 ? objInfoEarly[0].up : 0;
 
     // PHP api_dump(): {id, obj, next_act, args, warnings}
-    // For _m_save: obj = type ID, next_act = "object", args = F_U=<parent> if parent>1
+    // PHP: $obj = $id (objectId); $id = $typ (typeId) — so id=typeId, obj=objectId
+    // args: "F_U=<parent>&F_I=<objectId>" when parent>1, else "F_I=<objectId>"
     const response = {
-      id: objectId,
-      obj: objType,
+      id: objType,
+      obj: objectId,
       next_act: 'object',
-      args: objUp > 1 ? `F_U=${objUp}` : '',
+      args: objUp > 1 ? `F_U=${objUp}&F_I=${objectId}` : `F_I=${objectId}`,
       warnings: '',
     };
 
@@ -3637,10 +3638,11 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
     logger.info('[Legacy _m_set] Attributes set', { db, id: objectId });
 
     // PHP api_dump(): {id, obj, next_act:"object", args, warnings}
+    // PHP: $id = type, $obj = objectId (same pattern as _m_save)
     // For file uploads: args = "{db}/download/{filename}" (saveInlineFileDone builds href="/"+json.args)
     legacyRespond(req, res, db, {
-      id: objectId,
-      obj: objType,
+      id: objType,
+      obj: objectId,
       next_act: 'object',
       args: uploadedFilePath || (objUp > 1 ? `F_U=${objUp}` : ''),
     });
@@ -3679,10 +3681,11 @@ router.post('/:db/_m_move/:id', async (req, res) => {
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
 
-    // PHP api_dump(): {id, obj:new_parent_id, next_act:"object", args, warnings}
+    // PHP api_dump(): {id:objectId, obj:null, next_act:"object", args, warnings}
+    // PHP: $id not reassigned (stays objectId), $obj = null
     legacyRespond(req, res, db, {
       id: objectId,
-      obj: newParentId,
+      obj: null,
       next_act: 'object',
       args: newParentId > 1 ? `F_U=${newParentId}` : '',
     });
@@ -5151,7 +5154,8 @@ router.post('/:db/_m_up/:id', async (req, res) => {
 
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
-      return legacyRespond(req, res, db, { id: objectId, obj: obj.up, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
+      // PHP: $id = $row["t"] (typeId), $obj = null, args = F_U=parent
+      return legacyRespond(req, res, db, { id: obj.t, obj: null, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
     }
 
     const prevSibling = siblings[0];
@@ -5162,8 +5166,9 @@ router.post('/:db/_m_up/:id', async (req, res) => {
 
     logger.info('[Legacy _m_up] Object moved up', { db, id: objectId, newOrd: prevSibling.ord });
 
-    // PHP api_dump(): {id, obj:parent_id, next_act:"object", args, warnings}
-    legacyRespond(req, res, db, { id: objectId, obj: obj.up, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
+    // PHP api_dump(): {id:typeId, obj:null, next_act:"object", args:F_U=parent}
+    // PHP: $id = $row["t"] (typeId of the moved object), $obj = null
+    legacyRespond(req, res, db, { id: obj.t, obj: null, next_act: 'object', args: obj.up > 1 ? `F_U=${obj.up}` : '' });
   } catch (error) {
     logger.error('[Legacy _m_up] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5227,8 +5232,9 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
 
     logger.info('[Legacy _m_ord] Order set', { db, id: objectId, ord: newOrd });
 
-    // PHP api_dump(): {id, obj:parent_id, next_act:"object", args, warnings}
-    legacyRespond(req, res, db, { id: objectId, obj: parentId, next_act: 'object', args: parentId > 1 ? `F_U=${parentId}` : '' });
+    // PHP api_dump(): {id:parentId, obj:parentId, next_act:"object", args, warnings}
+    // PHP: $id = $row["up"] (parent), $obj = $id (also parent)
+    legacyRespond(req, res, db, { id: parentId, obj: parentId, next_act: 'object', args: parentId > 1 ? `F_U=${parentId}` : '' });
   } catch (error) {
     logger.error('[Legacy _m_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
