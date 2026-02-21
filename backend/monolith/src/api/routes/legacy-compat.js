@@ -1639,6 +1639,10 @@ router.post('/:db', async (req, res, next) => {
   const { db } = req.params;
   if (!isValidDbName(db)) return next();
 
+  // Pass report action to the dedicated report handler
+  const action = req.body?.action || req.query?.action;
+  if (action === 'report') return next();
+
   const token = extractToken(req, db);
 
   if (!token) {
