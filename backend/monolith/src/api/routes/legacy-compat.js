@@ -4424,26 +4424,33 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
       }
     }
 
-    // Build the query with joins for requisite values
-    // PHP: joins requisite tables to fetch additional identifying info
-    let selectCols = 'vals.id, vals.val AS ref_val';
+    // Build the query with joins for requisite values.
+    // PHP structure (lines 9073-9076):
+    //   SELECT vals.id, vals.val ref_val, <reqs>
+    //   FROM (SELECT vals.id, vals.val, <sub_reqs> FROM z vals <joins>, z pars
+    //         WHERE pars.id=vals.up AND pars.up!=0 AND vals.t=$dic <search> <restrict>
+    //         LIMIT 80) vals
+    //   ORDER BY vals.val
+    // Key: LIMIT is inside the subquery (limits before sorting), ORDER BY is outside.
+    let innerSelectCols = 'vals.id, vals.val';
+    let outerSelectCols = 'vals.id, vals.val AS ref_val';
     let joinClauses = '';
 
-    for (let i = 0; i < refReqs.length; i++) {
-      const rq = refReqs[i];
+    for (const rq of refReqs) {
       const reqAlias = `a${rq.reqId}`;
-      selectCols += `, ${reqAlias}.val AS ${reqAlias}val`;
+      innerSelectCols += `, ${reqAlias}.val AS ${reqAlias}val`;
+      outerSelectCols += `, ${reqAlias}val`;
 
       if (rq.isRef) {
-        // Reference type - join through intermediate table
-        joinClauses += ` LEFT JOIN (${db} r${rq.reqId} CROSS JOIN ${db} ${reqAlias}) ON r${rq.reqId}.up = vals.id AND ${reqAlias}.id = r${rq.reqId}.t AND ${reqAlias}.t = ${rq.base}`;
+        // Reference type - join through intermediate table (PHP: LEFT JOIN (z r{req} CROSS JOIN z a{req}) ON ...)
+        joinClauses += ` LEFT JOIN (\`${db}\` r${rq.reqId} CROSS JOIN \`${db}\` ${reqAlias}) ON r${rq.reqId}.up = vals.id AND ${reqAlias}.id = r${rq.reqId}.t AND ${reqAlias}.t = ${rq.base}`;
       } else {
-        // Direct requisite
-        joinClauses += ` LEFT JOIN ${db} ${reqAlias} ON ${reqAlias}.up = vals.id AND ${reqAlias}.t = ${rq.reqId}`;
+        // Direct requisite (PHP: LEFT JOIN z a{req} ON a{req}.up=vals.id AND a{req}.t={req_id})
+        joinClauses += ` LEFT JOIN \`${db}\` ${reqAlias} ON ${reqAlias}.up = vals.id AND ${reqAlias}.t = ${rq.reqId}`;
       }
     }
 
-    // Build WHERE clause
+    // Build WHERE clause for the inner subquery
     let whereClause = `vals.t = ${dic}`;
 
     // Handle restrict parameter (?r=<id> or ?r=<id1>,<id2>)
@@ -4456,7 +4463,7 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
       }
     }
 
-    // Handle search parameter
+    // Handle search parameter (?q=<search> or ?q=@<id>)
     let searchClause = '';
     if (searchQuery) {
       if (searchQuery.startsWith('@')) {
@@ -4465,7 +4472,7 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
           whereClause += ` AND vals.id = ${searchId}`;
         }
       } else {
-        // PHP: searches across val and all requisite values using CONCAT
+        // PHP: CONCAT(vals.val, '/', COALESCE(a{req}.val,''), ...) LIKE '%search%'
         const escapedSearch = searchQuery.replace(/'/g, "''").replace(/%/g, '\\%');
         let searchConcat = 'vals.val';
         for (const rq of refReqs) {
@@ -4475,15 +4482,18 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
       }
     }
 
-    // Execute the query
+    // PHP SQL: subquery with LIMIT inside (limits before sort), ORDER BY outside
     const sql = `
-      SELECT ${selectCols}
-      FROM ${db} vals
-      ${joinClauses}
-      JOIN ${db} pars ON pars.id = vals.up AND pars.up != 0
-      WHERE ${whereClause}${searchClause}
+      SELECT ${outerSelectCols}
+      FROM (
+        SELECT ${innerSelectCols}
+        FROM \`${db}\` vals
+        ${joinClauses}
+        JOIN \`${db}\` pars ON pars.id = vals.up AND pars.up != 0
+        WHERE ${whereClause}${searchClause}
+        LIMIT ${limitParam}
+      ) vals
       ORDER BY vals.val
-      LIMIT ${limitParam}
     `;
 
     logger.debug('[Legacy _ref_reqs] Query', { db, id, sql: sql.replace(/\s+/g, ' ').trim() });

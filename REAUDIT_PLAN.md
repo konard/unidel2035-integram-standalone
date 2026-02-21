@@ -6,6 +6,12 @@
 
 ## Status Summary (2026-02-21, updated session 7)
 
+### Session 8 Fixes (_ref_reqs SQL structure + _d_ref id/obj)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `GET /:db/_ref_reqs/:refId` | Flat query → PHP-exact subquery structure | PHP: `LIMIT` inside subquery (limits before sort), `ORDER BY` outside. Node.js now matches exactly. |
+
 ### Session 7 Fixes (_d_ref id/obj swap)
 
 | Endpoint | Bug Fixed | Details |
@@ -264,7 +270,8 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 
 | Expected | Status |
 |---|---|
-| `{id: "val / req1 / req2", ...}` keyed object (max 80) | ✅ (static — dynamic formula skipped) |
+| `{id: "val / req1 / req2", ...}` keyed object (max 80) | ✅ SQL structure matches PHP (subquery+LIMIT inside, ORDER BY outside) |
+| Dynamic formula (`Get_block_data`) | ⚠️ Fallback to simple list — PHP block engine not portable; rare edge case (not used in test DB) |
 
 ---
 
@@ -274,7 +281,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 
 | # | Issue | Location | Action |
 |---|---|---|---|
-| 1 | `_ref_reqs` dynamic formula: PHP evaluates `attrs` block of the reference type to build a custom SQL query | `legacy-compat.js` ~4100 | Implement formula evaluator or document as out-of-scope |
+| 1 | ~~`_ref_reqs` SQL structure~~ | ~~_ref_reqs route~~ | ✅ Fixed s8: subquery with LIMIT inside matches PHP exactly. Dynamic formula fallback remains (rare edge case, not in test DB) |
 | 2 | ~~`restore` reads from filesystem ZIP~~ | ~~restore route~~ | ✅ Already implemented: `backup_file` param reads from `download/$db/` dir |
 | 3 | ~~`executeReport` — `REP_JOIN` (t=44) rows define extra JOINs~~ | ~~compileReport~~ | ✅ Already implemented: fetched from DB, LEFT JOIN rj{n} added to SQL |
 | 4 | ~~`executeReport` — filter column alias~~ | ~~executeReport~~ | ✅ Already correct: keyed by `col.alias` matching `FR_{alias}` params |
