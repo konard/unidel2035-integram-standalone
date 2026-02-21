@@ -77,13 +77,13 @@ function extractToken(req, db) {
  * name = menu item's own val, href = first non-empty child val.
  *
  * @param {object} pool  - MySQL pool
- * @param {string} db    - database name
- * @param {number} roleRowId - ID of the user's role row
+ * @param {string} db      - database name
+ * @param {number} roleObjId - ID of the role OBJECT (e.g. 145 for "admin"), NOT the assignment row
  * @returns {object} {href: [...], name: [...]}
  */
-async function buildMyrolemenu(pool, db, roleRowId) {
+async function buildMyrolemenu(pool, db, roleObjId) {
   const empty = { href: [], name: [] };
-  if (!roleRowId) return empty;
+  if (!roleObjId) return empty;
   try {
     // Get menu items: non-type children of role row with non-empty val
     const [menuItems] = await pool.query(
@@ -91,7 +91,7 @@ async function buildMyrolemenu(pool, db, roleRowId) {
        FROM \`${db}\` m
        WHERE m.up = ? AND m.id != m.t AND m.val != ''
        ORDER BY m.ord`,
-      [roleRowId]
+      [roleObjId]
     );
     if (menuItems.length === 0) return empty;
     const mIds = menuItems.map(m => m.id);
@@ -1630,13 +1630,16 @@ router.get('/:db', async (req, res, next) => {
     const pool = getPool();
 
     // Validate token and get user info
+    // Role assignment rows have t = roleObjectId (e.g. 145), not t = TYPE.ROLE(42).
+    // Use CROSS JOIN to find role_def where role_def.id = r.t AND role_def.t = TYPE.ROLE.
     const query = `
       SELECT user.id AS uid, user.val AS username,
-             xsrf.val AS xsrf_val, role.val AS role_val, role.id AS role_id
+             xsrf.val AS xsrf_val, role_def.val AS role_val, role_def.id AS role_id
       FROM \`${db}\` user
       JOIN \`${db}\` token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
       LEFT JOIN \`${db}\` xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
-      LEFT JOIN \`${db}\` role ON role.up = user.id AND role.t = ${TYPE.ROLE}
+      LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+        ON r.up = user.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
       WHERE token.val = ? AND user.t = ${TYPE.USER}
       LIMIT 1
     `;
@@ -1658,7 +1661,7 @@ router.get('/:db', async (req, res, next) => {
     // PHP returns: {user, role, _xsrf, &main.myrolemenu, etc.}
     if (isApiRequest(req)) {
       // Get role menu items from role row's menu children
-      const roleMenu = await buildMyrolemenu(pool, db, user.role_id);
+      const roleMenu = await buildMyrolemenu(pool, db, user.role_id || null);
       const menuHrefs = roleMenu.href;
       const menuNames = roleMenu.name;
 
@@ -1970,15 +1973,16 @@ router.get('/:db/:page*', async (req, res, next) => {
         if (token) {
           try {
             const [uRows] = await pool.query(
-              `SELECT r.id AS role_row_id
+              `SELECT role_def.id AS role_obj_id
                FROM \`${db}\` u
                JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
-               LEFT JOIN \`${db}\` r ON r.up = u.id AND r.t = ${TYPE.ROLE}
+               LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+                 ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
                WHERE u.t = ${TYPE.USER} LIMIT 1`,
               [token]
             );
             if (uRows.length > 0) {
-              mainMyrolemenu = await buildMyrolemenu(pool, db, uRows[0].role_row_id);
+              mainMyrolemenu = await buildMyrolemenu(pool, db, uRows[0].role_obj_id || null);
             }
           } catch (_e) { /* ignore myrolemenu errors */ }
         }
@@ -2299,15 +2303,16 @@ router.get('/:db/:page*', async (req, res, next) => {
         if (token) {
           try {
             const [uRowsEd] = await pool.query(
-              `SELECT r.id AS role_row_id
+              `SELECT role_def.id AS role_obj_id
                FROM \`${db}\` u
                JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
-               LEFT JOIN \`${db}\` r ON r.up = u.id AND r.t = ${TYPE.ROLE}
+               LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+                 ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
                WHERE u.t = ${TYPE.USER} LIMIT 1`,
               [token]
             );
             if (uRowsEd.length > 0) {
-              myroleEd = await buildMyrolemenu(pool, db, uRowsEd[0].role_row_id);
+              myroleEd = await buildMyrolemenu(pool, db, uRowsEd[0].role_obj_id || null);
             }
           } catch (_e) { /* ignore */ }
         }
