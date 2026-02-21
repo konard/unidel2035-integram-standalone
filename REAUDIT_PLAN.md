@@ -6,11 +6,13 @@
 
 ## Status Summary (2026-02-21, updated session 10)
 
-### Session 10 Fixes (auth?reset routing)
+### Session 10 Fixes (verification matrix sweep)
 
 | Endpoint | Bug Fixed | Details |
 |---|---|---|
 | `POST /:db/auth?reset` | Reset handler never reached — normal auth handler intercepted all POST /:db/auth | Added `if (req.query.reset !== undefined) return next()` to first handler |
+| `POST /:db/_d_req/:typeId` | `args:''` → `args:'ext'` | All DDL endpoints must return `args:'ext'` (line 9176 PHP always appends "ext"). Missed in session 6. |
+| `POST /:db/_m_save?copybtn` | `id=objectId,obj=objectId,args=F_U=...` → `id=typeId,obj=newId,args=copied1=1&F_U=...&F_I=...` | PHP (lines 8228-8234): `$arg="copied1=1&F_U=$up&F_I=$id"; $obj=$id; $id=$typ` |
 
 ### Session 9 Fixes (format parity sweep)
 
@@ -237,7 +239,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 |---|---|---|---|---|---|
 | `_m_new` | new objectId | new objectId (= id) | `edit_obj` (has reqs) or `object` | `"new1=1&"` (edit_obj) or `"F_U=<up>"` if up!=1 | ✅ fixed s4+s5 |
 | `_m_save` | **type id** | **object id** | `object` | `"saved1=1&F_U=<up>&F_I=<obj>"` always | ✅ fixed s4+s5 |
-| `_m_save` (copy) | **type id** | **object id** | `object` | `"copied1=1&F_U=<up>&F_I=<obj>"` always | ✅ fixed s4+s5 |
+| `_m_save` (copy) | **type id** | **new object id** | `object` | `"copied1=1&F_U=<up>&F_I=<newId>"` always | ✅ fixed s10: id=typeId,obj=newId,args=copied1=1&F_U=up&F_I=newId |
 | `_m_del` | type id | deleted objectId | `object` | `"F_U=<up>"` only for array elements; `""` for refs | ✅ fixed s5 |
 | `_m_set` | `""` (or req id as string) | object id (string) | uses `"a"` not `next_act` | `""` or file path | ✅ fixed s9 |
 | `_m_move` | object id | **null** | `object` | `"moved&"` or `"moved&&F_U=<up>"` if up!=1 | ✅ fixed s4+s5 |
@@ -249,7 +251,8 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_d_del` | typeId (original) | null | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_up` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_ord` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
-| `_d_req/_d_alias/_d_null/_d_multi/_d_attrs` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_req` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s10: was args:'', now args:'ext' |
+| `_d_alias/_d_null/_d_multi/_d_attrs` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_del_req` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_ref` | **parent id** (type id) | **new ref id** | `edit_types` | `"ext"` | ✅ fixed s7 |
 
