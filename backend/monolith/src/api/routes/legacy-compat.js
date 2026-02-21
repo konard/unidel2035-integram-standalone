@@ -443,6 +443,17 @@ function formatObjVal(base, rawVal) {
 }
 
 // HTML-escape special chars (PHP htmlspecialchars equivalent)
+/**
+ * Decode JSON-style \uXXXX escape sequences that PHP stores literally in DB
+ * and then outputs verbatim into manually-built JSON strings, making the JSON
+ * parser decode them as Unicode. Node.js JSON.stringify re-escapes the backslash,
+ * so we must decode them first to match PHP's output.
+ */
+function decodeJsonEscapes(str) {
+  if (!str || !str.includes('\\u')) return str;
+  return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 function htmlEsc(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -5390,17 +5401,33 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
 
     const [rows] = await pool.query(query, params);
 
+    // PHP (metadata all): first pass collects req-only types to skip.
+    // "req-only" = type has no own requisites AND its ID is used as req.t by another type.
+    // PHP: foreach $data as $row: if(!is_null($row["ref_id"])) $reqs[$row["ref_id"]] = $row["id"]
+    //   where ref_id = req.t (PHP alias) = req_type (our alias)
+    // Then second loop skips: if(!$row["ord"] && isset($reqs[$row["id"]]))
+    const usedAsReqType = new Set();
+    if (!isOneType) {
+      for (const row of rows) {
+        if (row.req_type != null) usedAsReqType.add(row.req_type);
+      }
+    }
+
     // Group rows by type ID
     const typesMap = new Map();
-    const reqsMap = new Map();
 
     for (const row of rows) {
+      // PHP: if(!$row["ord"] && isset($reqs[$row["id"]])) continue;
+      // Skip req-only types in the all-types case (not for single-type lookup)
+      if (!isOneType && !row.req_ord && usedAsReqType.has(row.id)) continue;
+
       if (!typesMap.has(row.id)) {
         typesMap.set(row.id, {
           id: row.id.toString(),
           up: row.up.toString(),
           type: row.t.toString(),
-          val: row.val || '',
+          // PHP: val placed verbatim in JSON string — decode \uXXXX escapes that PHP treats as JSON
+          val: decodeJsonEscapes(row.val || ''),
           unique: row.uniq.toString(),
           reqs: []
         });
@@ -5416,13 +5443,16 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
         const reqData = {
           num: row.req_ord,
           id: row.req_id.toString(),
+          // PHP: req_val goes through addcslashes() which doubles backslashes,
+          // so \uXXXX stays as \uXXXX (not decoded) — use raw value here
           val: row.req_val || '',
           orig: (row.ref_id || row.req_type || '').toString(),
           // PHP: "$row["base_typ"]" — 0 should give "0", only NULL gives ""
           type: row.base_typ != null ? String(row.base_typ) : '',
         };
         if (row.req_attrs) {
-          reqData.attrs = row.req_attrs;
+          // PHP: attrs placed verbatim — decode \uXXXX escapes (e.g., :ALIAS=\u041e...:)
+          reqData.attrs = decodeJsonEscapes(row.req_attrs);
         }
 
         if (row.arr_id) {
