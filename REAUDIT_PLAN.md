@@ -4,7 +4,27 @@
 > **Date**: 2026-02-21 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-21, updated session 2)
+## Status Summary (2026-02-21, updated session 4)
+
+### Session 4 Fixes (DML api_dump id/obj fields — systematic fix)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/_m_new/:up` | `obj: typeId` → `obj: objectId` | PHP die(): id=obj=new objectId |
+| `POST /:db/_m_save/:id` | `id: objectId, obj: typeId` → **swapped** + args gets F_I= | PHP: `$obj=$id; $id=$typ;` → id=typeId, obj=objectId, args=F_U=up&F_I=obj |
+| `POST /:db/_m_set/:id` | `id: objectId, obj: typeId` → **swapped** | Same pattern as _m_save |
+| `POST /:db/_m_move/:id` | `obj: newParentId` → `obj: null` | PHP keeps `$obj=null` for move |
+| `POST /:db/_m_up/:id` | `id: objectId, obj: parentId` → `id: obj.t, obj: null` | PHP: `$id=$row["t"]` (typeId), `$obj` stays null |
+| `POST /:db/_m_ord/:id` | `id: objectId` → `id: parentId` | PHP: `$id=$row["up"]` (parent), `$obj=$id` (also parent) |
+
+### Session 3 Fixes
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `GET /:db/report/:id?JSON` | SubPage handler intercepted before report API route | Added `next()` pass-through in SubPage for `page=report && subId && isApiRequest` |
+| `GET/POST /:db/_connect/:id` | Route had no `:id` param; 404 for all ID requests | Changed to `/:db/_connect/:id?`; proxies to CONNECT requisite URL |
+| `POST /:db/restore` | `ord=0` parsed as `1` (`parseInt("0") \|\| 1 = 1`) | Fixed: `const ordVal = parseInt(..., 10); ord = isNaN(ordVal) ? 1 : ordVal` |
+| `POST /:db?JSON action=report` | Second POST /:db handler (main page) consumed all auth'd requests | Added `if (action === 'report') return next()` before main-page logic |
 
 ### Session 2 Fixes (xsrf / terms / metadata / obj_meta — all now 0 diffs)
 
@@ -162,13 +182,13 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 
 | Action family | `id` | `obj` | `next_act` | `args` | Status |
 |---|---|---|---|---|---|
-| `_m_new` | new object id | type id | `edit_obj` (has reqs) or `object` | `new1=1&` or `F_U=<up>` | ✅ |
-| `_m_save` | object id | type id | `object` | `F_U=<up>` if up>1 | ✅ |
-| `_m_del` | type id | deleted id | `object` | `F_U=<up>` | ✅ |
-| `_m_set` | object id | type id | `object` | `F_U=<up>` | ✅ |
-| `_m_move` | object id | new parent id | `object` | `F_U=<up>` | ✅ |
-| `_m_up` | object id | parent id | `object` | `F_U=<up>` | ✅ |
-| `_m_ord` | object id | parent id | `object` | `F_U=<up>` | ✅ |
+| `_m_new` | new objectId | new objectId (= id) | `edit_obj` (has reqs) or `object` | `String(id)` (edit_obj) or `F_U=<up>` | ✅ fixed s4 |
+| `_m_save` | **type id** | **object id** | `object` | `F_U=<up>&F_I=<obj>` if up>1 else `F_I=<obj>` | ✅ fixed s4 |
+| `_m_del` | type id | deleted objectId | `object` | `F_U=<up>` | ✅ |
+| `_m_set` | **type id** | **object id** | `object` | `F_U=<up>` if up>1 | ✅ fixed s4 |
+| `_m_move` | object id | **null** | `object` | `F_U=<newParent>` if newParent>1 | ✅ fixed s4 |
+| `_m_up` | **type id** (obj.t) | **null** | `object` | `F_U=<parent>` if parent>1 | ✅ fixed s4 |
+| `_m_ord` | **parent id** | **parent id** | `object` | `F_U=<parent>` if parent>1 | ✅ fixed s4 |
 | `_m_id` | new_id | new_id | `object` | `F_U=<up>` if up>1 | ✅ |
 | `_d_new` | new type id | parent type id | `edit_types` | `F_U=<up>` if up>1 | ✅ |
 | `_d_save` | type id | type id | `edit_types` | `` | ✅ |
