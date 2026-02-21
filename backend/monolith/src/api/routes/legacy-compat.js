@@ -995,7 +995,10 @@ router.all('/:db/auth', async (req, res, next) => {
  * PHP error (API mode) — HTTP 200:
  *   [{"error":"..."}]
  */
-router.post('/:db/auth', async (req, res) => {
+router.post('/:db/auth', async (req, res, next) => {
+  // ?reset is handled by a separate handler registered after this one
+  if (req.query.reset !== undefined) return next();
+
   const { db } = req.params;
   const isJSON = isApiRequest(req);
 
