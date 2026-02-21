@@ -3642,14 +3642,16 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
 
     logger.info('[Legacy _m_set] Attributes set', { db, id: objectId });
 
-    // PHP api_dump(): {id, obj, next_act:"object", args, warnings}
-    // PHP: $id = type, $obj = objectId (same pattern as _m_save)
-    // For file uploads: args = "{db}/download/{filename}" (saveInlineFileDone builds href="/"+json.args)
+    // PHP _m_set die() format: {"id":"<reqId>", "obj":"<objectId>", "a":"nul", "args":"<filePath>"}
+    // PHP: $id = "" initially (gets set to req id inside loop); $obj = objectId
+    // PHP args: file path for uploads, "" otherwise (no F_U)
+    // We include both "a" (PHP format) and "next_act" (Node.js standard) for compatibility
     legacyRespond(req, res, db, {
-      id: objType,
+      id: '',
       obj: objectId,
-      next_act: 'object',
-      args: uploadedFilePath || (objUp > 1 ? `F_U=${objUp}` : ''),
+      next_act: 'nul',
+      args: uploadedFilePath || '',
+      a: 'nul',
     });
   } catch (error) {
     logger.error('[Legacy _m_set] Error', { error: error.message, db });
