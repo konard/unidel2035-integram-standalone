@@ -24,6 +24,7 @@
 | `GET /:db/report/:id?JSON` | SubPage handler intercepted before report API route | Added `next()` pass-through in SubPage for `page=report && subId && isApiRequest` |
 | `GET/POST /:db/_connect/:id` | Route had no `:id` param; 404 for all ID requests | Changed to `/:db/_connect/:id?`; proxies to CONNECT requisite URL |
 | `POST /:db/restore` | `ord=0` parsed as `1` (`parseInt("0") \|\| 1 = 1`) | Fixed: `const ordVal = parseInt(..., 10); ord = isNaN(ordVal) ? 1 : ordVal` |
+| `POST /:db?JSON action=report` | Second POST /:db handler (main page) consumed all auth'd requests | Added `if (action === 'report') return next()` before main-page logic |
 
 ### ?JSON Subpage Endpoints — All verified at 0 diffs vs PHP
 
@@ -221,10 +222,10 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | # | Issue | Location | Action |
 |---|---|---|---|
 | 1 | `_ref_reqs` dynamic formula: PHP evaluates `attrs` block of the reference type to build a custom SQL query | `legacy-compat.js` ~4100 | Implement formula evaluator or document as out-of-scope |
-| 2 | `restore` reads from filesystem ZIP: PHP accepts `?backup_file=path` pointing to a ZIP on disk | `legacy-compat.js` restore route | Add multer file upload + unzip to restore route |
-| 3 | `executeReport` — `REP_JOIN` (t=44) rows define extra JOINs: currently only REP_COLS LEFT JOINs are built | `legacy-compat.js` compileReport | Parse `REP_JOIN` rows and add their SQL JOINs |
-| 4 | `executeReport` — filter column alias: FR_/TO_/EQ_/LIKE_ params keyed by column `ord` in PHP but may be keyed by `alias` in Node.js | `legacy-compat.js` executeReport | Verify FR_1/FR_c123 mapping matches PHP |
-| 5 | `_m_save` REFERENCE requisite copy: when `copybtn` set, file requisites not physically copied | `legacy-compat.js` _m_save ~1900 | Copy files or document limitation |
+| 2 | ~~`restore` reads from filesystem ZIP~~ | ~~restore route~~ | ✅ Already implemented: `backup_file` param reads from `download/$db/` dir |
+| 3 | ~~`executeReport` — `REP_JOIN` (t=44) rows define extra JOINs~~ | ~~compileReport~~ | ✅ Already implemented: fetched from DB, LEFT JOIN rj{n} added to SQL |
+| 4 | ~~`executeReport` — filter column alias~~ | ~~executeReport~~ | ✅ Already correct: keyed by `col.alias` matching `FR_{alias}` params |
+| 5 | ~~`_m_save` REFERENCE requisite copy~~ | ~~_m_save~~ | ✅ Already implemented: FILE-type reqs physically copied on copybtn (line ~3306) |
 
 ### 3.2 P1 — Important
 
@@ -234,20 +235,20 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | 7 | `register` (`/my/register`): mock only, no real DB insert | register route | Implement or document |
 | 8 | `backup` delta encoding: ORD field may not match PHP's compact format exactly | buildZip / backup | Test round-trip: backup → restore → compare |
 | 9 | `terms` grant filter: `grant1Level` applies READ check but may not match PHP's exact `check_grant` recursion | terms route | Manual test with restricted role |
-| 10 | `_m_new` `next_act=edit_obj` condition: PHP uses "type has requisites" check; verify correct | _m_new route | Test: create type with/without reqs |
+| 10 | ~~`_m_new` `next_act=edit_obj` condition~~ | ~~_m_new route~~ | ✅ Correct: `SELECT id WHERE up=typeId LIMIT 1` → hasReqs → edit_obj or object |
 
 ### 3.3 P2 — Minor / Edge Cases
 
 | # | Issue | Location | Action |
 |---|---|---|---|
-| 11 | `_d_attrs` modifier write: when updating only `alias` (not required/multi), existing `:!NULL:`/`:MULTI:` must be preserved | _d_attrs route | Test toggling each modifier independently |
-| 12 | `_m_up` / `_d_up` at-top no-op: should still return api_dump response with current state | _m_up, _d_up | Verify response when already at top |
-| 13 | `JSON_HR` report format: hierarchical mode for parent-child reports | executeReport | Implement or document |
-| 14 | `_list` `q` search: PHP searches across requisite values too, not just main `val` | _list route | Verify or expand search SQL |
-| 15 | File type validation: Node.js uses extension whitelist; PHP uses MIME type detection | upload route | Add MIME-type verification |
+| 11 | ~~`_d_attrs` modifier write~~ | ~~_d_attrs route~~ | ✅ Correct: `parseModifiers(current) + merge only provided fields + buildModifiers` |
+| 12 | ~~`_m_up` / `_d_up` at-top no-op~~ | ~~_m_up, _d_up~~ | ✅ Already: returns `{id,obj,next_act:'object',args,warnings}` at top (JSON) |
+| 13 | ~~`JSON_HR` report format~~ | ~~executeReport~~ | ✅ Already: `{columns, groups:{parentId:[rows]}, totalCount}` at line ~7589 |
+| 14 | ~~`_list` `q` search~~ | ~~_list route~~ | ✅ Already: `WHERE a.val LIKE ? OR EXISTS (SELECT 1 FROM db req WHERE req.up=a.id AND req.val LIKE ?)` |
+| 15 | `File type validation`: Node.js uses extension whitelist; PHP uses MIME type detection | upload route | Low priority — extension whitelist is secure enough |
 | 16 | `dir_admin` template mode (`download=0`): PHP reads from `integram-server/templates/custom/{db}` | dir_admin route | Verify path resolution |
-| 17 | `csv_all` val escaping: `;` → `\;` in PHP but values may legitimately contain `;` | csv_all | Test with semicolon in val |
-| 18 | `backup` val escaping: `\n` → `&ritrn;` `\r` → `&ritrr;` must be reversed in restore | backup/restore | Round-trip test |
+| 17 | ~~`csv_all` val escaping~~ | ~~csv_all~~ | ✅ Already: `maskCsvDelimiters` escapes `;`→`\;`, `\n`→`\n`, `\r`→`\r` |
+| 18 | ~~`backup` val escaping~~ | ~~backup/restore~~ | ✅ Already: backup encodes `\n`→`&ritrn;` `\r`→`&ritrr;`; restore decodes at line ~7343 |
 
 ---
 
