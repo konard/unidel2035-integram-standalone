@@ -1,0 +1,5 @@
+Couldn't execute query [Get ref reqs] You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'LIMIT 80) vals
+					    ORDER BY vals.val' at line 3 (SELECT vals.id, vals.val ref_val  
+						FROM (SELECT vals.id, vals.val  FROM my vals , my pars
+						WHERE pars.id=vals.up AND pars.up!=0 AND vals.t=    LIMIT 80) vals
+					    ORDER BY vals.val; )<br /><font color="lightgray"><a href="/my/dir_admin">Файлы</a></font>

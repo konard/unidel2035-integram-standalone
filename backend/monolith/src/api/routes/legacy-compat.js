@@ -1009,11 +1009,9 @@ router.all('/:db/auth', async (req, res, next) => {
     logger.info('[Legacy SecretAuth] Success', { db, uid: user.uid, username: user.username });
 
     if (isJSON) {
-      // PHP auth case (line ~7688): {_xsrf, token, id, msg} — consistent with POST /:db/auth response
-      // Note: PHP has no dedicated GET /:db/auth?secret JSON endpoint; secret auth sets session via
-      // Validate_Token() globally. This Node.js handler is a custom convenience endpoint — keep
-      // format consistent with regular auth response.
-      return res.status(200).json({ _xsrf: xsrf, token: tokenVal, id: user.uid, msg: '' });
+      // PHP secret auth (line ~7573 authJWT): {_xsrf, token, id, user} — includes user field, no msg
+      // id is a string (PHP mysqli_fetch_array returns strings)
+      return res.status(200).json({ _xsrf: xsrf, token: tokenVal, id: String(user.uid), user: user.username });
     }
 
     const uri = req.body.uri || req.query.uri || `/${db}`;
@@ -1264,11 +1262,12 @@ router.post('/:db/auth', async (req, res, next) => {
     });
 
     if (isJSON) {
-      // PHP response: {"_xsrf":"...","token":"...","id":123,"msg":""}
+      // PHP response: {"_xsrf":"...","token":"...","id":"123","msg":""}
+      // id is a string (PHP mysqli_fetch_array returns strings)
       return res.status(200).json({
         _xsrf: xsrf,
         token,
-        id: user.uid,
+        id: String(user.uid),
         msg,
       });
     }
@@ -5745,7 +5744,8 @@ router.post('/:db/jwt', async (req, res) => {
     logger.info('[Legacy jwt] JWT validated', { db, uid: user.uid });
 
     // PHP authJWT() response: {_xsrf, token, id, user}
-    res.status(200).json({ _xsrf: newXsrf, token: newToken, id: user.uid, user: user.uname });
+    // id is a string (PHP mysqli_fetch_array returns strings)
+    res.status(200).json({ _xsrf: newXsrf, token: newToken, id: String(user.uid), user: user.uname });
   } catch (error) {
     logger.error('[Legacy jwt] Error', { error: error.message, db });
     res.status(200).json({ error: 'JWT verification failed' });
