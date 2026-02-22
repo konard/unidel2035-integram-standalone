@@ -6567,20 +6567,19 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (q.JSON_DATA !== undefined) {
-        // {col_name: [col_array], ...} — object with column names → arrays
-        const firstRow = results.data[0] || {};
+        // {col_name: [val0, val1, ...], ...} — object with column names → arrays of all row values
         const obj = {};
-        for (const col of report.columns) obj[col.name] = firstRow[col.alias] ?? '';
+        for (const col of report.columns) obj[col.name] = results.data.map(row => row[col.alias] ?? '');
         return res.json(obj);
       }
 
       if (q.JSON_CR !== undefined) {
-        // PHP JSON_CR: columns[i].id = column DB id; rows[row_idx][col_id] = value
+        // PHP JSON_CR: columns[i].id = column DB id (string); rows = array of {col_id: val}
         const cols = report.columns.map((col, i) => ({ id: col.id || i, name: col.name, type: col.reqTypeId || 0 }));
-        const rows = {};
-        results.data.forEach((row, i) => {
-          rows[i] = {};
-          for (const col of report.columns) rows[i][col.id] = row[col.alias] ?? '';
+        const rows = results.data.map(row => {
+          const r = {};
+          for (const col of report.columns) r[col.id] = row[col.alias] ?? '';
+          return r;
         });
         return res.json({ columns: cols, rows, totalCount: results.data.length });
       }
@@ -7726,25 +7725,24 @@ router.post('/:db', async (req, res, next) => {
       return res.json(rows);
     }
 
-    // JSON_DATA format: {col_name: first_row_value, ...}
+    // JSON_DATA format: {col_name: [val0, val1, ...], ...} — all rows per column
     if (q.JSON_DATA !== undefined) {
-      const firstRow = results.data[0] || {};
       const obj = {};
-      for (const col of report.columns) obj[col.name] = firstRow[col.alias] ?? '';
+      for (const col of report.columns) obj[col.name] = results.data.map(row => row[col.alias] ?? '');
       return res.json(obj);
     }
 
-    // PHP JSON_CR: rows[row_idx][col_id] = value (keyed by column DB id)
+    // PHP JSON_CR: rows = array of {col_id: val} (not object keyed by index)
     if (q.JSON_CR !== undefined) {
       const cols = report.columns.map((col, i) => ({
         id: col.id || i,
         name: col.name,
         type: col.baseType || 0
       }));
-      const rows = {};
-      results.data.forEach((row, i) => {
-        rows[i] = {};
-        for (const col of report.columns) rows[i][col.id] = row[col.alias] ?? '';
+      const rows = results.data.map(row => {
+        const r = {};
+        for (const col of report.columns) r[col.id] = row[col.alias] ?? '';
+        return r;
       });
       return res.json({ columns: cols, rows, totalCount: results.data.length });
     }
