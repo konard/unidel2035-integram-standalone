@@ -3046,7 +3046,7 @@ router.get('/:db/:page*', async (req, res, next) => {
 
       // ── GET /:db/{info|upload|table|smartq}?JSON → &main.myrolemenu + &main.&top_menu
       // PHP: main.html always has &top_menu block alongside myrolemenu
-      const MENU_ONLY_PAGES = new Set(['info', 'upload', 'table', 'smartq']);
+      const MENU_ONLY_PAGES = new Set(['info', 'upload', 'table', 'smartq', 'list']);
       if (MENU_ONLY_PAGES.has(page)) {
         const mainMyrolemenu = await getMenuForToken(pool, db, token);
         return res.json({ '&main.myrolemenu': mainMyrolemenu, '&main.&top_menu': buildTopMenu() });
