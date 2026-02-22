@@ -4,6 +4,19 @@
 > **Date**: 2026-02-22 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
+## Status Summary (2026-02-22, session 18)
+
+### Session 18 Fixes (Claude Sonnet 4.6 — id type parity for DML/DDL)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/_m_save` | `id` was number, should be string | PHP `mysqli_fetch_array` returns strings; fixed to `String(objType)`. PHP snapshot: `{"id":"3","obj":999906,...}` |
+| `POST /:db/_m_del` | `id` was number, should be string | Same root cause; fixed to `String(objType)`. PHP snapshot: `{"id":"3","obj":999906,...}` |
+| `POST /:db/_m_up` | `id` was number, should be string | Both early-exit and normal path; fixed to `String(obj.t)`. PHP snapshot: `{"id":"3","obj":null,...}` |
+| `POST /:db/_d_new` | `id` was `parentId` (number), should be `""` | PHP assigns `$id` at top but never reassigns it after `Insert()`, so it stays empty string. PHP snapshot: `{"id":"","obj":999904,...}` |
+
+---
+
 ## Status Summary (2026-02-22, session 17)
 
 ### Session 17 Fixes (Claude Opus 4.5 — live parity audit issue #162)
