@@ -4,7 +4,35 @@
 > **Date**: 2026-02-22 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-22, updated session 13)
+## Status Summary (2026-02-22, updated sessions 14–15)
+
+### Session 15 Fixes (Claude Sonnet 4.6 — live curl tests, remaining endpoints)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/confirm` | Wrong params + wrong response format | PHP: `u/o/p` → check old hash, update pwd, return `{"message":"confirm","db":db,"login":u,"details":""}`. Node.js had `code/password/password2` and returned `{success:true}` |
+
+**Remaining endpoints verified live (no bugs found):**
+- `_new_db`: `{"status":"Ok","id":N}` ✅
+- `login` redirect: 302 to `/$db` ✅
+- `_connect/0`: minor deviation (Node.js returns ping; PHP errors — but client never calls /0)
+- `upload`: file save + `{"status":"Ok","filename":...}` ✅
+- `getcode`/`checkcode`: format correct; email not sent in standalone (known gap)
+- `jwt`: format mismatch (`{success,valid,user:{...}}` vs PHP `{_xsrf,token,id,user}`) — requires JWT_PUBLIC_KEY, known gap
+
+---
+
+### Session 14 Fixes (Claude Sonnet 4.6 — live curl DDL/DML tests)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/_d_new` (child) | Child type `ord` got unique flag (0/1) instead of sequential order | PHP always inserts at `up=0`; child types (Node.js extension) use `getNextOrder` |
+| `POST /:db/_d_ref` | Complete rewrite — wrong params | PHP: URL `:typeId` = type to reference; creates `Insert(0,0,$id,"")` at root; returns existing ref if found |
+| `POST /:db/_d_ord` | MySQL UNSIGNED overflow | `GREATEST(0, CAST(ord AS SIGNED) + SIGN(...))` |
+| `POST /:db/_m_ord` | MySQL UNSIGNED overflow + wrong `next_act`/`args` | `next_act` defaults to `"_m_ord"` (PHP line 9172), `args=""` |
+| `POST /:db/_m_id` | Wrong `next_act`/`args` | `next_act` defaults to `"_m_id"` (PHP line 9172), `args=""` |
+
+---
 
 ### Session 13 Results (Claude Opus 4.5 exhaustive audit)
 
@@ -190,8 +218,8 @@
 | `POST /:db/checkcode` | `router.post('/:db/checkcode')` | ⚠️ | OTP verify but no code generation |
 | `POST /my/register` | `router.post('/my/register')` | ✅ | Fixed s9: full PHP newUser() flow + correct response format |
 | `GET /:db/exit` | `router.all('/:db/exit')` | ✅ | Deletes token, clears cookie |
-| `POST /:db/jwt` | `router.post('/:db/jwt')` | ✅ | JWT exchange |
-| `POST /:db/confirm` | `router.post('/:db/confirm')` | ✅ | Password confirmation |
+| `POST /:db/jwt` | `router.post('/:db/jwt')` | ⚠️ | Response format mismatch — PHP returns `{_xsrf,token,id,user}` after authJWT(); requires JWT_PUBLIC_KEY (known gap) |
+| `POST /:db/confirm` | `router.post('/:db/confirm')` | ✅ | Fixed s15: u/o/p params; returns `{"message":"confirm"/"obsolete","db":...,"login":...,"details":""}` |
 
 ### ✅ Object DML Endpoints
 
@@ -289,8 +317,8 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_m_set` | `""` (or req id as string) | object id (string) | uses `"a"` not `next_act` | `""` or file path | ✅ fixed s9 |
 | `_m_move` | object id | **null** | `object` | `"moved&"` or `"moved&&F_U=<up>"` if up!=1 | ✅ fixed s4+s5 |
 | `_m_up` | **type id** (obj.t) | **null** | `object` | `"F_U=<parent>"` always | ✅ fixed s4+s5 |
-| `_m_ord` | **parent id** | **parent id** | `object` | `"F_U=<parent>"` if parent>1 | ✅ fixed s4 |
-| `_m_id` | new_id | new_id | `object` | `"F_U=<up>"` if up>1 | ✅ |
+| `_m_ord` | **parent id** | **parent id** | `"_m_ord"` (default) | `""` (always empty) | ✅ fixed s14 |
+| `_m_id` | new_id | new_id | `"_m_id"` (default) | `""` (always empty) | ✅ fixed s14 |
 | `_d_new` | parent id (from req) | new type id | `edit_types` | `"ext"` | ✅ verified s7 |
 | `_d_save` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_del` | typeId (original) | null | `edit_types` | `"ext"` | ✅ fixed s6 |
@@ -299,7 +327,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_d_req` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s10: was args:'', now args:'ext' |
 | `_d_alias/_d_null/_d_multi/_d_attrs` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_del_req` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
-| `_d_ref` | **parent id** (type id) | **new ref id** | `edit_types` | `"ext"` | ✅ fixed s7 |
+| `_d_ref` | **type id** (URL param) | **ref row id** | `edit_types` | `"ext"` | ✅ fixed s7+s14 (s14: full rewrite — uses URL `:typeId` not body param) |
 
 ### 2.2 Auth Responses
 

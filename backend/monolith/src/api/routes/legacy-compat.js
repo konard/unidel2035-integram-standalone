@@ -5671,55 +5671,48 @@ router.post('/:db/jwt', async (req, res) => {
 });
 
 /**
- * confirm - Confirm password change
+ * confirm - Confirm password change via reset link
  * POST /:db/confirm
+ *
+ * PHP: index.php lines 7704-7713
+ * Params: u=username, o=old_pwd_hash, p=new_pwd_hash
+ * On success: login(db, u, "confirm") → API: {"message":"confirm","db":db,"login":u,"details":""}
+ * On failure: login(db, u_encoded, "obsolete") → API: {"message":"obsolete","db":db,"login":u,"details":""}
  */
 router.post('/:db/confirm', async (req, res) => {
   const { db } = req.params;
-  const { code, password, password2 } = req.body;
-  const isJSON = isApiRequest(req);
+  // PHP params: u=username, o=old_hash, p=new_hash
+  const u = (req.body.u || '').toLowerCase().trim();
+  const o = req.body.o || '';
+  const p = req.body.p || '';
 
   if (!isValidDbName(db)) {
-    if (isJSON) {
-      return res.json({ success: false, error: 'Invalid database' });
-    }
-    return res.status(400).send('Invalid database');
-  }
-
-  // Validate passwords match
-  if (password !== password2) {
-    if (isJSON) {
-      return res.json({ success: false, error: 'Passwords do not match' });
-    }
-    return res.status(400).send('Passwords do not match');
-  }
-
-  // Validate password strength
-  if (!password || password.length < 6) {
-    if (isJSON) {
-      return res.json({ success: false, error: 'Password must be at least 6 characters' });
-    }
-    return res.status(400).send('Password must be at least 6 characters');
+    return res.status(200).json([{ error: 'Invalid database' }]);
   }
 
   try {
-    // In real implementation: verify code, update password
-    logger.info('[Legacy confirm] Password confirmation', { db, codeProvided: !!code });
+    logger.info('[Legacy confirm] Request', { db, u });
 
-    if (isJSON) {
-      return res.json({
-        success: true,
-        message: 'Password updated successfully'
-      });
+    if (u && o && p) {
+      const pool = getPool();
+      // PHP: SELECT pwd.id FROM $z pwd, $z u WHERE pwd.up=u.id AND pwd.t=PASSWORD AND u.t=USER AND u.val='u' AND pwd.val='o'
+      const [[row]] = await pool.query(
+        `SELECT pwd.id FROM \`${db}\` pwd, \`${db}\` u WHERE pwd.up=u.id AND pwd.t=? AND u.t=? AND u.val=? AND pwd.val=?`,
+        [TYPE.PASSWORD, TYPE.USER, u, o]
+      );
+      if (row) {
+        // PHP: UPDATE $z SET val='p' WHERE id=$row[0]
+        await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [p, row.id]);
+        // PHP: login($z, $_REQUEST["u"], "confirm") → in API mode: {"message":"confirm","db":db,"login":u,"details":""}
+        return res.status(200).json({ message: 'confirm', db, login: u, details: '' });
+      }
     }
 
-    return res.redirect(`/${db}`);
+    // PHP: login($z, urlencode($_REQUEST["u"]), "obsolete")
+    return res.status(200).json({ message: 'obsolete', db, login: encodeURIComponent(u), details: '' });
   } catch (error) {
     logger.error('[Legacy confirm] Error', { error: error.message, db });
-    if (isJSON) {
-      return res.json({ success: false, error: 'Confirmation failed' });
-    }
-    return res.status(500).send('Confirmation failed');
+    return res.status(200).json({ message: 'obsolete', db, login: encodeURIComponent(u), details: '' });
   }
 });
 
