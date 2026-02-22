@@ -4887,7 +4887,8 @@ router.post('/:db/_d_alias/:reqId', async (req, res) => {
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
     // PHP line 8625: $id = $obj = $up; (both set to parent type ID)
-    legacyRespond(req, res, db, { id: obj.up, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP mysqli_fetch_array returns strings, so id and obj are strings
+    legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_alias] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -4932,7 +4933,8 @@ router.post('/:db/_d_null/:reqId', async (req, res) => {
     logger.info('[Legacy _d_null] NOT NULL toggled', { db, id, required: newRequired });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP mysqli_fetch_array returns strings, so obj is string (id stays as reqId per PHP)
+    legacyRespond(req, res, db, { id, obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_null] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -4977,7 +4979,8 @@ router.post('/:db/_d_multi/:reqId', async (req, res) => {
     logger.info('[Legacy _d_multi] MULTI toggled', { db, id, multi: newMulti });
 
     // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP mysqli_fetch_array returns strings, so obj is string (id stays as reqId per PHP)
+    legacyRespond(req, res, db, { id, obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_multi] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5028,8 +5031,9 @@ router.post('/:db/_d_attrs/:reqId', async (req, res) => {
 
     logger.info('[Legacy _d_attrs] Modifiers updated', { db, id, alias: newAlias, required: newRequired, multi: newMulti });
 
-    // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id, obj:0, next_act:"edit_types", args, warnings}
+    // PHP _d_attrs returns obj=0 (not parent type id)
+    legacyRespond(req, res, db, { id, obj: 0, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_attrs] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5066,7 +5070,8 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
       // PHP: $id = $row["up"] (parent), $obj = $id (also parent)
-      return legacyRespond(req, res, db, { id: obj.up, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+      // PHP mysqli_fetch_array returns strings, so id and obj are strings
+      return legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
     }
 
     const prevSibling = siblings[0];
@@ -5079,7 +5084,8 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
 
     // PHP api_dump(): {id:parent, obj:parent, next_act:"edit_types", args:"ext"}
     // PHP: $id = $row["up"] (parent), $obj = $id (also parent)
-    legacyRespond(req, res, db, { id: obj.up, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP mysqli_fetch_array returns strings, so id and obj are strings
+    legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_up] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5139,7 +5145,8 @@ router.post('/:db/_d_ord/:reqId', async (req, res) => {
 
     // PHP api_dump(): {id:parent, obj:parent, next_act:"edit_types", args:"ext"}
     // PHP: $id = $row["up"] (parent type ID), $obj = $id (also parent)
-    legacyRespond(req, res, db, { id: parentId, obj: parentId, next_act: 'edit_types', args: 'ext' });
+    // PHP mysqli_fetch_array returns strings, so id and obj are strings
+    legacyRespond(req, res, db, { id: String(parentId), obj: String(parentId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5176,7 +5183,8 @@ router.post('/:db/_d_del_req/:reqId', async (req, res) => {
     logger.info('[Legacy _d_del_req] Requisite deleted', { db, id, cascade });
 
     // PHP api_dump(): {id:type_id, obj:type_id, next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id: typeId, obj: typeId, next_act: 'edit_types', args: 'ext' });
+    // PHP mysqli_fetch_array returns strings, so id and obj are strings
+    legacyRespond(req, res, db, { id: String(typeId), obj: String(typeId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_del_req] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -7729,17 +7737,17 @@ router.post('/:db', async (req, res, next) => {
       return res.json(obj);
     }
 
-    // PHP JSON_CR: rows[row_idx][col_id] = value (keyed by column DB id)
+    // PHP JSON_CR: rows is array, id=string, type="string"
     if (q.JSON_CR !== undefined) {
       const cols = report.columns.map((col, i) => ({
-        id: col.id || i,
+        id: String(col.id || i),
         name: col.name,
-        type: col.baseType || 0
+        type: 'string'
       }));
-      const rows = {};
-      results.data.forEach((row, i) => {
-        rows[i] = {};
-        for (const col of report.columns) rows[i][col.id] = row[col.alias] ?? '';
+      const rows = results.data.map((row) => {
+        const rowObj = {};
+        for (const col of report.columns) rowObj[String(col.id)] = row[col.alias] ?? '';
+        return rowObj;
       });
       return res.json({ columns: cols, rows, totalCount: results.data.length });
     }
@@ -7759,12 +7767,13 @@ router.post('/:db', async (req, res, next) => {
     }
 
     // PHP default JSON: row-major data[row_index][col_index], totals embedded in columns
+    // PHP mysqli_fetch_array returns strings: id and type are strings
     if (isApiRequest(req)) {
       const totalsMap = results.totals || {};
       const cols = report.columns.map(col => ({
-        id: col.id,
+        id: String(col.id),
         name: col.name,
-        type: col.reqTypeId || 0,
+        type: String(col.reqTypeId || 0),
         format: REV_BASE_TYPE[col.baseType] || 'CHARS',
         align: col.align || 'LEFT',
         totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
