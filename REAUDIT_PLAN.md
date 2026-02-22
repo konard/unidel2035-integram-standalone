@@ -1,8 +1,35 @@
 # Legacy PHP→Node.js Re-Audit Plan
 
-> **Branch**: `issue-162-bd266fc6a760`
+> **Branch**: `issue-164-4b84b8e6c979`
 > **Date**: 2026-02-22 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
+
+## Status Summary (2026-02-22, session 19)
+
+### Session 19 Fixes (Claude Opus 4.5 — full endpoint parity audit issue #164)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/_m_ord` | `id` and `obj` were numbers, should be strings | PHP `mysqli_fetch_array` returns strings. Fixed to `String(parentId)`. PHP snapshot: `{"id":"1","obj":"1","next_act":"_m_ord",...}` |
+| `POST /:db/_m_ord` | Invalid order returned JSON error, should be plain text | PHP returns raw text `"Invalid order"`. Fixed to `res.send('Invalid order')`. PHP snapshot: `Invalid order` |
+| `POST /:db/_m_save` (copy) | `id` was number, should be string | Copy path (`copybtn=1`) was returning `id: original.typ` (number). Fixed to `String(original.typ)`. PHP snapshot: `{"id":"3","obj":999907,...}` |
+
+**Live audit methodology (ai2o.ru PHP server):**
+- Authenticated as admin/admin to obtain session cookie
+- Tested all endpoint groups: Auth, Query, DML, DDL, File/Admin
+- Created test objects to verify _m_new, _m_save, _m_up, _m_ord, _m_del flows
+- Created test types to verify _d_new, _d_save, _d_req, _d_ref, _d_del flows
+- Captured exact PHP responses and compared with Node.js implementation
+
+**New PHP Response Snapshots saved:**
+- `m_ord_valid.json`: `{"id":"1","obj":"1","next_act":"_m_ord","args":"","warnings":""}`
+- `m_ord_invalid.json`: `Invalid order` (plain text, not JSON)
+
+**Known PHP Server Issues (upstream bugs, not Node.js bugs):**
+- `_ref_reqs/42` returns SQL syntax error for ROLE type (missing type ID in query)
+- Some DDL operations require proper base type setup to work correctly
+
+---
 
 ## Status Summary (2026-02-22, session 18)
 
