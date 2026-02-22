@@ -4658,9 +4658,12 @@ router.post('/:db/_d_new/:parentTypeId?', async (req, res) => {
     }
 
     // PHP line 7788: $unique = isset($_REQUEST["unique"]) ? 1 : 0
-    // PHP line 8327: "Ord=1 means the Obj must be unique" — for root-level types ord IS the unique flag
-    // PHP _d_new: Insert(0, $unique, $t, $val) — ord = unique flag (0 or 1), NOT a sequence
-    const order = (req.body.unique !== undefined || req.query.unique !== undefined) ? 1 : 0;
+    // PHP line 8327: "Ord=1 means the Obj must be unique" — for root-level types (up=0) ord IS the unique flag
+    // PHP _d_new: Insert(0, $unique, $t, $val) — always inserts at up=0, ord = unique flag (0 or 1)
+    // For child types (parentId != 0, Node.js extension), use sequential ord via getNextOrder
+    const order = (parentId === 0)
+      ? ((req.body.unique !== undefined || req.query.unique !== undefined) ? 1 : 0)
+      : await getNextOrder(db, parentId);
 
     // Insert the new type
     const id = await insertRow(db, parentId, order, baseType, name);
@@ -5077,9 +5080,10 @@ router.post('/:db/_d_ord/:reqId', async (req, res) => {
       // PHP line 8730-8731: reorder range of siblings between old and new positions
       // UPDATE $z SET ord=(CASE WHEN id=$rid THEN LEAST($newOrd, maxOrd) ELSE ord+SIGN($ord-$newOrd) END)
       //   WHERE up=$id AND ord BETWEEN LEAST($ord, $newOrd) AND GREATEST($ord, $newOrd)
+      // Use CAST to SIGNED to prevent UNSIGNED underflow when ord shifts below 0
       await pool.query(`
         UPDATE \`${db}\` SET ord=(CASE WHEN id=? THEN LEAST(?, (SELECT max(ord) FROM (SELECT ord FROM \`${db}\` WHERE up=?) AS t))
-                                       ELSE ord+SIGN(?-?) END)
+                                       ELSE GREATEST(0, CAST(ord AS SIGNED)+SIGN(?-?)) END)
         WHERE up=? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`,
         [id, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd]
       );
@@ -5134,38 +5138,57 @@ router.post('/:db/_d_del_req/:reqId', async (req, res) => {
 });
 
 /**
- * _d_ref - Create reference type (type that references another type)
- * POST /:db/_d_ref/:parentTypeId
- * Parameters: ref (referenced type ID), val (name)
+ * _d_ref - Create reference type for a given type
+ * POST /:db/_d_ref/:typeId
+ * PHP: $id = typeId (URL param) = the type to make referenceable
+ * PHP line 8647: if($id == 0) die("Invalid link")
+ * PHP line 8649: SELECT ref.id FROM obj LEFT JOIN ref ON ref.up=0 AND ref.t=$id AND ref.val=''
+ * PHP line 8661: Insert(0, 0, $id, "", "Create Ref") — up=0, ord=0, t=$id, val=""
  */
-router.post('/:db/_d_ref/:parentTypeId', async (req, res) => {
-  const { db, parentTypeId } = req.params;
+router.post('/:db/_d_ref/:typeId', async (req, res) => {
+  const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
     return res.status(200).json([{ error: 'Invalid database'  }]);
   }
 
   try {
-    const parentId = parseInt(parentTypeId, 10);
-    const refTypeId = parseInt(req.body.ref || req.body.t, 10);
-    const name = req.body.val || req.body.name || '';
+    const id = parseInt(typeId, 10);
 
-    if (!refTypeId) {
-      return res.status(200).json([{ error: 'Reference type ID (ref) is required'  }]);
+    if (!id) {
+      return res.status(200).json([{ error: `Invalid link (${id})`  }]);
     }
 
-    // Get next order
-    const order = await getNextOrder(db, parentId);
+    const pool = getPool();
 
-    // Insert the reference requisite
-    // The type (t) field is the referenced type ID
-    const id = await insertRow(db, parentId, order, refTypeId, name);
+    // PHP: SELECT obj.up, obj.t, ref.id FROM $z obj LEFT JOIN $z ref ON ref.up=0 AND ref.t=$id AND ref.val='' WHERE obj.id=$id
+    const [[row]] = await pool.query(
+      `SELECT obj.up, obj.t, ref.id refId FROM \`${db}\` obj LEFT JOIN \`${db}\` ref ON ref.up=0 AND ref.t=? AND ref.val='' WHERE obj.id=?`,
+      [id, id]
+    );
 
-    logger.info('[Legacy _d_ref] Reference created', { db, id, parentId, refTypeId, name });
+    if (!row) {
+      return res.status(200).json([{ error: `${id} type not found`  }]);
+    }
 
-    // PHP api_dump(): {id:parentId (original $id), obj:newRefId ($obj=Insert result), next_act:"edit_types", args:"ext"}
-    // PHP _d_ref: $id stays as original type id (parentTypeId); $obj = Insert() result (new ref row id)
-    legacyRespond(req, res, db, { id: parentId, obj: id, next_act: 'edit_types', args: 'ext' });
+    // PHP: if(($row["up"] != 0) || ($row["t"] == $id)) die("Invalid $id type")
+    if (row.up !== 0 || row.t === id) {
+      return res.status(200).json([{ error: `Invalid ${id} type`  }]);
+    }
+
+    let refId;
+    if (row.refId > 0) {
+      // Reference already exists — return existing
+      refId = row.refId;
+    } else {
+      // PHP: $obj = Insert(0, 0, $id, "", "Create Ref")
+      refId = await insertRow(db, 0, 0, id, '');
+    }
+
+    logger.info('[Legacy _d_ref] Reference created/found', { db, id, refId });
+
+    // PHP api_dump(): {id:$id (original type id), obj:$obj (ref row id), next_act:"edit_types", args:"ext"}
+    legacyRespond(req, res, db, { id, obj: refId, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ref] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5270,11 +5293,12 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
       // PHP: UPDATE $z SET ord=(CASE WHEN id=$rid THEN LEAST($newOrd, max_ord)
       //                             ELSE ord+SIGN($ord-$newOrd) END)
       //      WHERE up=$parentId AND ord BETWEEN LEAST($ord,$newOrd) AND GREATEST($ord,$newOrd)
+      // Use CAST to SIGNED to prevent UNSIGNED underflow when ord shifts below 0
       await pool.query(
         `UPDATE \`${db}\`
          SET ord = CASE
            WHEN id = ? THEN LEAST(?, (SELECT maxo FROM (SELECT MAX(ord) AS maxo FROM \`${db}\` WHERE up = ?) AS t))
-           ELSE ord + SIGN(? - ?)
+           ELSE GREATEST(0, CAST(ord AS SIGNED) + SIGN(? - ?))
          END
          WHERE up = ? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`,
         [objectId, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd]
@@ -5283,9 +5307,10 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
 
     logger.info('[Legacy _m_ord] Order set', { db, id: objectId, ord: newOrd });
 
-    // PHP api_dump(): {id:parentId, obj:parentId, next_act:"object", args, warnings}
-    // PHP: $id = $row["up"] (parent), $obj = $id (also parent)
-    legacyRespond(req, res, db, { id: parentId, obj: parentId, next_act: 'object', args: parentId > 1 ? `F_U=${parentId}` : '' });
+    // PHP api_dump(): {id:parentId, obj:parentId, next_act:"_m_ord"|req.next_act, args:"", warnings}
+    // PHP: $id = $row["up"] (parent), $obj = $id (also parent), $next_act defaults to "_m_ord"
+    const nextAct = req.body.next_act || req.query.next_act || '_m_ord';
+    legacyRespond(req, res, db, { id: parentId, obj: parentId, next_act: nextAct, args: '' });
   } catch (error) {
     logger.error('[Legacy _m_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5339,13 +5364,9 @@ router.post('/:db/_m_id/:id', async (req, res) => {
 
     logger.info('[Legacy _m_id] ID changed', { db, oldId, newId, up });
 
-    res.status(200).json({
-      id: newId,
-      obj: newId,
-      next_act: 'object',
-      args: up > 1 ? `F_U=${up}` : '',
-      warnings: '',
-    });
+    // PHP: $next_act defaults to $a = "_m_id" (line 9172), $arg stays ""
+    const nextAct = req.body.next_act || req.query.next_act || '_m_id';
+    legacyRespond(req, res, db, { id: newId, obj: newId, next_act: nextAct, args: '' });
   } catch (error) {
     logger.error('[Legacy _m_id] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message }]);
