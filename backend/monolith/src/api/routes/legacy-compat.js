@@ -964,8 +964,11 @@ router.all('/:db/auth', async (req, res, next) => {
     logger.info('[Legacy SecretAuth] Success', { db, uid: user.uid, username: user.username });
 
     if (isJSON) {
-      // PHP line 7573: {_xsrf, token, id, user} — returns user field, NOT msg
-      return res.status(200).json({ _xsrf: xsrf, token: tokenVal, id: user.uid, user: user.username });
+      // PHP auth case (line ~7688): {_xsrf, token, id, msg} — consistent with POST /:db/auth response
+      // Note: PHP has no dedicated GET /:db/auth?secret JSON endpoint; secret auth sets session via
+      // Validate_Token() globally. This Node.js handler is a custom convenience endpoint — keep
+      // format consistent with regular auth response.
+      return res.status(200).json({ _xsrf: xsrf, token: tokenVal, id: user.uid, msg: '' });
     }
 
     const uri = req.body.uri || req.query.uri || `/${db}`;
