@@ -3701,14 +3701,15 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
 
     logger.info('[Legacy _m_set] Attributes set', { db, id: objectId });
 
-    // PHP _m_set die() format (line 9170): {"id":"<reqId>", "obj":"<objectId>", "a":"nul", "args":"<filePath>"}
-    // PHP: $id = "" initially (gets set to last req id inside loop); $obj = objectId (string)
-    // PHP args: file path for uploads, "" otherwise (no F_U, no next_act, no warnings)
+    // PHP _m_set die() format: {"id":"<reqId>", "obj":<objectId>, "next_act":"nul", "args":"<filePath>", "warnings":""}
+    // PHP: $id = "" if no req written, or string(lastReqId); $obj = objectId (integer, from intval URL param)
+    // PHP uses next_act (not "a"), includes warnings:"", and obj is the integer object id
     return res.json({
       id: lastReqId,
-      obj: String(objectId),
-      a: 'nul',
+      obj: objectId,
+      next_act: 'nul',
       args: uploadedFilePath || '',
+      warnings: '',
     });
   } catch (error) {
     logger.error('[Legacy _m_set] Error', { error: error.message, db });
@@ -4885,9 +4886,9 @@ router.post('/:db/_d_alias/:reqId', async (req, res) => {
 
     logger.info('[Legacy _d_alias] Alias set', { db, id, alias: newAlias });
 
-    // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    // PHP line 8625: $id = $obj = $up; (both set to parent type ID)
-    legacyRespond(req, res, db, { id: obj.up, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:parent, obj:parent, next_act:"edit_types", args:"ext"}
+    // PHP line 8625: $id = $obj = $up — both set to parent type ID (string from DB row)
+    legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_alias] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -4931,8 +4932,9 @@ router.post('/:db/_d_null/:reqId', async (req, res) => {
 
     logger.info('[Legacy _d_null] NOT NULL toggled', { db, id, required: newRequired });
 
-    // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:reqId, obj:parentTypeId, next_act:"edit_types", args:"ext"}
+    // PHP: $id = reqId (integer URL param); $obj = $row["up"] (parent type string from DB row)
+    legacyRespond(req, res, db, { id, obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_null] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -4976,8 +4978,9 @@ router.post('/:db/_d_multi/:reqId', async (req, res) => {
 
     logger.info('[Legacy _d_multi] MULTI toggled', { db, id, multi: newMulti });
 
-    // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:reqId, obj:parentTypeId, next_act:"edit_types", args:"ext"}
+    // PHP: $id = reqId (integer URL param); $obj = $row["up"] (parent type string from DB row)
+    legacyRespond(req, res, db, { id, obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_multi] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5028,8 +5031,9 @@ router.post('/:db/_d_attrs/:reqId', async (req, res) => {
 
     logger.info('[Legacy _d_attrs] Modifiers updated', { db, id, alias: newAlias, required: newRequired, multi: newMulti });
 
-    // PHP api_dump(): {id, obj:type_id (parent), next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:reqId, obj:0, next_act:"edit_types", args:"ext"}
+    // PHP: $id = reqId (URL param), $obj is never set in this handler (stays at default 0)
+    legacyRespond(req, res, db, { id, obj: 0, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_attrs] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5065,8 +5069,8 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
 
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
-      // PHP: $id = $row["up"] (parent), $obj = $id (also parent)
-      return legacyRespond(req, res, db, { id: obj.up, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+      // PHP: $id = $row["up"] (parent string from DB row), $obj = $id (also parent string)
+      return legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
     }
 
     const prevSibling = siblings[0];
@@ -5078,8 +5082,8 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
     logger.info('[Legacy _d_up] Requisite moved up', { db, id, newOrd: prevSibling.ord });
 
     // PHP api_dump(): {id:parent, obj:parent, next_act:"edit_types", args:"ext"}
-    // PHP: $id = $row["up"] (parent), $obj = $id (also parent)
-    legacyRespond(req, res, db, { id: obj.up, obj: obj.up, next_act: 'edit_types', args: 'ext' });
+    // PHP: $id = $row["up"] (parent string from DB row), $obj = $id (also parent string)
+    legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_up] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5137,9 +5141,9 @@ router.post('/:db/_d_ord/:reqId', async (req, res) => {
 
     logger.info('[Legacy _d_ord] Order set', { db, id, ord: newOrd });
 
-    // PHP api_dump(): {id:parent, obj:parent, next_act:"edit_types", args:"ext"}
-    // PHP: $id = $row["up"] (parent type ID), $obj = $id (also parent)
-    legacyRespond(req, res, db, { id: parentId, obj: parentId, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:reqId, obj:reqId, next_act:"edit_types", args:"ext"}
+    // PHP: $id stays as the reqId URL param (integer), $obj = $id (same)
+    legacyRespond(req, res, db, { id, obj: id, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5175,8 +5179,9 @@ router.post('/:db/_d_del_req/:reqId', async (req, res) => {
 
     logger.info('[Legacy _d_del_req] Requisite deleted', { db, id, cascade });
 
-    // PHP api_dump(): {id:type_id, obj:type_id, next_act:"edit_types", args, warnings}
-    legacyRespond(req, res, db, { id: typeId, obj: typeId, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:type_id, obj:type_id, next_act:"edit_types", args:"ext"}
+    // PHP: $id = $obj = $row["up"] (parent type string from DB row), so both are strings
+    legacyRespond(req, res, db, { id: String(typeId), obj: String(typeId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_del_req] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);

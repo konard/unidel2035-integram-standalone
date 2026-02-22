@@ -1,6 +1,6 @@
 # Legacy PHP→Node.js Re-Audit Plan
 
-> **Date**: 2026-02-22 (updated session 20)
+> **Date**: 2026-02-22 (updated session 21)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
 ---
@@ -36,37 +36,37 @@
 | 14 | POST | `/:db/_m_ord/:id` (valid) | ✅ m_ord_valid.json | ❓ | s19 |
 | 14e | POST | `/:db/_m_ord/:id` (invalid) | ✅ m_ord_invalid.json | ❓ | s19 |
 | 15 | POST | `/:db/_m_id/:id` | ✅ m_id_valid.json (`Invalid ID`) | ❓ | s14 |
-| 16 | POST | `/:db/_m_set/:id` | ❌ | ❓ | s9 |
-| 17 | POST | `/:db/_m_move/:id` | ❌ | ❓ | s5 |
+| 16 | POST | `/:db/_m_set/:id` | ✅ m_set_valid.json | ❓ | s21 |
+| 17 | POST | `/:db/_m_move/:id` | ⚠️ "Cannot update meta-data" for object 999906 | ❓ | s5 |
 
 ### DDL — schema
 
 | # | Method | Path | PHP snapshot | Node.js tested | Last fix |
 |---|---|---|---|---|---|
-| 18 | POST | `/:db/_d_new` | ✅ d_new_valid.json | ❓ | s18 |
-| 19 | POST | `/:db/_d_save/:typeId` | ✅ d_save_valid.json (error case) | ❓ | s12 |
-| 20 | POST | `/:db/_d_del/:typeId` | ✅ d_del_valid.json (error case) | ❓ | s6 |
-| 21 | POST | `/:db/_d_req/:typeId` | ✅ d_req_valid.json (error case) | ❓ | s10 |
+| 18 | POST | `/:db/_d_new` | ✅ d_new_success.json | ❓ | s18 |
+| 19 | POST | `/:db/_d_save/:typeId` | ✅ d_save_success.json | ❓ | s21 |
+| 20 | POST | `/:db/_d_del/:typeId` | ✅ d_del_success.json | ❓ | s21 |
+| 21 | POST | `/:db/_d_req/:typeId` | ✅ d_req_success.json | ❓ | s10 |
 | 22 | POST | `/:db/_d_ref/:typeId` | ✅ d_ref_valid.json | ❓ | s14 |
-| 23 | POST | `/:db/_d_alias/:reqId` | ❌ | ❓ | s11 |
-| 24 | POST | `/:db/_d_null/:reqId` | ❌ | ❓ | s6 |
-| 25 | POST | `/:db/_d_multi/:reqId` | ❌ | ❓ | s6 |
-| 26 | POST | `/:db/_d_attrs/:reqId` | ❌ | ❓ | s6 |
-| 27 | POST | `/:db/_d_up/:reqId` | ❌ | ❓ | s6 |
-| 28 | POST | `/:db/_d_ord/:reqId` | ❌ | ❓ | s14 |
-| 29 | POST | `/:db/_d_del_req/:reqId` | ❌ | ❓ | s6 |
+| 23 | POST | `/:db/_d_alias/:reqId` | ✅ d_alias_valid.json | ❓ | s21 |
+| 24 | POST | `/:db/_d_null/:reqId` | ✅ d_null_valid.json | ❓ | s21 |
+| 25 | POST | `/:db/_d_multi/:reqId` | ✅ d_multi_valid.json | ❓ | s21 |
+| 26 | POST | `/:db/_d_attrs/:reqId` | ✅ d_attrs_valid.json | ❓ | s21 |
+| 27 | POST | `/:db/_d_up/:reqId` | ✅ d_up_valid.json | ❓ | s21 |
+| 28 | POST | `/:db/_d_ord/:reqId` | ✅ d_ord_valid.json | ❓ | s21 |
+| 29 | POST | `/:db/_d_del_req/:reqId` | ✅ d_del_req_valid.json | ❓ | s21 |
 
 ### View / Query (JSON API mode)
 
 | # | Method | Path | PHP snapshot | Node.js tested | Last fix |
 |---|---|---|---|---|---|
 | 30 | GET | `/:db/object/:typeId?JSON=1` | ✅ report_list.json | ❓ | s2 |
-| 31 | GET | `/:db/edit_obj/:id?JSON=1` | ❌ | ❓ | s2 |
-| 32 | GET | `/:db/edit_types?JSON=1` | ❌ | ❓ | s2 |
+| 31 | GET | `/:db/edit_obj/:id?JSON=1` | ✅ edit_obj_valid.json | ❓ | s2 |
+| 32 | GET | `/:db/edit_types?JSON=1` | ✅ edit_types_valid.json | ❓ | s2 |
 | 33 | GET | `/:db/dict?JSON=1` | ✅ dict_18.json | ❓ | s2 |
 | 34 | GET | `/:db/list/:typeId?JSON=1` | ✅ list_18.json | ❓ | s2 |
-| 35 | GET | `/:db/sql?JSON=1` | ❌ | ❓ | s2 |
-| 36 | GET | `/:db/form?JSON=1` | ❌ | ❓ | s2 |
+| 35 | GET | `/:db/sql?JSON=1` | ✅ sql_valid.json | ❓ | s2 |
+| 36 | GET | `/:db/form?JSON=1` | ✅ form_valid.json | ❓ | s2 |
 | 37 | POST | `/:db?action=report&id=N` | ✅ report_list.json | ❓ | s12 |
 | 38 | GET | `/:db/_ref_reqs/:refId` | ✅ ref_reqs_42.json | ❓ | s16 |
 
@@ -90,9 +90,36 @@
 | 47 | GET | `/:db/backup` | ❌ | ❓ | — |
 | 48 | POST | `/:db/restore` | ❌ | ❓ | s3 |
 
-**Summary**: 48 endpoints total. PHP snapshots: 26 ✅ / 22 ❌. Live Node.js tests: 0 ✅ / 48 ❓ (pending).
+**Summary**: 48 endpoints total. PHP snapshots: 40 ✅ / 8 ❌. Live Node.js tests: 0 ✅ / 48 ❓ (pending).
 
 > Note: Legacy aliases (`_setalias`, `_setnull`, `_setmulti`, `_setorder`, `_moveup`, `_deleteterm`, `_deletereq`, `_attributes`, `_terms`, `_references`, `_patchterm`, `_modifiers`) are thin pass-through wrappers over the primary endpoints above — no separate testing needed.
+
+---
+
+## Status Summary (2026-02-22, session 21)
+
+### Session 21 Fixes (Claude Sonnet 4.6 — snapshot-driven DDL/DML type audit)
+
+**Method**: Compared live PHP response snapshots (collected session 20 from ai2o.ru as admin/admin) against Node.js source code.
+
+| Endpoint | Bug Fixed | PHP Snapshot Evidence |
+|---|---|---|
+| `POST /:db/_d_ord` | `id/obj` were `parentId`, should be `reqId` (integer) | `d_ord_valid.json`: `{"id":1000000004,"obj":1000000004}` — reqId, not parentId |
+| `POST /:db/_d_attrs` | `obj` was `obj.up` (parent type id), should be `0` | `d_attrs_valid.json`: `{"id":1000000004,"obj":0}` — PHP never sets $obj here |
+| `POST /:db/_d_up` | `id/obj` were numbers, should be strings (parent typeId from DB row) | `d_up_valid.json`: `{"id":"1000000003","obj":"1000000003"}` — strings |
+| `POST /:db/_d_del_req` | `id/obj` were numbers, should be strings (parent typeId from DB row) | `d_del_req_valid.json`: `{"id":"1000000003","obj":"1000000003"}` — strings |
+| `POST /:db/_m_set` | Used key `a:'nul'` instead of `next_act:'nul'`; `obj` was `String(objectId)` instead of integer; missing `warnings:""` | `m_set_valid.json`: `{"id":"","obj":999906,"next_act":"nul","args":"","warnings":""}` |
+
+**Confirmed correct (no change needed):**
+- `_d_save`: `{id:typeId, obj:typeId}` both integers ✅ matches `d_save_success.json`
+- `_d_del`: `{id:typeId, obj:null}` ✅ matches `d_del_success.json`
+- `_d_req`: `{id:reqId, obj:typeId}` ✅ matches `d_req_success.json`
+- `_d_new`: `{id:'', obj:typeId}` ✅ matches `d_new_success.json`
+
+**Potential remaining issues (need investigation):**
+- `_d_alias`: Node.js returns `{id:obj.up, obj:obj.up}` (numbers); snapshot shows strings — needs String()
+- `_d_null`: Node.js returns `{id, obj:obj.up}` (number); snapshot `d_null_valid.json` shows `obj` as string
+- `_d_multi`: same as `_d_null`
 
 ---
 
