@@ -65,9 +65,13 @@
 | 32 | GET | `/:db/edit_types?JSON=1` | ✅ edit_types_valid.json | ❓ | s2 |
 | 33 | GET | `/:db/dict?JSON=1` | ✅ dict_18.json | ❓ | s2 |
 | 34 | GET | `/:db/list/:typeId?JSON=1` | ✅ list_18.json | ❓ | s2 |
-| 35 | GET | `/:db/sql?JSON=1` | ✅ sql_valid.json | ❓ | s2 |
+| 35 | GET | `/:db/sql?JSON=1` | ✅ sql_valid.json, sql_fm_valid.json | ❓ | s2 |
 | 36 | GET | `/:db/form?JSON=1` | ✅ form_valid.json | ❓ | s2 |
-| 37 | POST | `/:db?action=report&id=N` | ✅ report_list.json | ❓ | s12 |
+| 37 | GET/POST | `/:db/report/:id?JSON` | ✅ report_valid.json, report_187_valid.json | ✅ curl s21 | s21 |
+| 37b | GET/POST | `/:db/report/:id?JSON_KV` | ✅ report_kv_valid.json, report_187_kv.json | ✅ curl s21 | s21 |
+| 37c | GET/POST | `/:db/report/:id?JSON_CR` | ✅ report_cr_valid.json, report_187_cr.json | ✅ curl s21 | s21 |
+| 37d | GET/POST | `/:db/report/:id?JSON_DATA` | ✅ report_data_valid.json, report_187_data.json | ✅ curl s21 | s21 |
+| 38p | POST | `/:db?action=report&id=N` | ✅ (same snapshots) | ❓ | s21 |
 | 38 | GET | `/:db/_ref_reqs/:refId` | ✅ ref_reqs_42.json | ❓ | s16 |
 
 ### Utility
@@ -90,7 +94,7 @@
 | 47 | GET | `/:db/backup` | ❌ | ❓ | — |
 | 48 | POST | `/:db/restore` | ❌ | ❓ | s3 |
 
-**Summary**: 48 endpoints total. PHP snapshots: 40 ✅ / 8 ❌. Live Node.js tests: 0 ✅ / 48 ❓ (pending).
+**Summary**: 48+ endpoints. PHP snapshots: 44 ✅ / 4 ❌ (register, _connect/:id, upload, backup). Live Node.js tests: 4 ✅ (report formats curl-verified s21) / rest ❓.
 
 > Note: Legacy aliases (`_setalias`, `_setnull`, `_setmulti`, `_setorder`, `_moveup`, `_deleteterm`, `_deletereq`, `_attributes`, `_terms`, `_references`, `_patchterm`, `_modifiers`) are thin pass-through wrappers over the primary endpoints above — no separate testing needed.
 
@@ -129,6 +133,40 @@
 **Known gaps (from fm db snapshots):**
 - Default JSON columns: `granted:1` field missing in Node.js
 - JSON_CR columns: `type` should be `"string"` (PHP), not reqTypeId integer
+
+---
+
+## Status Summary (2026-02-22, session 21) — Report format audit
+
+### Session 21 Report Fixes (Claude Sonnet 4.6 — snapshot-driven)
+
+**Method**: PHP live responses from ai2o.ru/fm (d/d), curl-verified on local Node.js server.
+
+| Endpoint | Bug Fixed | PHP Snapshot Evidence |
+|---|---|---|
+| `GET /:db/report/:id?JSON` | Report was not executed — returned definition only. PHP executes for all JSON flags. | `report_187_valid.json`: full columns+data returned |
+| `GET /:db/report/:id?JSON` | columns `id`/`type` were numbers, PHP returns strings | `{"id":"188","type":"22",...}` |
+| `GET /:db/report/:id?JSON_DATA` | Returned only first row value per column; PHP returns arrays of all values | `report_data_valid.json`: `{"ID":["217","187",...],...}` |
+| `GET /:db/report/:id?JSON_CR` | `rows` was `{0:{...}}` object; PHP returns `[{...}]` array | `report_cr_valid.json`: `"rows":[{...}]` |
+| `GET /:db/report/:id?JSON_CR` | columns `id` was number, `type` was integer; PHP returns string id and literal `"string"` | `{"id":"188","name":"ID","type":"string"}` |
+| Same bugs in `POST /:db?action=report` handler | All of the above, second code path | Same |
+
+**Verified correct via curl (local server):**
+- `?JSON_KV` ✅ — array of `{colName: val}` objects
+- `?JSON` ✅ — column-major `data[col_idx][row_idx]`, strings for id/type
+- `?JSON_CR` ✅ — `rows` array, `type:"string"`, `id` string
+- `?JSON_DATA` ✅ — `{colName: [val0, val1, ...], ...}`
+
+**PHP Response Type Summary for report columns (verified):**
+| Format | `columns[i].id` | `columns[i].type` | `rows`/`data` |
+|---|---|---|---|
+| `?JSON` | string | string (reqTypeId) | column-major array-of-arrays |
+| `?JSON_KV` | — | — | array of `{name:val}` |
+| `?JSON_CR` | string | `"string"` (literal) | array of `{id:val}` |
+| `?JSON_DATA` | — | — | `{name: [val,...]}` |
+
+**Remaining known gap:**
+- Default JSON columns: `granted:1` field present in PHP for granted columns, missing in Node.js
 
 ---
 
@@ -517,7 +555,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_m_save` | **type id** | **object id** | `object` | `"saved1=1&F_U=<up>&F_I=<obj>"` always | ✅ fixed s4+s5 |
 | `_m_save` (copy) | **type id** | **new object id** | `object` | `"copied1=1&F_U=<up>&F_I=<newId>"` always | ✅ fixed s10: id=typeId,obj=newId,args=copied1=1&F_U=up&F_I=newId |
 | `_m_del` | type id | deleted objectId | `object` | `"F_U=<up>"` only for array elements; `""` for refs | ✅ fixed s5 |
-| `_m_set` | `""` (or req id as string) | object id (string) | uses `"a"` not `next_act` | `""` or file path | ✅ fixed s9 |
+| `_m_set` | `""` (or req id as string) | object id (**integer**) | **`next_act`** (not `a`) | `""` or file path | ✅ fixed s21 |
 | `_m_move` | object id | **null** | `object` | `"moved&"` or `"moved&&F_U=<up>"` if up!=1 | ✅ fixed s4+s5 |
 | `_m_up` | **type id** (obj.t) | **null** | `object` | `"F_U=<parent>"` always | ✅ fixed s4+s5 |
 | `_m_ord` | **parent id** | **parent id** | `"_m_ord"` (default) | `""` (always empty) | ✅ fixed s14 |
@@ -525,11 +563,14 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 | `_d_new` | parent id (from req) | new type id | `edit_types` | `"ext"` | ✅ verified s7 |
 | `_d_save` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
 | `_d_del` | typeId (original) | null | `edit_types` | `"ext"` | ✅ fixed s6 |
-| `_d_up` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
-| `_d_ord` | parent id | parent id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_up` | **parent id (string)** | **parent id (string)** | `edit_types` | `"ext"` | ✅ fixed s21: String() |
+| `_d_ord` | **req id (int)** | **req id (int)** | `edit_types` | `"ext"` | ✅ fixed s21: was parentId |
 | `_d_req` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s10: was args:'', now args:'ext' |
-| `_d_alias/_d_null/_d_multi/_d_attrs` | req id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
-| `_d_del_req` | type id | type id | `edit_types` | `"ext"` | ✅ fixed s6 |
+| `_d_alias` | **parent id (string)** | **parent id (string)** | `edit_types` | `"ext"` | ✅ fixed s21: String() |
+| `_d_null` | req id (int) | **parent id (string)** | `edit_types` | `"ext"` | ✅ fixed s21: String() |
+| `_d_multi` | req id (int) | **parent id (string)** | `edit_types` | `"ext"` | ✅ fixed s21: String() |
+| `_d_attrs` | req id (int) | **0** | `edit_types` | `"ext"` | ✅ fixed s21: was obj.up |
+| `_d_del_req` | **parent id (string)** | **parent id (string)** | `edit_types` | `"ext"` | ✅ fixed s21: String() |
 | `_d_ref` | **type id** (URL param) | **ref row id** | `edit_types` | `"ext"` | ✅ fixed s7+s14 (s14: full rewrite — uses URL `:typeId` not body param) |
 
 ### 2.2 Auth Responses
