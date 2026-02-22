@@ -1,8 +1,100 @@
 # Legacy PHP→Node.js Re-Audit Plan
 
-> **Branch**: `issue-164-4b84b8e6c979`
-> **Date**: 2026-02-22 (updated)
+> **Date**: 2026-02-22 (updated session 20)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
+
+---
+
+## Master Endpoint Checklist (48 endpoints)
+
+> **PHP snapshot** = live response captured from ai2o.ru in `experiments/php_responses/`
+> **Node.js tested** = running server hit with curl and compared against snapshot
+> **Last fix** = session where this endpoint was last changed
+
+### Auth & Session
+
+| # | Method | Path | PHP snapshot | Node.js tested | Last fix |
+|---|---|---|---|---|---|
+| 1 | GET | `/:db/xsrf` | ✅ xsrf.json | ❓ | s17 |
+| 2 | POST | `/:db/auth` | ✅ auth_login.json, auth_wrong.json | ❓ | s17 |
+| 3 | POST | `/:db/exit` | ✅ exit.json | ❓ | s9 |
+| 4 | POST | `/:db/getcode` | ✅ getcode.json | ❓ | s16 |
+| 5 | POST | `/:db/checkcode` | ✅ checkcode.json | ❓ | s16 |
+| 6 | POST | `/:db/confirm` | ✅ confirm.json | ❓ | s15 |
+| 7 | POST | `/:db/jwt` | ✅ jwt_bad.json | ❓ | s17 |
+| 8 | POST | `/my/register` | ❌ | ❓ | s9 |
+
+### DML — objects
+
+| # | Method | Path | PHP snapshot | Node.js tested | Last fix |
+|---|---|---|---|---|---|
+| 9 | POST | `/:db/_m_new/:up` | ✅ m_new_valid.json + 4 others | ❓ | s9 |
+| 10 | POST | `/:db/_m_save/:id` (save) | ✅ m_save_valid.json | ❓ | s18 |
+| 11 | POST | `/:db/_m_save/:id` (copy) | ✅ m_save_copy.json | ❓ | s19 |
+| 12 | POST | `/:db/_m_del/:id` | ✅ m_del_valid.json, m_del_copy.json | ❓ | s18 |
+| 13 | POST | `/:db/_m_up/:id` | ✅ m_up_valid.json | ❓ | s18 |
+| 14 | POST | `/:db/_m_ord/:id` (valid) | ✅ m_ord_valid.json | ❓ | s19 |
+| 14e | POST | `/:db/_m_ord/:id` (invalid) | ✅ m_ord_invalid.json | ❓ | s19 |
+| 15 | POST | `/:db/_m_id/:id` | ✅ m_id_valid.json (`Invalid ID`) | ❓ | s14 |
+| 16 | POST | `/:db/_m_set/:id` | ❌ | ❓ | s9 |
+| 17 | POST | `/:db/_m_move/:id` | ❌ | ❓ | s5 |
+
+### DDL — schema
+
+| # | Method | Path | PHP snapshot | Node.js tested | Last fix |
+|---|---|---|---|---|---|
+| 18 | POST | `/:db/_d_new` | ✅ d_new_valid.json | ❓ | s18 |
+| 19 | POST | `/:db/_d_save/:typeId` | ✅ d_save_valid.json (error case) | ❓ | s12 |
+| 20 | POST | `/:db/_d_del/:typeId` | ✅ d_del_valid.json (error case) | ❓ | s6 |
+| 21 | POST | `/:db/_d_req/:typeId` | ✅ d_req_valid.json (error case) | ❓ | s10 |
+| 22 | POST | `/:db/_d_ref/:typeId` | ✅ d_ref_valid.json | ❓ | s14 |
+| 23 | POST | `/:db/_d_alias/:reqId` | ❌ | ❓ | s11 |
+| 24 | POST | `/:db/_d_null/:reqId` | ❌ | ❓ | s6 |
+| 25 | POST | `/:db/_d_multi/:reqId` | ❌ | ❓ | s6 |
+| 26 | POST | `/:db/_d_attrs/:reqId` | ❌ | ❓ | s6 |
+| 27 | POST | `/:db/_d_up/:reqId` | ❌ | ❓ | s6 |
+| 28 | POST | `/:db/_d_ord/:reqId` | ❌ | ❓ | s14 |
+| 29 | POST | `/:db/_d_del_req/:reqId` | ❌ | ❓ | s6 |
+
+### View / Query (JSON API mode)
+
+| # | Method | Path | PHP snapshot | Node.js tested | Last fix |
+|---|---|---|---|---|---|
+| 30 | GET | `/:db/object/:typeId?JSON=1` | ✅ report_list.json | ❓ | s2 |
+| 31 | GET | `/:db/edit_obj/:id?JSON=1` | ❌ | ❓ | s2 |
+| 32 | GET | `/:db/edit_types?JSON=1` | ❌ | ❓ | s2 |
+| 33 | GET | `/:db/dict?JSON=1` | ✅ dict_18.json | ❓ | s2 |
+| 34 | GET | `/:db/list/:typeId?JSON=1` | ✅ list_18.json | ❓ | s2 |
+| 35 | GET | `/:db/sql?JSON=1` | ❌ | ❓ | s2 |
+| 36 | GET | `/:db/form?JSON=1` | ❌ | ❓ | s2 |
+| 37 | POST | `/:db?action=report&id=N` | ✅ report_list.json | ❓ | s12 |
+| 38 | GET | `/:db/_ref_reqs/:refId` | ✅ ref_reqs_42.json | ❓ | s16 |
+
+### Utility
+
+| # | Method | Path | PHP snapshot | Node.js tested | Last fix |
+|---|---|---|---|---|---|
+| 39 | GET | `/:db/terms` | ✅ terms.json | ❓ | s2 |
+| 40 | GET | `/:db/metadata` | ✅ metadata.json, metadata_18.json | ❓ | s2 |
+| 41 | GET | `/:db/obj_meta/:id` | ✅ obj_meta_valid.json | ❓ | s2 |
+| 42 | GET/POST | `/:db/_connect/:id` | ❌ | ❓ | s3 |
+| 43 | POST | `/my/_new_db` | ❌ | ❓ | s15 |
+
+### Files / Export
+
+| # | Method | Path | PHP snapshot | Node.js tested | Last fix |
+|---|---|---|---|---|---|
+| 44 | POST | `/:db/upload` | ❌ | ❓ | s9 |
+| 45 | GET | `/:db/download/:filename` | ❌ | ❓ | — |
+| 46 | GET | `/:db/csv_all` | ❌ | ❓ | — |
+| 47 | GET | `/:db/backup` | ❌ | ❓ | — |
+| 48 | POST | `/:db/restore` | ❌ | ❓ | s3 |
+
+**Summary**: 48 endpoints total. PHP snapshots: 26 ✅ / 22 ❌. Live Node.js tests: 0 ✅ / 48 ❓ (pending).
+
+> Note: Legacy aliases (`_setalias`, `_setnull`, `_setmulti`, `_setorder`, `_moveup`, `_deleteterm`, `_deletereq`, `_attributes`, `_terms`, `_references`, `_patchterm`, `_modifiers`) are thin pass-through wrappers over the primary endpoints above — no separate testing needed.
+
+---
 
 ## Status Summary (2026-02-22, session 19)
 
