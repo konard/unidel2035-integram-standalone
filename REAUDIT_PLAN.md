@@ -60,13 +60,13 @@
 
 | # | Method | Path | PHP snapshot | Node.js tested | Last fix |
 |---|---|---|---|---|---|
-| 30 | GET | `/:db/object/:typeId?JSON=1` | ✅ report_list.json | ❓ | s2 |
+| 30 | GET | `/:db/object/:typeId?JSON=1` | ✅ report_list.json | ✅ curl s22 | s22 |
 | 31 | GET | `/:db/edit_obj/:id?JSON=1` | ✅ edit_obj_valid.json | ❓ | s2 |
-| 32 | GET | `/:db/edit_types?JSON=1` | ✅ edit_types_valid.json | ❓ | s2 |
-| 33 | GET | `/:db/dict?JSON=1` | ✅ dict_18.json | ❓ | s2 |
-| 34 | GET | `/:db/list/:typeId?JSON=1` | ✅ list_18.json | ❓ | s2 |
-| 35 | GET | `/:db/sql?JSON=1` | ✅ sql_valid.json, sql_fm_valid.json | ❓ | s2 |
-| 36 | GET | `/:db/form?JSON=1` | ✅ form_valid.json | ❓ | s2 |
+| 32 | GET | `/:db/edit_types?JSON=1` | ✅ edit_types_valid.json | ✅ curl s22 | s22 |
+| 33 | GET | `/:db/dict?JSON=1` | ✅ dict_18.json | ✅ curl s22 | s2 |
+| 34 | GET | `/:db/list/:typeId?JSON=1` | ✅ list_18.json | ✅ curl s22 | s22 |
+| 35 | GET | `/:db/sql?JSON=1` | ✅ sql_valid.json, sql_fm_valid.json | ✅ curl s22 | s22 |
+| 36 | GET | `/:db/form?JSON=1` | ✅ form_valid.json | ✅ curl s22 | s22 |
 | 37 | GET/POST | `/:db/report/:id?JSON` | ✅ report_valid.json, report_187_valid.json | ✅ curl s21 | s21 |
 | 37b | GET/POST | `/:db/report/:id?JSON_KV` | ✅ report_kv_valid.json, report_187_kv.json | ✅ curl s21 | s21 |
 | 37c | GET/POST | `/:db/report/:id?JSON_CR` | ✅ report_cr_valid.json, report_187_cr.json | ✅ curl s21 | s21 |
@@ -94,9 +94,32 @@
 | 47 | GET | `/:db/backup` | ❌ | ❓ | — |
 | 48 | POST | `/:db/restore` | ❌ | ❓ | s3 |
 
-**Summary**: 48+ endpoints. PHP snapshots: 44 ✅ / 4 ❌ (register, _connect/:id, upload, backup). Live Node.js tests: 4 ✅ (report formats curl-verified s21) / rest ❓.
+**Summary**: 48+ endpoints. PHP snapshots: 44 ✅ / 4 ❌ (register, _connect/:id, upload, backup). Live Node.js tests: 11 ✅ (report formats s21, dict/sql/form/edit_types/object/list/info s22) / rest ❓.
 
 > Note: Legacy aliases (`_setalias`, `_setnull`, `_setmulti`, `_setorder`, `_moveup`, `_deleteterm`, `_deletereq`, `_attributes`, `_terms`, `_references`, `_patchterm`, `_modifiers`) are thin pass-through wrappers over the primary endpoints above — no separate testing needed.
+
+---
+
+## Status Summary (2026-02-22, session 22)
+
+### Session 22 Fixes (Claude Sonnet 4.6 — &top_menu parity audit)
+
+**Method**: Browser fetch from ai2o.ru/fm (authenticated as d/d). Found `&main.&top_menu` present in ALL JSON page responses (sql, info, form, edit_types, object, table, upload, list). Node.js was omitting it entirely.
+
+| Endpoint | Bug Fixed | PHP Evidence |
+|---|---|---|
+| All JSON pages | Missing `&main.&top_menu` block | Browser: all fm pages have `{top_menu_href:["dict","edit_types","dir_admin"],top_menu:["Таблицы","Структура","Файлы"]}` |
+| `GET /:db/list/:typeId?JSON` | Returned 404, should return menu+top_menu | PHP: `{"&main.myrolemenu":{...},"&main.&top_menu":{...},...}` |
+
+**Verified correct (no change needed):**
+- `dict?JSON` → flat `{id:name}` format (no menu), matches PHP ✅
+- `sql?JSON` → keys match PHP after fix ✅
+- `info?JSON` → keys match PHP after fix ✅
+- `form?JSON` → keys match PHP after fix ✅
+- `edit_types?JSON` → keys match PHP after fix ✅
+
+**Known remaining gap (fm-specific custom block):**
+- `info/table/list` PHP fm response includes `&main.a.Модели` (custom fm block for "Мои модели" model list) — not replicated in Node.js (db-specific custom content)
 
 ---
 
