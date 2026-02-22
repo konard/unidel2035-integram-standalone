@@ -3395,9 +3395,9 @@ router.post('/:db/_m_save/:id', async (req, res) => {
       // PHP api_dump() for copy (lines 8228-8234):
       //   $arg = "copied1=1&F_U=$up&F_I=$id" (F_I = new objectId)
       //   $obj = $id (new objectId)
-      //   $id  = $typ (type ID)
+      //   $id  = $typ (type ID as string, PHP mysqli_fetch_array returns strings)
       return legacyRespond(req, res, db, {
-        id: original.typ,
+        id: String(original.typ),
         obj: objectId,
         next_act: 'object',
         args: `copied1=1&F_U=${original.up}&F_I=${objectId}`,
@@ -5313,7 +5313,8 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
     const newOrd = parseInt(req.query.order ?? req.body.order ?? req.body.ord, 10);
 
     if (isNaN(newOrd) || newOrd < 1) {
-      return res.status(200).json([{ error: 'order must be a positive integer'  }]);
+      // PHP returns plain text "Invalid order" for invalid order parameter
+      return res.status(200).send('Invalid order');
     }
 
     const pool = getPool();
@@ -5355,8 +5356,9 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
 
     // PHP api_dump(): {id:parentId, obj:parentId, next_act:"_m_ord"|req.next_act, args:"", warnings}
     // PHP: $id = $row["up"] (parent), $obj = $id (also parent), $next_act defaults to "_m_ord"
+    // PHP mysqli_fetch_array returns strings, so id and obj are strings like "1"
     const nextAct = req.body.next_act || req.query.next_act || '_m_ord';
-    legacyRespond(req, res, db, { id: parentId, obj: parentId, next_act: nextAct, args: '' });
+    legacyRespond(req, res, db, { id: String(parentId), obj: String(parentId), next_act: nextAct, args: '' });
   } catch (error) {
     logger.error('[Legacy _m_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
