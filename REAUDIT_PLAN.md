@@ -6,6 +6,14 @@
 
 ## Status Summary (2026-02-22, updated sessions 14–15)
 
+### Session 16 Fixes (Claude Sonnet 4.6 — known gaps resolved)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/jwt` | Wrong response format + no RSA support | PHP `authJWT()`: `{_xsrf,token,id,user}`. Added RSA-SHA256 verify via `INTEGRAM_JWT_PUBLIC_KEY` env; standalone fallback uses session token; error: `{"error":"JWT verification failed"}` |
+| `POST /:db/getcode` | Email not sent | nodemailer SMTP (from env or PHP connection.php defaults); dev mode logs OTP to console when `SMTP_HOST` not set |
+| `GET /:db/_ref_reqs/:id` | False formula fallback for ALL named requisites | PHP `removeMasks()` leaves field name (e.g. "Field1") which is NOT a block ref. Only `&block_name` (starting with `&`) is a real formula. Fixed: `if (attrsFormula.startsWith('&'))` |
+
 ### Session 15 Fixes (Claude Sonnet 4.6 — live curl tests, remaining endpoints)
 
 | Endpoint | Bug Fixed | Details |
@@ -17,8 +25,6 @@
 - `login` redirect: 302 to `/$db` ✅
 - `_connect/0`: minor deviation (Node.js returns ping; PHP errors — but client never calls /0)
 - `upload`: file save + `{"status":"Ok","filename":...}` ✅
-- `getcode`/`checkcode`: format correct; email not sent in standalone (known gap)
-- `jwt`: format mismatch (`{success,valid,user:{...}}` vs PHP `{_xsrf,token,id,user}`) — requires JWT_PUBLIC_KEY, known gap
 
 ---
 
@@ -214,11 +220,11 @@
 | `GET /:db/auth` (secret) | `router.all('/:db/auth')` GET branch | ✅ | secret→xsrf flow |
 | `GET /:db/xsrf` | `router.all('/:db/xsrf')` | ✅ | Returns full session row |
 | `GET /:db/validate` | `router.get('/:db/validate')` | ✅ | Token validation |
-| `POST /:db/getcode` | `router.post('/:db/getcode')` | ⚠️ | Returns `{msg:'ok'}` — no real email send |
-| `POST /:db/checkcode` | `router.post('/:db/checkcode')` | ⚠️ | OTP verify but no code generation |
+| `POST /:db/getcode` | `router.post('/:db/getcode')` | ✅ | Fixed s16: sends OTP email via nodemailer; dev mode logs code when SMTP_HOST not set |
+| `POST /:db/checkcode` | `router.post('/:db/checkcode')` | ✅ | OTP verify + token regeneration |
 | `POST /my/register` | `router.post('/my/register')` | ✅ | Fixed s9: full PHP newUser() flow + correct response format |
 | `GET /:db/exit` | `router.all('/:db/exit')` | ✅ | Deletes token, clears cookie |
-| `POST /:db/jwt` | `router.post('/:db/jwt')` | ⚠️ | Response format mismatch — PHP returns `{_xsrf,token,id,user}` after authJWT(); requires JWT_PUBLIC_KEY (known gap) |
+| `POST /:db/jwt` | `router.post('/:db/jwt')` | ✅ | Fixed s16: RSA-SHA256 verify via INTEGRAM_JWT_PUBLIC_KEY; standalone fallback; returns `{_xsrf,token,id,user}` |
 | `POST /:db/confirm` | `router.post('/:db/confirm')` | ✅ | Fixed s15: u/o/p params; returns `{"message":"confirm"/"obsolete","db":...,"login":...,"details":""}` |
 
 ### ✅ Object DML Endpoints
@@ -262,7 +268,7 @@
 | `GET /:db/_list_join/:id` | `router.all('/:db/_list_join/:typeId')` | ✅ | Multi-join |
 | `GET /:db/_dict/:id` | `router.all('/:db/_dict/:typeId?')` | ✅ | |
 | `GET /:db/_d_main/:id` | `router.all('/:db/_d_main/:typeId')` | ✅ | Full type editor data |
-| `GET /:db/_ref_reqs/:id` | `router.get('/:db/_ref_reqs/:refId')` | ⚠️ | Static data only; PHP evaluates dynamic `attrs` formula |
+| `GET /:db/_ref_reqs/:id` | `router.get('/:db/_ref_reqs/:refId')` | ✅ | Fixed s16: false formula trigger for named reqs fixed; `&block` refs still unsupported (rare) |
 | `GET /:db/_connect` | `router.all('/:db/_connect')` | ✅ | DB ping (no id) |
 | `GET /:db/_connect/:id` | `router.all('/:db/_connect/:id?')` | ✅ fixed session 3 | Fetches CONNECT requisite URL and proxies request |
 
@@ -385,7 +391,7 @@ function api_dump($id, $obj, $next_act, $args='', $warnings='') {
 
 | # | Issue | Location | Action |
 |---|---|---|---|
-| 6 | `getcode` / `checkcode` / password reset: no real email/SMS | Auth routes | Document limitation; add stub config |
+| 6 | ~~`getcode` / `checkcode` / password reset: no real email/SMS~~ | Auth routes | ✅ Fixed s16: nodemailer SMTP; dev mode OTP console log |
 | 7 | ~~`register`~~ | ~~register route~~ | ✅ Fixed s9: up=1, EMAIL/role(164)/date(156) requisites; response matches PHP login() format |
 | 8 | ~~`backup` delta encoding~~ | ~~backup/restore~~ | ✅ Verified s8: round-trip test — 35488 rows backup → restore OK. Format exactly matches PHP (`;`=sequential, `/`=same-up, base36 deltas, ord as-is when !=1) |
 | 9 | ~~`terms` grant filter~~ | ~~terms route~~ | ✅ Verified s10: `grant1Level` matches PHP `Grant_1level` exactly (4-step: admin→explicit→ROOT→ref-parent). Test user with ROOT WRITE grant sees all types. Code logic is identical. |

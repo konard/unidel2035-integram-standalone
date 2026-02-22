@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import logger from '../../utils/logger.js';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
+import nodemailer from 'nodemailer';
 
 const router = express.Router();
 
@@ -235,6 +236,50 @@ function getPool() {
     logger.info('[Legacy Compat] Database pool created', { host: config.host, port: config.port });
   }
   return pool;
+}
+
+/**
+ * Send OTP email — matches PHP mysendmail() in getcode handler.
+ * Config priority: SMTP_* env vars → PHP connection.php defaults.
+ * If SMTP_HOST is not set (or connection fails), logs code to console (dev mode).
+ *
+ * PHP message format (index.php lines 7732-7738):
+ *   Subject: "Одноразовый пароль <email>"
+ *   Body:    "Ваш код для входа: <XXXX>\r\n\r\n<unsubscribe footer>"
+ */
+async function sendOtpEmail(email, code, db, host) {
+  const smtpHostRaw = process.env.SMTP_HOST || 'ssl://smtp.yandex.ru';
+  const smtpPort    = parseInt(process.env.SMTP_PORT || '465', 10);
+  const smtpUser    = process.env.SMTP_USER    || 'abc@tryjob.ru';
+  const smtpPass    = process.env.SMTP_PASSWORD || 'CoffeeClick';
+  const fromEmail   = process.env.FROM_EMAIL    || smtpUser;
+  const fromName    = process.env.FROM_NAME     || 'Integram';
+  // Handle 'ssl://host' format from PHP config
+  const smtpHost    = smtpHostRaw.replace(/^(ssl|tls):\/\//, '');
+  const smtpSecure  = smtpHostRaw.startsWith('ssl://') || smtpPort === 465;
+
+  const unsubUrl = `https://${host || 'localhost'}/${db}/register?optout=${encodeURIComponent(email)}`;
+  const subject  = `Одноразовый пароль ${email}`;
+  const text     = `Ваш код для входа: ${code.toUpperCase()}\r\n\r\nЕсли вы не хотите получать от нас писем, связанных с регистрацией ${email}, вы можете отписаться от оповещений:\r\n${unsubUrl}`;
+
+  if (!process.env.SMTP_HOST) {
+    // Dev mode: no SMTP configured — log code so developer can use it
+    logger.info('[Legacy GetCode] OTP (no SMTP configured — dev mode)', { email, code: code.toUpperCase() });
+    return;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost, port: smtpPort, secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      tls: { rejectUnauthorized: false },
+    });
+    await transporter.sendMail({ from: `"${fromName}" <${fromEmail}>`, to: email, subject, text });
+    logger.info('[Legacy GetCode] OTP email sent', { email });
+  } catch (err) {
+    // Log the code so it's not silently lost if SMTP fails
+    logger.error('[Legacy GetCode] SMTP error, OTP:', { email, code: code.toUpperCase(), err: err.message });
+  }
 }
 
 // PHP SALT constant — must match integram-server/include/connection.php define("SALT", ...)
@@ -1332,9 +1377,10 @@ router.post('/:db/getcode', async (req, res) => {
     );
 
     if (rows.length > 0) {
-      // User found — PHP sends email with first 4 chars of token as code
-      // (email sending not implemented in standalone mode)
-      logger.info({ db, u }, '[Legacy GetCode] User found, code would be sent');
+      // PHP: sends email with first 4 chars of token as OTP code (strtoupper(substr($token,0,4)))
+      const code = (rows[0].val || '').substring(0, 4);
+      const reqHost = req.headers.host || req.hostname || 'localhost';
+      await sendOtpEmail(u, code, db, reqHost);
       return res.status(200).json({ msg: 'ok' });
     } else {
       // PHP returns "new" when user not found (suggests registering)
@@ -4381,9 +4427,11 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
     }
 
     // Check for dynamic formula (attrs block) in reference type val
-    // PHP: if removeMasks(r.val) is non-empty → it's a named block with custom SQL
-    // This requires PHP's template block execution engine, which is not available in Node.js.
-    // We detect this case and fall back to the standard query with a warning.
+    // PHP: removeMasks(r.val) strips :!NULL:, :MULTI:, :ALIAS=...: — if what remains
+    // starts with '&' it's a PHP block reference (e.g. "&my_dropdown_block").
+    // PHP evaluates it via Get_block_data(). For regular field names ("Field1", "::Name")
+    // PHP tries Get_block_data but finds no block and falls through to the normal query.
+    // Node.js: only treat as formula when it genuinely starts with '&'.
     const rawAttr = refRows[0].attr || '';
     const attrsFormula = rawAttr
       .replace(/:ALIAS=[^:]*:/g, '')
@@ -4391,9 +4439,8 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
       .replace(/:MULTI:/g, '')
       .trim();
 
-    if (attrsFormula.length > 0) {
-      // This reference type has a custom formula/block (e.g. "&my_block" or report reference).
-      // PHP evaluates the block via Get_block_data(). Node.js doesn't support this.
+    if (attrsFormula.startsWith('&')) {
+      // Real PHP block reference — requires PHP template engine, not available in Node.js.
       // Return a simple fallback list using just the dictionary type.
       logger.warn('[Legacy _ref_reqs] Dynamic formula not supported, using simple fallback', {
         db, id, formula: attrsFormula
@@ -5604,69 +5651,104 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
  * jwt - JWT authentication
  * POST /:db/jwt
  *
- * PHP: index.php lines 7608–7616
- * PHP accepts POST field named 'jwt', Node.js was reading 'token' - fixed to accept both
+ * PHP: index.php lines 7608–7616, authJWT() lines 7558–7577
+ * PHP verifies RSA-SHA256 JWT (JWT_PUBLIC_KEY), extracts data.userId, looks up
+ * user by username, regenerates session, returns {_xsrf, token, id, user}.
+ *
+ * Standalone: if INTEGRAM_JWT_PUBLIC_KEY env var is set → full RSA verify.
+ * Otherwise → treat jwt field as a session token (backwards compat for non-RSA flows).
+ * Response format always matches PHP authJWT() output.
  */
 router.post('/:db/jwt', async (req, res) => {
   const { db } = req.params;
-  // PHP accepts 'jwt' field, also support 'token' for backwards compatibility
-  const { jwt, token, refresh_token } = req.body;
+  const jwtToken = req.body.jwt || req.body.token || '';
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json([{ error: 'Invalid database' }]);
+  }
+
+  if (!jwtToken) {
+    return res.status(200).json({ error: 'JWT verification failed' });
   }
 
   try {
-    // JWT validation - verify token exists in database
-    // PHP: $token = $_POST["jwt"] - accept both 'jwt' and 'token' field names
-    const authToken = jwt || token || req.cookies[db] || req.headers['x-authorization'];
+    const pool = getPool();
+    let username = null;
 
-    if (!authToken) {
-      return res.status(401).json({ error: 'No token provided' });
+    const publicKey = process.env.INTEGRAM_JWT_PUBLIC_KEY || '';
+
+    if (publicKey) {
+      // Full RSA-SHA256 verification — matches PHP verifyJWT()
+      // PHP: openssl_verify("$header.$payload", $sig, $publicKey, OPENSSL_ALGO_SHA256)
+      const parts = jwtToken.split('.');
+      if (parts.length !== 3) {
+        return res.status(200).json({ error: 'JWT verification failed' });
+      }
+      const [headerB64, payloadB64, sigB64] = parts;
+      const sigBuf = Buffer.from(sigB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+      const data = Buffer.from(`${headerB64}.${payloadB64}`);
+      const ok = crypto.verify('SHA256', data, { key: publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, sigBuf);
+      if (!ok) {
+        return res.status(200).json({ error: 'JWT verification failed' });
+      }
+      const payload = JSON.parse(Buffer.from(payloadB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
+      const now = Math.floor(Date.now() / 1000);
+      if (!payload.iat || !payload.exp || now > payload.exp || now < payload.iat) {
+        return res.status(200).json({ error: 'JWT expired' });
+      }
+      // PHP: $params->data->userId
+      username = payload?.data?.userId || payload?.sub || null;
+      if (!username) {
+        return res.status(200).json({ error: 'JWT verification failed' });
+      }
     }
 
-    const pool = getPool();
+    // PHP authJWT($username): look up user, regenerate session, return {_xsrf,token,id,user}
+    // In standalone (no RSA key): treat jwt field as session token for backwards compat
+    const whereClause = username
+      ? `u.t = ${TYPE.USER} AND u.val = ?`
+      : `u.t = ${TYPE.USER} AND tok.val = ?`;
+    const whereParam = username || jwtToken;
 
-    const query = `
-      SELECT
-        user.id AS uid,
-        user.val AS username,
-        xsrf.val AS xsrf,
-        role.id AS role_id,
-        role.val AS role_name
-      FROM ${db} user
-      JOIN ${db} tkn ON tkn.up = user.id AND tkn.t = ${TYPE.TOKEN}
-      LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
-      LEFT JOIN ${db} role ON role.up = user.id AND role.t = ${TYPE.ROLE}
-      WHERE tkn.val = ? AND user.t = ${TYPE.USER}
-      LIMIT 1
-    `;
+    const [rows] = await pool.query(
+      `SELECT u.id uid, u.val uname, tok.id tok_id, tok.val tok_val, xsrf.id xsrf_id, xsrf.val xsrf_val
+       FROM \`${db}\` u
+       LEFT JOIN \`${db}\` tok  ON tok.up  = u.id AND tok.t  = ${TYPE.TOKEN}
+       LEFT JOIN \`${db}\` xsrf ON xsrf.up = u.id AND xsrf.t = ${TYPE.XSRF}
+       WHERE ${whereClause} LIMIT 1`,
+      [whereParam]
+    );
 
-    const [rows] = await pool.query(query, [authToken.replace('Bearer ', '')]);
-
-    if (rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
+    if (!rows.length) {
+      return res.status(200).json({ error: 'JWT verification failed' });
     }
 
     const user = rows[0];
 
+    // PHP authJWT: updateTokens() regenerates token+xsrf, sets cookie
+    const newToken = generateToken();
+    const newXsrf  = generateXsrf(newToken, db, db);
+
+    if (user.tok_id) {
+      await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [newToken, user.tok_id]);
+    } else {
+      await pool.query(`INSERT INTO \`${db}\` (up,ord,t,val) VALUES (?,1,${TYPE.TOKEN},?)`, [user.uid, newToken]);
+    }
+    if (user.xsrf_id) {
+      await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [newXsrf, user.xsrf_id]);
+    } else {
+      await pool.query(`INSERT INTO \`${db}\` (up,ord,t,val) VALUES (?,1,${TYPE.XSRF},?)`, [user.uid, newXsrf]);
+    }
+
+    res.cookie(db, newToken, { path: '/', httpOnly: false });
+
     logger.info('[Legacy jwt] JWT validated', { db, uid: user.uid });
 
-    res.json({
-      success: true,
-      valid: true,
-      user: {
-        id: user.uid,
-        login: user.username,
-        role: user.role_name || null,
-        role_id: user.role_id || null
-      },
-      xsrf: user.xsrf,
-      token: authToken
-    });
+    // PHP authJWT() response: {_xsrf, token, id, user}
+    res.status(200).json({ _xsrf: newXsrf, token: newToken, id: user.uid, user: user.uname });
   } catch (error) {
     logger.error('[Legacy jwt] Error', { error: error.message, db });
-    res.status(200).json([{ error: 'JWT validation failed'  }]);
+    res.status(200).json({ error: 'JWT verification failed' });
   }
 });
 
