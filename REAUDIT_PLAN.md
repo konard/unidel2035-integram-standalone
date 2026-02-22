@@ -1,10 +1,39 @@
 # Legacy PHP→Node.js Re-Audit Plan
 
-> **Branch**: `issue-160-b203555558b8`
+> **Branch**: `issue-162-bd266fc6a760`
 > **Date**: 2026-02-22 (updated)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
 
-## Status Summary (2026-02-22, updated sessions 14–15)
+## Status Summary (2026-02-22, session 17)
+
+### Session 17 Fixes (Claude Opus 4.5 — live parity audit issue #162)
+
+| Endpoint | Bug Fixed | Details |
+|---|---|---|
+| `POST /:db/auth` | `id` was number, should be string | PHP `mysqli_fetch_array` returns strings; Node.js now returns `id: String(user.uid)` |
+| `POST /:db/auth?secret` | Response had `msg` instead of `user` | PHP (line 7573): `{_xsrf, token, id, user}` — no `msg` field. Fixed to match authJWT() format |
+| `POST /:db/jwt` | `id` was number, should be string | PHP returns string from mysqli; Node.js now returns `id: String(user.uid)` |
+
+**Live audit findings (ai2o.ru PHP server):**
+- Auth endpoints return `id` as STRING type (e.g., `"1123"` not `1123`)
+- `_m_save` returns `id` as STRING type (e.g., `"3"` not `3`)
+- `_m_up` returns `obj: null` (not a number)
+- `_m_ord` / `_m_id` return plain text errors ("Invalid order", "Invalid ID") for invalid params
+- `_ref_reqs` PHP has SQL syntax error for certain type IDs (upstream bug)
+- `_d_new` returns `id: ""` (empty string) when creating at root level
+
+**PHP Response Type Summary (verified live):**
+| Endpoint | `id` type | `obj` type |
+|---|---|---|
+| `_m_new` | number | number |
+| `_m_save` | string | number |
+| `_m_up` | string | null |
+| `_d_new` | string (empty) | number |
+| `_d_ref` | number | number |
+| `auth` | string | - |
+| `xsrf` | string | - |
+
+---
 
 ### Session 16 Fixes (Claude Sonnet 4.6 — known gaps resolved)
 
