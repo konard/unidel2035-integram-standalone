@@ -4657,8 +4657,10 @@ router.post('/:db/_d_new/:parentTypeId?', async (req, res) => {
       return res.status(200).json([{ error: 'Type name (val) is required'  }]);
     }
 
-    // Get next order
-    const order = await getNextOrder(db, parentId);
+    // PHP line 7788: $unique = isset($_REQUEST["unique"]) ? 1 : 0
+    // PHP line 8327: "Ord=1 means the Obj must be unique" — for root-level types ord IS the unique flag
+    // PHP _d_new: Insert(0, $unique, $t, $val) — ord = unique flag (0 or 1), NOT a sequence
+    const order = (req.body.unique !== undefined || req.query.unique !== undefined) ? 1 : 0;
 
     // Insert the new type
     const id = await insertRow(db, parentId, order, baseType, name);
@@ -4690,31 +4692,28 @@ router.post('/:db/_d_save/:typeId', async (req, res) => {
     const id = parseInt(typeId, 10);
     const pool = getPool();
 
-    // Build update query dynamically
-    const updates = [];
-    const params = [];
+    // PHP _d_save (line 8593): UPDATE $z SET t=$t, val='...', ord='$unique' WHERE id=$id
+    // Always updates val, t, and ord (unique flag).
+    // $unique = isset($_REQUEST["unique"]) ? 1 : 0 (line 7788)
+    const val = req.body.val;
+    const t = req.body.t !== undefined ? parseInt(req.body.t, 10) : undefined;
+    // unique flag: 1 if param present, 0 otherwise (like PHP)
+    const unique = (req.body.unique !== undefined || req.query.unique !== undefined) ? 1 : 0;
 
-    if (req.body.val !== undefined) {
-      updates.push('val = ?');
-      params.push(req.body.val);
-    }
-
-    if (req.body.t !== undefined) {
-      updates.push('t = ?');
-      params.push(parseInt(req.body.t, 10));
-    }
-
-    if (req.body.up !== undefined) {
-      updates.push('up = ?');
-      params.push(parseInt(req.body.up, 10));
-    }
-
-    if (updates.length === 0) {
+    if (val === undefined && t === undefined) {
       return res.status(200).json([{ error: 'No fields to update'  }]);
     }
 
+    const updates = [];
+    const params = [];
+    if (val !== undefined) { updates.push('val = ?'); params.push(val); }
+    if (t !== undefined) { updates.push('t = ?'); params.push(t); }
+    // Always update ord (unique flag) when saving a type, matching PHP behavior
+    updates.push('ord = ?');
+    params.push(unique);
+
     params.push(id);
-    await pool.query(`UPDATE ${db} SET ${updates.join(', ')} WHERE id = ?`, params);
+    await pool.query(`UPDATE \`${db}\` SET ${updates.join(', ')} WHERE id = ?`, params);
 
     logger.info('[Legacy _d_save] Type saved', { db, id, updates: req.body });
 
@@ -5041,7 +5040,7 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
 /**
  * _d_ord - Set order for requisite
  * POST /:db/_d_ord/:reqId
- * Parameters: ord (new order value)
+ * Parameters: order (new order value) — PHP uses $_REQUEST["order"] not "ord"
  */
 router.post('/:db/_d_ord/:reqId', async (req, res) => {
   const { db, reqId } = req.params;
@@ -5052,24 +5051,44 @@ router.post('/:db/_d_ord/:reqId', async (req, res) => {
 
   try {
     const id = parseInt(reqId, 10);
-    const newOrd = parseInt(req.body.ord, 10);
+    // PHP line 8721: $newOrd = (int)$_REQUEST["order"]  (not "ord")
+    const newOrd = parseInt(req.body.order || req.query.order, 10);
 
-    if (isNaN(newOrd)) {
-      return res.status(200).json([{ error: 'Order (ord) is required'  }]);
+    if (isNaN(newOrd) || newOrd < 1) {
+      return res.status(200).json([{ error: 'Invalid order'  }]);
     }
 
     const pool = getPool();
 
-    // Fetch parent type for PHP api_dump() response
-    const obj = await getObjectById(db, id);
-    const parentId = obj ? obj.up : 0;
+    // PHP: SELECT req.ord, req.up FROM $z req, $z par WHERE req.id=$id AND par.id=req.up AND par.up=0
+    const [[reqRow]] = await pool.query(
+      `SELECT req.ord, req.up FROM \`${db}\` req, \`${db}\` par WHERE req.id=? AND par.id=req.up AND par.up=0`,
+      [id]
+    );
 
-    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [newOrd, id]);
+    if (!reqRow) {
+      return res.status(200).json([{ error: `Id=${id} not found`  }]);
+    }
+
+    const parentId = reqRow.up;
+    const oldOrd = reqRow.ord;
+
+    if (String(newOrd) !== String(oldOrd)) {
+      // PHP line 8730-8731: reorder range of siblings between old and new positions
+      // UPDATE $z SET ord=(CASE WHEN id=$rid THEN LEAST($newOrd, maxOrd) ELSE ord+SIGN($ord-$newOrd) END)
+      //   WHERE up=$id AND ord BETWEEN LEAST($ord, $newOrd) AND GREATEST($ord, $newOrd)
+      await pool.query(`
+        UPDATE \`${db}\` SET ord=(CASE WHEN id=? THEN LEAST(?, (SELECT max(ord) FROM (SELECT ord FROM \`${db}\` WHERE up=?) AS t))
+                                       ELSE ord+SIGN(?-?) END)
+        WHERE up=? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`,
+        [id, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd]
+      );
+    }
 
     logger.info('[Legacy _d_ord] Order set', { db, id, ord: newOrd });
 
     // PHP api_dump(): {id:parent, obj:parent, next_act:"edit_types", args:"ext"}
-    // PHP: $id = $row["up"] (parent when order changes), $obj = $id (also parent)
+    // PHP: $id = $row["up"] (parent type ID), $obj = $id (also parent)
     legacyRespond(req, res, db, { id: parentId, obj: parentId, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ord] Error', { error: error.message, db });
@@ -6341,7 +6360,13 @@ router.all('/:db/report/:reportId?', async (req, res) => {
     }
 
     // If execution is requested, run the report
-    if (execute || req.method === 'POST') {
+    // PHP also executes for JSON_KV, JSON_CR, JSON_HR, JSON_DATA flags (they select output format, not trigger)
+    const q = req.query;
+    const shouldExecute = execute || req.method === 'POST' ||
+      q.JSON_KV !== undefined || q.JSON_CR !== undefined || q.JSON_HR !== undefined ||
+      q.JSON_DATA !== undefined || q.RECORD_COUNT !== undefined;
+
+    if (shouldExecute) {
       // Parse filters from request
       const filters = {};
       const params = { ...req.query, ...req.body };
@@ -6428,8 +6453,6 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       // PHP-compatible JSON output formats
-      const q = req.query;
-
       if (q.JSON_KV !== undefined) {
         // [{col_name: val, ...}, ...] — array of objects using column names as keys
         const rows = results.data.map(row => {
