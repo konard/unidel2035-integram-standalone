@@ -167,6 +167,19 @@ async function getMenuForToken(pool, db, token) {
 }
 
 /**
+ * Build &main.&top_menu block.
+ * PHP: index.php case "&top_menu" always includes "dict"/"Таблицы", and conditionally
+ * "edit_types"/"Структура" and "dir_admin"/"Файлы" based on grants.
+ * For the compat layer we always include all 3 items (matches full-access user).
+ */
+function buildTopMenu() {
+  return {
+    top_menu_href: ['dict', 'edit_types', 'dir_admin'],
+    top_menu:      ['Таблицы', 'Структура', 'Файлы'],
+  };
+}
+
+/**
  * PHP-compatible mutation response helper.
  * – JSON API requests (?JSON / ?JSON_DATA etc.): return JSON
  * – Plain form POSTs: redirect to next_act URL (mirrors PHP index.php lines 9169-9180)
@@ -2284,6 +2297,7 @@ router.get('/:db/:page*', async (req, res, next) => {
 
         const response = {
           '&main.myrolemenu': mainMyrolemenu,
+          '&main.&top_menu':  buildTopMenu(),
           '&main.a': { '_parent_.title': [typeVal] },
           type: { id: typeId, up: typeUp, val: typeVal, base: typeBaseTypeName },
           base: { id: String(typeRow ? typeRow.base_type_id : 3), unique: typeUnique },
@@ -2430,6 +2444,7 @@ router.get('/:db/:page*', async (req, res, next) => {
         const mainMyrolemenu = await getMenuForToken(pool, db, token);
         return res.json({
           '&main.myrolemenu':   mainMyrolemenu,
+          '&main.&top_menu':    buildTopMenu(),
           '&main.a.&types':     typBlock,
           '&main.a.&editables': { ok: [''] },
           edit_types: editTypesET,
@@ -2981,12 +2996,13 @@ router.get('/:db/:page*', async (req, res, next) => {
           : {};
         return res.json({
           '&main.myrolemenu':    mainMyrolemenu,
+          '&main.&top_menu':     buildTopMenu(),
           '&main.a.&functions':  funBlock,
           '&main.a.&formats':    fmtBlock,
         });
       }
 
-      // ── GET /:db/form?JSON → &main.myrolemenu + edit_types + types + editable
+      // ── GET /:db/form?JSON → &main.myrolemenu + &main.&top_menu + edit_types + types + editable
       // PHP: form.html includes &Edit_Typs block which populates edit_types and then dies.
       // PHP $blocks[$block] includes PARENT, CONTENT (template artifacts) + numeric+named column aliases.
       if (page === 'form') {
@@ -3021,18 +3037,19 @@ router.get('/:db/:page*', async (req, res, next) => {
         const mainMyrolemenu = await getMenuForToken(pool, db, token);
         return res.json({
           '&main.myrolemenu': mainMyrolemenu,
+          '&main.&top_menu':  buildTopMenu(),
           edit_types: formEditTypes,
           types: REV_BASE_TYPE,
           editable: 1,
         });
       }
 
-      // ── GET /:db/{info|upload|table|smartq}?JSON → just &main.myrolemenu
-      // PHP: these pages render templates that only contain &main.myrolemenu in the API array
+      // ── GET /:db/{info|upload|table|smartq}?JSON → &main.myrolemenu + &main.&top_menu
+      // PHP: main.html always has &top_menu block alongside myrolemenu
       const MENU_ONLY_PAGES = new Set(['info', 'upload', 'table', 'smartq']);
       if (MENU_ONLY_PAGES.has(page)) {
         const mainMyrolemenu = await getMenuForToken(pool, db, token);
-        return res.json({ '&main.myrolemenu': mainMyrolemenu });
+        return res.json({ '&main.myrolemenu': mainMyrolemenu, '&main.&top_menu': buildTopMenu() });
       }
 
     } catch (err) {
