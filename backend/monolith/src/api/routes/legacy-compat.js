@@ -6612,10 +6612,10 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         for (const col of report.columns) {
           colEntries.push({
             def: {
-              id: col.id,
+              id: String(col.id),
               name: col.name,
-              // type = requisite type ID (used by smartq.js as req-id for inline editing / metadata)
-              type: col.reqTypeId || 0,
+              // type = requisite type ID as string (PHP mysqli returns strings for DB integers)
+              type: String(col.reqTypeId || 0),
               format: REV_BASE_TYPE[col.baseType] || 'CHARS',
               align: col.align || 'LEFT',
               totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
@@ -7765,9 +7765,9 @@ router.post('/:db', async (req, res, next) => {
     if (isApiRequest(req)) {
       const totalsMap = results.totals || {};
       const cols = report.columns.map(col => ({
-        id: col.id,
+        id: String(col.id),
         name: col.name,
-        type: col.reqTypeId || 0,
+        type: String(col.reqTypeId || 0),
         format: REV_BASE_TYPE[col.baseType] || 'CHARS',
         align: col.align || 'LEFT',
         totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,

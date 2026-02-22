@@ -1,0 +1,6 @@
+&main.myrolemenu: dict(2 keys)
+&main.a.&types: dict(2 keys)
+&main.a.&editables: dict(1 keys)
+edit_types: dict(22 keys)
+types: dict(16 keys)
+editable: int = 1
