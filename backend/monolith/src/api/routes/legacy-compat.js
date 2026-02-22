@@ -6465,7 +6465,9 @@ router.all('/:db/report/:reportId?', async (req, res) => {
     // If execution is requested, run the report
     // PHP also executes for JSON_KV, JSON_CR, JSON_HR, JSON_DATA flags (they select output format, not trigger)
     const q = req.query;
+    // PHP executes the report for all JSON flags including plain ?JSON
     const shouldExecute = execute || req.method === 'POST' ||
+      q.JSON !== undefined || q.json !== undefined ||
       q.JSON_KV !== undefined || q.JSON_CR !== undefined || q.JSON_HR !== undefined ||
       q.JSON_DATA !== undefined || q.RECORD_COUNT !== undefined;
 
@@ -6574,8 +6576,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (q.JSON_CR !== undefined) {
-        // PHP JSON_CR: columns[i].id = column DB id (string); rows = array of {col_id: val}
-        const cols = report.columns.map((col, i) => ({ id: col.id || i, name: col.name, type: col.reqTypeId || 0 }));
+        // PHP JSON_CR: columns[i].id = string; type = "string" (PHP always emits literal "string")
+        const cols = report.columns.map((col, i) => ({ id: String(col.id || i), name: col.name, type: 'string' }));
         const rows = results.data.map(row => {
           const r = {};
           for (const col of report.columns) r[col.id] = row[col.alias] ?? '';
@@ -7732,12 +7734,12 @@ router.post('/:db', async (req, res, next) => {
       return res.json(obj);
     }
 
-    // PHP JSON_CR: rows = array of {col_id: val} (not object keyed by index)
+    // PHP JSON_CR: rows = array of {col_id: val}; columns id=string, type="string"
     if (q.JSON_CR !== undefined) {
       const cols = report.columns.map((col, i) => ({
-        id: col.id || i,
+        id: String(col.id || i),
         name: col.name,
-        type: col.baseType || 0
+        type: 'string'
       }));
       const rows = results.data.map(row => {
         const r = {};

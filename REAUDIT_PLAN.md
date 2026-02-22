@@ -116,10 +116,19 @@
 - `_d_req`: `{id:reqId, obj:typeId}` ✅ matches `d_req_success.json`
 - `_d_new`: `{id:'', obj:typeId}` ✅ matches `d_new_success.json`
 
-**Potential remaining issues (need investigation):**
-- `_d_alias`: Node.js returns `{id:obj.up, obj:obj.up}` (numbers); snapshot shows strings — needs String()
-- `_d_null`: Node.js returns `{id, obj:obj.up}` (number); snapshot `d_null_valid.json` shows `obj` as string
-- `_d_multi`: same as `_d_null`
+**Session 21 additional fixes (same commit):**
+- `_d_alias`: id/obj → `String(obj.up)` ✅
+- `_d_null`: obj → `String(obj.up)` ✅
+- `_d_multi`: obj → `String(obj.up)` ✅
+
+**Report format fixes (commit db856b6):**
+- `JSON_DATA`: was returning first row only, now returns arrays of all values ✅
+- `JSON_CR`: rows was `{0:{...}}` object, now `[{...}]` array ✅
+- Default JSON + action=report: column `id`/`type` now returned as strings ✅
+
+**Known gaps (from fm db snapshots):**
+- Default JSON columns: `granted:1` field missing in Node.js
+- JSON_CR columns: `type` should be `"string"` (PHP), not reqTypeId integer
 
 ---
 
