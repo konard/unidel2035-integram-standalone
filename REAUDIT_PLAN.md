@@ -65,8 +65,8 @@
   - Report formats: JSON_KV, JSON_CR, JSON_HR all implemented — ✅ correct
 
 **Known Gaps (documented, not fixable)**:
-- `getcode`/`checkcode`: Format correct; actual email/SMS not sent in standalone mode
-- `_ref_reqs` dynamic formula: Static SQL approximation (PHP block engine not portable)
+- ~~`getcode`/`checkcode`: Format correct; actual email/SMS not sent in standalone mode~~ ✅ Fixed s16: nodemailer SMTP; dev mode OTP console log
+- ~~`_ref_reqs` dynamic formula: Static SQL approximation~~ ✅ Fixed s16: false trigger removed; only real `&block_name` refs unsupported (rare)
 - `JSON_HR` report: PHP has `var_dump` debug output; Node.js has sensible implementation
 
 ### Session 12 Fixes (Claude Sonnet 4.6)
@@ -470,7 +470,7 @@ Run these manual tests against a live server (`http://localhost:8081`) using `le
 | P0-1 | `REP_JOIN` parsing in compileReport | M | Reports with multi-table joins |
 | P0-2 | `executeReport` FR_/TO_ filter key mapping | S | All filtered reports |
 | P0-3 | `restore` file upload | M | Backup/restore flow — core implemented; ord=0 bug fixed session 3 |
-| P1-1 | `_ref_reqs` dynamic formula | L | Dropdowns with custom queries |
+| ~~P1-1~~ | ~~`_ref_reqs` dynamic formula~~ | ~~L~~ | ✅ Fixed s16: false trigger removed; `&block_name` unsupported (rare) |
 | P1-2 | `_m_save` file copy on `copybtn` | S | Object copy with files |
 | P2-1 | `JSON_HR` report format | M | Hierarchical reports |
 | P2-2 | `_list` search across requisite values | M | Search completeness |
