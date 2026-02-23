@@ -1,7 +1,45 @@
 # Legacy PHP→Node.js Re-Audit Plan
 
-> **Date**: 2026-02-22 (updated session 21)
+> **Date**: 2026-02-23 (updated session 23)
 > **Scope**: Full parity check — endpoints, request params, response formats, data model, edge cases
+
+---
+
+## Status Summary (2026-02-23, session 23)
+
+### Session 23 Audit (Claude Opus 4.5 — code verification against PHP snapshots)
+
+**Method**: PHP reference server (ai2o.ru) credentials expired. Audit conducted by comparing Node.js implementation against existing PHP snapshots in `experiments/php_responses/`.
+
+**Verification Results:**
+
+| Endpoint | PHP Snapshot | Node.js Code | Match |
+|---|---|---|---|
+| `_d_ord` | `id:1000000004, obj:1000000004` (integers) | `id: id, obj: id` (integers) | ✅ |
+| `_d_attrs` | `id:1000000004, obj:0` | `id: id, obj: 0` | ✅ |
+| `_d_up` | `id:"1000000003", obj:"1000000003"` (strings) | `id: String(obj.up), obj: String(obj.up)` | ✅ |
+| `_d_del_req` | `id:"1000000003", obj:"1000000003"` (strings) | `id: String(typeId), obj: String(typeId)` | ✅ |
+| `_d_alias` | `id:"1000000003", obj:"1000000003"` (strings) | `id: String(obj.up), obj: String(obj.up)` | ✅ |
+| `_d_null` | `id:1000000004, obj:"1000000003"` | `id: id (int), obj: String(obj.up)` | ✅ |
+| `_d_multi` | `id:1000000004, obj:"1000000003"` | `id: id (int), obj: String(obj.up)` | ✅ |
+| `_m_set` | `id:"", obj:999906 (int), next_act:"nul"` | `id: lastReqId, obj: objectId (int), next_act: "nul"` | ✅ |
+| `_m_ord` | `id:"1", obj:"1"` (strings) | `id: String(parentId), obj: String(parentId)` | ✅ |
+| `_m_save` | `id:"3", obj:999906` | `id: String(objType), obj: objectId (int)` | ✅ |
+| `_m_del` | `id:"3", obj:999906` | `id: String(objType), obj: objectId (int)` | ✅ |
+| `auth` | `id:"1123"` (string) | `id: String(user.uid)` | ✅ |
+| `report?JSON` columns | `id:"188", type:"22", granted:1` | `id: String(), type: String()` | ⚠️ `granted:1` missing |
+| `report?JSON_CR` columns | `type:"string"` | `type: "string"` | ✅ |
+| `report?JSON_DATA` | `{colName: [val,...]}` | `{colName: results.data.map(...)}` | ✅ |
+
+**Unit Test Fixes (session 23):**
+- Fixed `legacy-compat.test.js` expectations for PHP string types (auth id, xsrf id, _m_save/_m_del id/obj)
+- Fixed `_m_id` test to expect `next_act: "_m_id"` (matches PHP default)
+- All 17 legacy-compat tests now pass
+
+**Known Gaps (from session 21, unchanged):**
+1. `granted:1` field missing in report column metadata — PHP adds this for columns with write access
+2. `_m_move` test requires non-meta object (PHP returns "Cannot update meta-data" for type objects)
+3. `/my/register` — no PHP snapshot available
 
 ---
 

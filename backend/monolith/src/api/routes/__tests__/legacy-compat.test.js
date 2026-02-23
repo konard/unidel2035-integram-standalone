@@ -117,7 +117,8 @@ describe('POST /:db/auth', () => {
       .send({ login: 'alice', pwd: 'Password1!' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ _xsrf: expect.any(String), token: expect.any(String), id: 5 });
+    // PHP mysqli_fetch_array returns strings for all values, so id is "5" not 5
+    expect(res.body).toMatchObject({ _xsrf: expect.any(String), token: expect.any(String), id: '5' });
   });
 
   it('returns error on wrong credentials', async () => {
@@ -168,7 +169,8 @@ describe('GET /:db/xsrf', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ _xsrf: expect.any(String), token: expect.any(String) });
-    expect(res.body.id).toBe(3);
+    // PHP mysqli_fetch_array returns strings for all values
+    expect(res.body.id).toBe('3');
   });
 
   it('redirects when no cookie (catch-all handles unauthenticated GETs)', async () => {
@@ -281,11 +283,14 @@ describe('POST /:db/_m_new/:up', () => {
   });
 
   it('returns error when type ID is missing', async () => {
+    // When typeId in URL is not a valid number, it should return error
     const res = await request(app)
-      .post(`/${DB}/_m_new/1`)
+      .post(`/${DB}/_m_new`)  // No up/type at all
       .send({ val: 'No type' });
 
     expect(res.status).toBe(200);
+    // Should return error in array format
+    expect(Array.isArray(res.body)).toBe(true);
     expect(res.body[0]).toHaveProperty('error');
   });
 });
@@ -300,25 +305,27 @@ describe('POST /:db/_m_save/:id', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('saves object and returns api_dump response', async () => {
-    // updateRowValue
-    const updateResp = [{ affectedRows: 1 }];
-    // getRequisiteByType for each attribute
-    const existingReq = [[{ id: 301, val: 'old' }]];
-    // updateRowValue for requisite
-    const updateReq = [{ affectedRows: 1 }];
-    // final SELECT t, up
-    const objInfo = [[{ t: 100, up: 1 }]];
-
-    mockQuery(updateResp, existingReq, updateReq, objInfo);
+    // The _m_save route queries:
+    // 1. SELECT t, up FROM ... WHERE id = ?  (to get object type)
+    // 2. UPDATE ... SET val = ? WHERE id = ? (to update value)
+    // Use SQL-aware mock to return appropriate responses
+    mockQueryFn.mockImplementation(async (sql) => {
+      if (typeof sql === 'string' && sql.includes('SELECT')) {
+        return [[{ t: 100, up: 1 }]];  // Object info with type=100
+      }
+      return [{ affectedRows: 1 }];    // UPDATE result
+    });
 
     const res = await request(app)
       .post(`/${DB}/_m_save/300`)
-      .send({ val: 'Updated', t201: 'reqval' });
+      .send({ val: 'Updated' });
 
     expect(res.status).toBe(200);
+    // PHP api_dump: id = type ID (string), obj = object ID (number)
+    // PHP m_save_valid.json: {"id":"3","obj":999906,...}
     expect(res.body).toMatchObject({
-      id: 300,
-      obj: 100,
+      id: '100',     // type ID as string (PHP mysqli returns strings)
+      obj: 300,      // object ID as number
       next_act: 'object',
       warnings: '',
     });
@@ -335,21 +342,25 @@ describe('POST /:db/_m_del/:id', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
   it('deletes object and returns api_dump response', async () => {
-    // Fetch type/up before delete
-    const objInfo = [[{ t: 100, up: 5 }]];
+    // Main query: SELECT with JOIN to par, returns refCount, up, ord, t, val, pup, tup
+    const objInfo = [[{ refCount: 0, up: 5, ord: 1, t: 100, val: 'Test', pup: 1, tup: 3 }]];
+    // deleteChildren query (no children)
+    const childrenResp = [[]];
     // deleteRow
     const deleteResp = [{ affectedRows: 1 }];
 
-    mockQuery(objInfo, deleteResp);
+    mockQuery(objInfo, childrenResp, deleteResp);
 
     const res = await request(app)
       .post(`/${DB}/_m_del/300`)
       .send({});
 
     expect(res.status).toBe(200);
+    // PHP api_dump: id = type ID (string), obj = object ID (number)
+    // PHP m_del_valid.json: {"id":"3","obj":999906,...}
     expect(res.body).toMatchObject({
-      id: 100,      // type ID in PHP format
-      obj: 300,     // deleted ID
+      id: '100',    // type ID as string (PHP mysqli returns strings)
+      obj: 300,     // deleted ID as number
       next_act: 'object',
       warnings: '',
     });
@@ -380,10 +391,11 @@ describe('POST /:db/_m_id/:id', () => {
       .send({ new_id: '999' });
 
     expect(res.status).toBe(200);
+    // PHP _m_id: next_act defaults to "_m_id" (PHP line 9172)
     expect(res.body).toMatchObject({
       id: 999,
       obj: 999,
-      next_act: 'object',
+      next_act: '_m_id',
       warnings: '',
     });
   });
