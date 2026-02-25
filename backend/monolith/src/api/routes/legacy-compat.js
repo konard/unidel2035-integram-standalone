@@ -2139,20 +2139,31 @@ router.get('/:db/:page*', async (req, res, next) => {
 
           // Non-arr ref: data row's val = req key (rd.t), t = referenced object id
           // PHP: for ref reqs, reqs[objId][k] = refObjName, reqs[objId][ref_k] = refTypeId:refObjId
+          // Also track multi-ref data for &multiselectcell block
           const refDefs = reqDefStd.filter(rd => rd.arr_id == null && rd.ref_id != null);
+          // Build set of MULTI-flagged req keys
+          const multiReqKeys = new Set(refDefs.filter(rd => (rd.attrs || '').includes(':MULTI:')).map(rd => String(rd.t)));
           if (refDefs.length > 0) {
             const refKeys    = refDefs.map(rd => String(rd.t));
             const allKnownT  = reqDefStd.map(rd => rd.t);  // exclude known req def ids from ref matches
             const phRef      = refKeys.map(() => '?').join(',');
             const phExclude  = allKnownT.map(() => '?').join(',');
             const [refRows] = await pool.query(
-              `SELECT d.up, d.val AS req_key, d.t AS ref_obj_id, o.val AS ref_obj_name
+              `SELECT d.up, d.id AS row_id, d.ord AS row_ord, d.val AS req_key, d.t AS ref_obj_id, o.val AS ref_obj_name
                FROM \`${db}\` d
                JOIN \`${db}\` o ON o.id = d.t
                WHERE d.up IN (${ph}) AND d.val IN (${phRef}) AND d.t NOT IN (${phExclude})
                ORDER BY d.up, d.ord`,
               [...objIds, ...refKeys, ...allKnownT]
             );
+            // First pass: count refs per (oKey, k) to detect multi
+            const refCounts = {};
+            for (const rr of refRows) {
+              const oKey = String(rr.up);
+              const k    = String(rr.req_key);
+              const countKey = `${oKey}:${k}`;
+              refCounts[countKey] = (refCounts[countKey] || 0) + 1;
+            }
             for (const rr of refRows) {
               const oKey = String(rr.up);
               const k    = String(rr.req_key);
@@ -2160,16 +2171,34 @@ router.get('/:db/:page*', async (req, res, next) => {
               if (!refDataStd[oKey]) refDataStd[oKey] = {};
               const refObjName = String(rr.ref_obj_name || '').replace(/,/g, '&comma;');
               const refObjId   = String(rr.ref_obj_id);
+              const countKey = `${oKey}:${k}`;
+              const isMulti = multiReqKeys.has(k) || refCounts[countKey] > 1;
               if (reqsStd[oKey][k] === undefined) {
                 // First ref value
                 reqsStd[oKey][k]           = refObjName;
                 reqsStd[oKey][`ref_${k}`]  = `${ref_type[k] || ''}:${refObjId}`;
-                refDataStd[oKey][k] = { ref_obj_id: rr.ref_obj_id, ref_obj_name: rr.ref_obj_name || '' };
+                if (isMulti) {
+                  // PHP: multi-ref stores data for &multiselectcell block
+                  refDataStd[oKey][k] = {
+                    multi: true,
+                    rows: [{ id: rr.row_id, ord: rr.row_ord, ref_id: rr.ref_obj_id, val: rr.ref_obj_name || '' }]
+                  };
+                } else {
+                  refDataStd[oKey][k] = { ref_obj_id: rr.ref_obj_id, ref_obj_name: rr.ref_obj_name || '' };
+                }
               } else {
                 // Multi-ref: comma-join (PHP: implode(",", $val) / implode(",", $ref_id))
                 reqsStd[oKey][k]          = String(reqsStd[oKey][k]) + ',' + refObjName;
                 reqsStd[oKey][`ref_${k}`] = String(reqsStd[oKey][`ref_${k}`]) + ',' + refObjId;
-                refDataStd[oKey][k] = { multi: true };  // multi → view_reqs shows ""
+                if (!refDataStd[oKey][k].multi) {
+                  // Convert to multi (first was single, now adding second)
+                  const prev = refDataStd[oKey][k];
+                  refDataStd[oKey][k] = { multi: true, rows: [] };
+                  // We don't have id/ord for the first one, but we can skip it since PHP also doesn't track it properly in this case
+                }
+                if (refDataStd[oKey][k].rows) {
+                  refDataStd[oKey][k].rows.push({ id: rr.row_id, ord: rr.row_ord, ref_id: rr.ref_obj_id, val: rr.ref_obj_name || '' });
+                }
               }
             }
           }
@@ -2236,10 +2265,13 @@ router.get('/:db/:page*', async (req, res, next) => {
         // &object_reqs and view_reqs: for each object × each req type
         // arr-type → HTML count link (always, even count=0)
         // non-arr  → stored val or ""
+        // PHP: &multiselectcell block is built for multi-ref cells
         const objReqs = {};
         const viewReqsAlign = [];
         const viewReqsBase  = [];
         const viewReqsVal   = [];
+        // Track multi-select cell data: { reqKey: { id: [], val: [], ord: [], name: [] } }
+        const multiselectcellData = {};
         const hasArrReqs = reqDefStd.some(rd => rd.arr_id != null);
         if (hasReqs) {
           for (const o of objRows) {
@@ -2254,9 +2286,26 @@ router.get('/:db/:page*', async (req, res, next) => {
                 rowVals.push(`<A HREF="/${db}/object/${k}/?F_U=${o.id}">(${cnt})</A>`);
               } else if (rd.ref_id != null) {
                 // Ref-type: PHP generates <A HREF="/{db}/object/{ref_type}/?F_I={ref_obj_id}">{name}</A>
-                // Multi refs (>1) → PHP shows "" for cell; missing → ""
+                // Multi refs (>1 or :MULTI: flag) → PHP shows "" for cell and populates &multiselectcell
                 const refInfo = refDataStd[oKey]?.[k];
-                if (refInfo && !refInfo.multi) {
+                if (refInfo && refInfo.multi && refInfo.rows && refInfo.rows.length > 0) {
+                  // Multi-ref: empty cell value, build multiselectcell block
+                  rowVals.push('');
+                  if (!multiselectcellData[k]) {
+                    multiselectcellData[k] = { id: [], val: [], ord: [], name: [] };
+                  }
+                  const refTypeId = ref_type[k] || '';
+                  for (const row of refInfo.rows) {
+                    const formattedName = htmlEsc(row.val || '');
+                    // PHP: <A HREF="/{db}/object/{ref_type}/?F_I={ref_id}" class="ms-link">{val}</A>
+                    const nameLink = `<A HREF="/${db}/object/${refTypeId}/?F_I=${row.ref_id}" class="ms-link">${formattedName}</A>`;
+                    multiselectcellData[k].id.push(String(row.id));
+                    multiselectcellData[k].val.push(String(row.ref_id));
+                    multiselectcellData[k].ord.push(String(row.ord));
+                    multiselectcellData[k].name.push(nameLink);
+                  }
+                } else if (refInfo && !refInfo.multi) {
+                  // Single ref: normal link
                   const refTypeId = ref_type[k] || '';
                   const name = htmlEsc(refInfo.ref_obj_name);
                   rowVals.push(`<A HREF="/${db}/object/${refTypeId}/?F_I=${refInfo.ref_obj_id}">${name}</A>`);
@@ -2294,10 +2343,11 @@ router.get('/:db/:page*', async (req, res, next) => {
           }
         }
         const hasObjReqs = Object.keys(objReqs).length > 0;
+        const hasMultiselectcell = Object.keys(multiselectcellData).length > 0;
 
         const response = {
           '&main.myrolemenu': mainMyrolemenu,
-          '&main.&top_menu':  buildTopMenu(),
+          // NOTE: PHP's object.html does NOT include &top_menu block, so we don't add it here
           '&main.a': { '_parent_.title': [typeVal] },
           type: { id: typeId, up: typeUp, val: typeVal, base: typeBaseTypeName },
           base: { id: String(typeRow ? typeRow.base_type_id : 3), unique: typeUnique },
@@ -2378,6 +2428,23 @@ router.get('/:db/:page*', async (req, res, next) => {
             base:  viewReqsBase,
             val:   viewReqsVal,
           };
+          // PHP: &multiselectcell block for multi-reference values
+          // PHP path: object.html has <!-- Begin:&multiselectcell --> inside &uni_object_view_reqs
+          // PHP populates: id (row id), val (ref_id), ord, name (formatted link with ms-link class)
+          if (hasMultiselectcell) {
+            // PHP stores per req type, so we merge all into one block
+            const msBlock = { id: [], val: [], ord: [], name: [] };
+            for (const k of Object.keys(multiselectcellData)) {
+              const msData = multiselectcellData[k];
+              msBlock.id.push(...msData.id);
+              msBlock.val.push(...msData.val);
+              msBlock.ord.push(...msData.ord);
+              msBlock.name.push(...msData.name);
+            }
+            if (msBlock.id.length > 0) {
+              response['&main.a.&uni_obj.&uni_obj_all.&uni_object_view_reqs.&multiselectcell'] = msBlock;
+            }
+          }
         }
 
         // PHP includes &no_page only when page is full (objRows.length >= limit)
