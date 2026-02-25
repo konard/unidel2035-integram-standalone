@@ -16,6 +16,138 @@ import nodemailer from 'nodemailer';
 
 const router = express.Router();
 
+// ============================================================================
+// PHP-compatible JSON serialization
+// ============================================================================
+// PHP json_encode and JavaScript JSON.stringify differ in key ordering:
+// - PHP: preserves array insertion order
+// - JS V8: sorts numeric-looking string keys (e.g., "20", "115") numerically
+//
+// To achieve byte-for-byte parity, we use a custom serializer that:
+// 1. Accepts explicit key order arrays for objects with numeric keys
+// 2. Escapes forward slashes (/) as \/ to match PHP's default behavior
+// ============================================================================
+
+/**
+ * OrderedObject wrapper that preserves key insertion order during JSON serialization.
+ * Usage: new OrderedObject([['key1', val1], ['key2', val2], ...])
+ */
+class OrderedObject {
+  constructor(entries = []) {
+    this._entries = entries;  // Array of [key, value] pairs
+  }
+
+  toJSON() {
+    // This is called by JSON.stringify to get the serializable form
+    // We return a plain object, but the phpJsonStringify function handles ordering
+    const obj = {};
+    for (const [k, v] of this._entries) {
+      obj[k] = v;
+    }
+    return obj;
+  }
+
+  // Get entries in insertion order
+  entries() {
+    return this._entries;
+  }
+}
+
+/**
+ * PHP-compatible JSON stringify that preserves key order and escapes forward slashes.
+ * Handles:
+ * - OrderedObject instances: serializes keys in specified order
+ * - Arrays: serializes as JSON arrays
+ * - Plain objects: serializes with keys in iteration order (V8 may reorder numeric keys)
+ * - Primitives: serializes normally
+ *
+ * @param {any} value - The value to serialize
+ * @returns {string} - JSON string with PHP-compatible formatting
+ */
+function phpJsonStringify(value) {
+  if (value === null) return 'null';
+  if (value === undefined) return 'null';
+
+  const type = typeof value;
+
+  if (type === 'boolean') return value ? 'true' : 'false';
+  if (type === 'number') {
+    if (!isFinite(value)) return 'null';
+    return String(value);
+  }
+  if (type === 'string') {
+    // PHP json_encode escapes forward slashes by default
+    return JSON.stringify(value).replace(/\//g, '\\/');
+  }
+
+  if (Array.isArray(value)) {
+    const items = value.map(v => phpJsonStringify(v));
+    return '[' + items.join(',') + ']';
+  }
+
+  // Handle OrderedObject (preserves key order)
+  if (value instanceof OrderedObject) {
+    const items = [];
+    for (const [k, v] of value.entries()) {
+      const keyStr = JSON.stringify(String(k)).replace(/\//g, '\\/');
+      items.push(keyStr + ':' + phpJsonStringify(v));
+    }
+    return '{' + items.join(',') + '}';
+  }
+
+  // Plain objects: iterate keys in Object.keys() order
+  // Note: V8 may have already reordered numeric keys, but this handles
+  // objects built with non-numeric keys correctly
+  if (type === 'object') {
+    const items = [];
+    for (const k of Object.keys(value)) {
+      const keyStr = JSON.stringify(k).replace(/\//g, '\\/');
+      items.push(keyStr + ':' + phpJsonStringify(value[k]));
+    }
+    return '{' + items.join(',') + '}';
+  }
+
+  return 'null';
+}
+
+/**
+ * Create an ordered object from key-value pairs (preserves insertion order).
+ * Use this for objects where keys are numeric strings that would be reordered by V8.
+ *
+ * @param {Array<[string, any]>} entries - Array of [key, value] pairs
+ * @returns {OrderedObject}
+ */
+function orderedObj(entries) {
+  return new OrderedObject(entries);
+}
+
+/**
+ * Build an ordered object from a key order array and a values object.
+ * Useful when you have the values in a plain object and need to serialize in specific order.
+ *
+ * @param {string[]} keyOrder - Array of keys in desired order
+ * @param {Object} values - Object with values keyed by the same keys
+ * @returns {OrderedObject}
+ */
+function buildOrderedObj(keyOrder, values) {
+  const entries = keyOrder
+    .filter(k => values[k] !== undefined)
+    .map(k => [k, values[k]]);
+  return new OrderedObject(entries);
+}
+
+/**
+ * Send a PHP-compatible JSON response.
+ * Uses phpJsonStringify to ensure key ordering and forward slash escaping match PHP.
+ *
+ * @param {object} res - Express response object
+ * @param {any} data - Data to serialize
+ */
+function sendPhpJson(res, data) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.send(phpJsonStringify(data));
+}
+
 // Get the directory path for serving static files
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2064,25 +2196,34 @@ router.get('/:db/:page*', async (req, res, next) => {
         );
 
         // ── 3. Build req_base / req_base_id / req_type / req_order / req_attrs / arr_type / ref_type ──
-        const req_base    = {};
-        const req_base_id = {};
-        const req_type    = {};
-        const req_attrs   = {};
+        // Use arrays to preserve insertion order (PHP arrays maintain order, JS V8 sorts numeric keys)
+        const req_base_entries    = [];
+        const req_base_id_entries = [];
+        const req_type_entries    = [];
+        const req_attrs_entries   = [];
         const req_order   = [];
-        const arr_type    = {};
+        const arr_type_entries    = [];
+        const ref_type_entries    = [];
+        // Plain objects for lookup (not for JSON serialization)
+        const req_base    = {};
         const ref_type    = {};
         for (const rd of reqDefStd) {
           const k = String(rd.t);
           // PHP: base_typ=0 → 'TAB_DELIMITER' in req_base (section separator)
-          req_base[k]    = rd.base_typ === 0 ? 'TAB_DELIMITER' : (REV_BASE_TYPE[rd.base_typ] || 'SHORT');
-          req_base_id[k] = String(rd.base_typ);
+          const baseVal = rd.base_typ === 0 ? 'TAB_DELIMITER' : (REV_BASE_TYPE[rd.base_typ] || 'SHORT');
+          req_base_entries.push([k, baseVal]);
+          req_base[k] = baseVal;  // lookup
+          req_base_id_entries.push([k, String(rd.base_typ)]);
           // PHP: FetchAlias extracts :ALIAS=xxx: from attrs, uses as display name
           const aliasMatch = (rd.attrs || '').match(/:ALIAS=(.*?):/u);
-          req_type[k]    = aliasMatch ? aliasMatch[1] : (rd.type_val || String(rd.req_t));
-          req_attrs[k]   = rd.attrs || '';
+          req_type_entries.push([k, aliasMatch ? aliasMatch[1] : (rd.type_val || String(rd.req_t))]);
+          req_attrs_entries.push([k, rd.attrs || '']);
           req_order.push(k);
-          if (rd.arr_id != null) arr_type[k] = String(rd.arr_id);
-          if (rd.ref_id != null) ref_type[k] = String(rd.ref_id);
+          if (rd.arr_id != null) arr_type_entries.push([k, String(rd.arr_id)]);
+          if (rd.ref_id != null) {
+            ref_type_entries.push([k, String(rd.ref_id)]);
+            ref_type[k] = String(rd.ref_id);  // lookup
+          }
         }
 
         // ── 5. Fetch req values for objects (reqs map) ─────────────────────
@@ -2374,13 +2515,14 @@ router.get('/:db/:page*', async (req, res, next) => {
         };
 
         if (hasReqs) {
-          response['req_base']    = req_base;
-          response['req_base_id'] = req_base_id;
-          response['req_attrs']   = req_attrs;
-          response['req_type']    = req_type;
-          if (Object.keys(arr_type).length > 0) response['arr_type'] = arr_type;
+          // Use ordered objects to preserve PHP key order (numeric keys would be sorted by V8)
+          response['req_base']    = orderedObj(req_base_entries);
+          response['req_base_id'] = orderedObj(req_base_id_entries);
+          response['req_attrs']   = orderedObj(req_attrs_entries);
+          response['req_type']    = orderedObj(req_type_entries);
+          if (arr_type_entries.length > 0) response['arr_type'] = orderedObj(arr_type_entries);
           response['req_order']   = req_order;
-          if (Object.keys(ref_type).length > 0) response['ref_type'] = ref_type;
+          if (ref_type_entries.length > 0) response['ref_type'] = orderedObj(ref_type_entries);
           response['&main.a.&uni_obj.&uni_obj_head'] = uniObjHead;
         }
 
@@ -2457,7 +2599,8 @@ router.get('/:db/:page*', async (req, res, next) => {
           };
         }
 
-        return res.json(response);
+        // Use PHP-compatible JSON serializer to preserve key ordering
+        return sendPhpJson(res, response);
       }
 
       // ── GET /:db/types?JSON
