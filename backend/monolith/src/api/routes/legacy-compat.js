@@ -13,8 +13,14 @@ import logger from '../../utils/logger.js';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
+import { phpJsonMiddleware } from '../../utils/jsonSortKeys.js';
 
 const router = express.Router();
+
+// Apply PHP JSON key sorting middleware to achieve byte-for-byte parity (Issue #173)
+// PHP's json_encode() sorts keys alphabetically, while Node.js preserves insertion order.
+// This middleware ensures all JSON responses have keys sorted alphabetically.
+router.use(phpJsonMiddleware());
 
 // Get the directory path for serving static files
 const __filename = fileURLToPath(import.meta.url);
