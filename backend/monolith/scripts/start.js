@@ -87,8 +87,28 @@ app.use((req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, HOST, () => {
-  console.log(`\n✅ Integram running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-  console.log(`   Static: ${STATIC_PATH}`);
-  console.log(`   DB:     ${process.env.INTEGRAM_DB_USER || 'root'}@${process.env.INTEGRAM_DB_HOST || 'localhost'}:${process.env.INTEGRAM_DB_PORT || 3306}/${process.env.INTEGRAM_DB_NAME || 'integram'}\n`);
+import { createServer as createHttpsServer } from 'https';
+
+const SSL_KEY    = process.env.SSL_KEY;
+const SSL_CERT   = process.env.SSL_CERT;
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '8443', 10);
+
+const dbInfo = () =>
+  `${process.env.INTEGRAM_DB_USER || 'root'}@${process.env.INTEGRAM_DB_HOST || 'localhost'}:${process.env.INTEGRAM_DB_PORT || 3306}/${process.env.INTEGRAM_DB_NAME || 'integram'}`;
+
+if (SSL_KEY && SSL_CERT && fs.existsSync(SSL_KEY) && fs.existsSync(SSL_CERT)) {
+  const ssl = { key: fs.readFileSync(SSL_KEY), cert: fs.readFileSync(SSL_CERT) };
+  createHttpsServer(ssl, app).listen(HTTPS_PORT, '0.0.0.0', () => {
+    console.log(`
+✅ Integram HTTPS :${HTTPS_PORT} (direct TLS — no nginx)`);
+    console.log(`   DB: ${dbInfo()}
+`);
+  });
+} else {
+  console.warn('⚠  SSL_KEY/SSL_CERT not set — HTTPS disabled');
+}
+
+// HTTP (internal fallback — nginx proxy → 8081, or local dev)
+app.listen(PORT, '127.0.0.1', () => {
+  console.log(`   HTTP: http://127.0.0.1:${PORT} (internal)`);
 });
