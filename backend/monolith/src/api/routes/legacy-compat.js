@@ -2018,23 +2018,76 @@ router.get('/:db/:page*', async (req, res, next) => {
           }
         }
 
-        const objWhereParts  = ['t = ?', 'up != 0'];  // up=0 = type root row, excluded like PHP
+        const objWhereParts  = ['a.t = ?', 'a.up != 0'];  // up=0 = type root row, excluded like PHP
         const objWhereParams = [subId];
         if (filterVal !== null) {
-          objWhereParts.push('val = ?');
+          objWhereParts.push('a.val = ?');
           objWhereParams.push(filterVal);
         }
+        // F__val_ = filter on main val field (from object.html name column search)
+        if (allObjParams['F__val_'] !== undefined && String(allObjParams['F__val_']) !== '') {
+          const vf = String(allObjParams['F__val_']);
+          const vp = vf.includes('%') ? vf : `%${vf}%`;
+          objWhereParts.push('a.val LIKE ?');
+          objWhereParams.push(vp);
+        }
         if (filterUp !== null && !isNaN(filterUp)) {
-          objWhereParts.push('up = ?');
+          objWhereParts.push('a.up = ?');
           objWhereParams.push(filterUp);
         }
-        const objOrderStr = orderByVal
-          ? `val ${descOrder ? 'DESC' : 'ASC'}`
-          : 'id';
+
+        // Column filters: F_{colId}=value, FR_{colId}=from, TO_{colId}=to
+        const colFilters = {}, colFrom = {}, colTo = {};
+        for (const [k, v] of Object.entries(allObjParams)) {
+          const fm = k.match(/^F_(\d+)$/);
+          if (fm && String(fm[1]) !== String(subId) && v !== undefined && String(v) !== '') {
+            colFilters[fm[1]] = String(v);
+          }
+          const frm = k.match(/^FR_(\d+)$/);
+          if (frm && v !== undefined && String(v) !== '') colFrom[frm[1]] = String(v);
+          const tom = k.match(/^TO_(\d+)$/);
+          if (tom && v !== undefined && String(v) !== '') colTo[tom[1]] = String(v);
+        }
+        for (const [colId, val] of Object.entries(colFilters)) {
+          const pattern = val.includes('%') ? val : `%${val}%`;
+          objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val LIKE ?)`);
+          objWhereParams.push(parseInt(colId, 10), pattern);
+        }
+        for (const colId of new Set([...Object.keys(colFrom), ...Object.keys(colTo)])) {
+          if (colFrom[colId]) {
+            objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val >= ?)`);
+            objWhereParams.push(parseInt(colId, 10), colFrom[colId]);
+          }
+          if (colTo[colId]) {
+            objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val <= ?)`);
+            objWhereParams.push(parseInt(colId, 10), colTo[colId]);
+          }
+        }
+
+        const whereStr = objWhereParts.join(' AND ');
+
+        // Sort: order_val=val → sort by main val; order_val={colId} → sort by req value
+        const orderColId = (allObjParams.order_val && allObjParams.order_val !== 'val')
+          ? parseInt(allObjParams.order_val, 10) : null;
+        let objOrderStr;
+        if (orderColId) {
+          objOrderStr = `(SELECT r.val FROM \`${db}\` r WHERE r.up = a.id AND r.t = ${orderColId} LIMIT 1) ${descOrder ? 'DESC' : 'ASC'}, a.id`;
+        } else if (orderByVal) {
+          objOrderStr = `a.val ${descOrder ? 'DESC' : 'ASC'}`;
+        } else {
+          objOrderStr = 'a.id';
+        }
         const objLimitStr = ` LIMIT ${objOffset}, ${objLimit}`;
 
+        // Total count (same WHERE, no LIMIT)
+        const [[countRow]] = await pool.query(
+          `SELECT COUNT(*) AS cnt FROM \`${db}\` a WHERE ${whereStr}`,
+          objWhereParams
+        );
+        const objTotal = countRow ? Number(countRow.cnt) : 0;
+
         const [objRows] = await pool.query(
-          `SELECT id, val, up, t AS base, ord FROM \`${db}\` WHERE ${objWhereParts.join(' AND ')} ORDER BY ${objOrderStr}${objLimitStr}`,
+          `SELECT a.id, a.val, a.up, a.t AS base, a.ord FROM \`${db}\` a WHERE ${whereStr} ORDER BY ${objOrderStr}${objLimitStr}`,
           objWhereParams
         );
 
@@ -2451,6 +2504,7 @@ router.get('/:db/:page*', async (req, res, next) => {
           }
         }
 
+        response['total']                              = objTotal;
         response['object']                             = objRows.map(r => ({ id: String(r.id), val: r.val, up: String(r.up), base: String(r.base) }));
         response['&main.a.&uni_obj.&uni_obj_all']      = uniObjAll;
 

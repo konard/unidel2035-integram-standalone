@@ -24,14 +24,17 @@ function byId(i){return document.getElementById(i);}
 function getCookie(n){var m=document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+)');return m?decodeURIComponent(m[2]):null;}
 function t9n(s){var locale=getCookie(db+'_locale')||'RU';var m=s&&s.match('\\['+locale+'\\]([^\\[]+)');return m?m[1]:(s||'').replace(/\[[A-Z]+\]/g,'').trim();}
 function escHtml(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+// System columns that should never be shown in the object list
+var HIDDEN_BASES = {PWD:1};
+var HIDDEN_IDS   = {20:1, 40:1, 125:1, 130:1}; // PASSWORD, XSRF, TOKEN, SECRET
 </script>
 <style>
 th{font-weight:normal;position:relative;}
 .ms-link{color:#333;}
-td.fixed-td div,td.fixed-tr div{max-height:1rem;overflow:hidden;}
-.fixed-td{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 1px 0 1px!important;}
-.fixed-tr{max-width:30vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 1px 0 1px!important;}
-.table thead th{border:1px solid #dee2e6;vertical-align:middle;text-align:center;padding-top:0;padding-bottom:0;}
+td.fixed-td div{max-height:1.4rem;overflow:hidden;}
+.fixed-td{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 4px!important;}
+.col-val{max-width:220px;font-weight:500;}
+.table thead th{border:1px solid #dee2e6;vertical-align:middle;text-align:center;padding:2px 4px;}
 .table td{border:1px solid #dee2e6;vertical-align:middle;}
 .data-row:hover{background-color:#fafafa;}
 .breadcrumb{padding:2px;margin:0;}
@@ -40,7 +43,7 @@ td.fixed-td div,td.fixed-tr div{max-height:1rem;overflow:hidden;}
 .controls a:hover,.controls label:hover{background-color:#f0f0f0;}
 .controls a small{font-size:11px;}
 .filter-row input,.filter-row select{width:100%;border:1px solid #ccc;padding:1px 4px;font-size:12px;}
-.pager{display:flex;align-items:center;gap:8px;padding:6px 8px;}
+.pager{display:flex;align-items:center;gap:8px;padding:4px 8px;}
 #loading-row td{text-align:center;color:#999;padding:16px;}
 .edit-inline-td{padding:0!important;}
 .inline-edit{border:0!important;outline:none;width:100%;padding:2px 4px;font-size:inherit;}
@@ -69,7 +72,7 @@ td.fixed-td div,td.fixed-tr div{max-height:1rem;overflow:hidden;}
 <div id="parent-info-bar" class="parent-info" style="display:none"></div>
 
 <div class="controls" id="controls">
-  <a id="btn-create" title="Create" onclick="addRec()">
+  <a id="btn-create" title="Create" onclick="addRec()" style="display:none">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 2C8.27614 2 8.5 2.22386 8.5 2.5V7.5H13.5C13.7761 7.5 14 7.72386 14 8C14 8.27614 13.7761 8.5 13.5 8.5H8.5V13.5C8.5 13.7761 8.27614 14 8 14C7.72386 14 7.5 13.7761 7.5 13.5V8.5H2.5C2.22386 8.5 2 8.27614 2 8C2 7.72386 2.22386 7.5 2.5 7.5H7.5V2.5C7.5 2.22386 7.72386 2 8 2Z" fill="#212529"/></svg>
     <small><t9n>[RU]Добавить[EN]Add</t9n></small>
   </a>
@@ -107,20 +110,18 @@ td.fixed-td div,td.fixed-tr div{max-height:1rem;overflow:hidden;}
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 var cols = [], allData = [], limit = 20, offset = 0, filterVals = {}, sortColId = null, sortDir = 1;
-var totalRows = 0, typeName = '', createGranted = true, filterVisible = false, inlineMode = false;
-var colById = {}, apiMeta = null, fetchAbort = null;
+var totalRows = 0, typeName = '', createGranted = false, filterVisible = false, inlineMode = false;
+var colById = {}, fetchAbort = null;
 
-// Init page size from storage
 var _storedLimit = parseInt(localStorage.getItem(db+'_limit_'+typeId), 10);
 if (_storedLimit > 0) limit = _storedLimit;
 
-// Init inline mode from cookie
 inlineMode = getCookie('inline_'+db+'_'+typeId) === '1';
 
 // Breadcrumbs
-byId('bc-db').href  = 'dict.html?db='+encodeURIComponent(db);
+byId('bc-db').href      = 'dict.html?db='+encodeURIComponent(db);
 byId('bc-db').textContent = db ? (db.charAt(0).toUpperCase()+db.slice(1)) : db;
-byId('bc-dict').href = 'dict.html?db='+encodeURIComponent(db);
+byId('bc-dict').href    = 'dict.html?db='+encodeURIComponent(db);
 
 function setTitle(name) {
   typeName = name || typeId;
@@ -128,7 +129,7 @@ function setTitle(name) {
   document.title = typeName;
 }
 
-// ── Load metadata + data via single ?JSON call ───────────────────────────────
+// ── Load via ?JSON ────────────────────────────────────────────────────────────
 function loadData() {
   byId('tb-body').innerHTML = '<tr id="loading-row"><td colspan="99">'+t9n('[RU]Загрузка...[EN]Loading...')+'</td></tr>';
 
@@ -139,9 +140,12 @@ function loadData() {
   if (offset) url += '&OFFSET='+offset;
   if (upId && upId !== '0') url += '&F_U='+encodeURIComponent(upId);
 
-  // Filters
   for (var k in filterVals) {
     if (!filterVals[k]) continue;
+    if (k === '_val_') {
+      url += '&F__val_='+encodeURIComponent(filterVals[k]);
+      continue;
+    }
     var c = colById[k];
     var base = c ? c.base : 'SHORT';
     if (base==='DATE'||base==='DATETIME'||base==='NUMBER'||base==='SIGNED') {
@@ -153,13 +157,13 @@ function loadData() {
     }
   }
 
-  // Sort
   if (sortColId !== null) {
     url += '&order_val='+encodeURIComponent(sortColId);
     if (sortDir === -1) url += '&desc=1';
   }
 
-  fetch(url, {credentials:'include', signal:fetchAbort.signal})
+  fetch(url, {credentials:'include', signal:fetchAbort.signal,
+    headers:{Authorization:'Bearer '+token}})
     .then(function(r){
       if (r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
       return r.json();
@@ -176,19 +180,19 @@ function loadData() {
 }
 
 function renderFromMeta(data) {
-  apiMeta = data;
-
   // Title
   var name = (data.type && data.type.val) || data.title || typeName || typeId;
   setTitle(name);
 
-  // Build cols from req_order + req_type (only on first load or if empty)
-  if (data.req_order && data.req_type && (!cols.length)) {
+  // Build cols from req_order + req_type (only once)
+  if (data.req_order && data.req_type && !cols.length) {
     cols = [];
     colById = {};
     data.req_order.forEach(function(k) {
       var base = (data.req_base && data.req_base[k]) || 'SHORT';
-      if (base === 'TAB_DELIMITER') return; // skip section separators
+      if (base === 'TAB_DELIMITER') return;
+      if (HIDDEN_BASES[base]) return;            // PWD etc.
+      if (HIDDEN_IDS[parseInt(k,10)]) return;   // PASSWORD/XSRF/TOKEN/SECRET
       var col = {
         id:       k,
         name:     (data.req_type && data.req_type[k]) || k,
@@ -204,15 +208,15 @@ function renderFromMeta(data) {
 
   // create_granted
   var uniObj = data['&main.a.&uni_obj'];
-  if (uniObj && uniObj.create_granted) {
-    createGranted = uniObj.create_granted[0] !== 'block';
+  if (uniObj) {
+    var cg = uniObj.create_granted;
+    createGranted = !cg || cg[0] !== 'block';
   }
   byId('btn-create').style.display = createGranted ? '' : 'none';
 
-  // Build rows from object[] + reqs{}
+  // Rows from object[] + reqs{}
   var objArr  = data.object  || [];
   var reqsMap = data.reqs    || {};
-
   var rows = objArr.map(function(obj) {
     var row = {id: String(obj.id), up: String(obj.up || ''), val: obj.val || ''};
     var reqs = reqsMap[obj.id] || reqsMap[String(obj.id)] || {};
@@ -221,17 +225,18 @@ function renderFromMeta(data) {
     });
     return row;
   });
-
   allData = rows;
 
-  // Pagination: use &no_page presence as "has more"
-  var noPage = data['&main.a.&uni_obj.&no_page'];
-  var hasMore = noPage ? (String(noPage.lnx && noPage.lnx[0]) !== '1') : (rows.length >= limit);
-  totalRows = offset + rows.length + (hasMore ? 1 : 0);
+  // Total count
+  if (data.total !== undefined && data.total !== null) {
+    totalRows = Number(data.total);
+  } else {
+    totalRows = offset + rows.length;
+    var noPage = data['&main.a.&uni_obj.&no_page'];
+    if (noPage && String(noPage.lnx && noPage.lnx[0]) !== '1') totalRows += 1;
+  }
 
-  // Parent info bar
   renderParentBar(data);
-
   renderHead();
   renderBody(rows);
   renderPager();
@@ -254,17 +259,18 @@ function renderParentBar(data) {
 // ── Render Head ───────────────────────────────────────────────────────────────
 function renderHead() {
   var $tr = $('#tb-head tr'); $tr.empty();
+  // Edit icon column
   $tr.append('<th style="width:28px">&nbsp;</th>');
+  // Primary name column (val)
+  var nameLabel = typeName || t9n('[RU]Название[EN]Name');
+  $tr.append('<th class="col-header col-val" style="cursor:pointer" onclick="sortByVal()">'+escHtml(nameLabel)+(sortColId==='val'?(sortDir===1?' ▲':' ▼'):'')+'</th>');
+  // Requisite columns
   cols.forEach(function(c) {
     var th = document.createElement('th');
     th.className = 'col-header';
     th.setAttribute('data-col-id', c.id);
-    th.setAttribute('base', c.base);
-    if (c.ref_type) th.setAttribute('ref-type', c.ref_type);
-    if (c.arr_type) th.setAttribute('arr-type', c.arr_type);
-    var sortMark = '';
-    if (sortColId === c.id) sortMark = sortDir===1 ? ' ▲' : ' ▼';
-    th.innerHTML = '<div class="col-header">'+escHtml(c.name || c.id)+sortMark+'</div>';
+    var sortMark = sortColId === c.id ? (sortDir===1?' ▲':' ▼') : '';
+    th.innerHTML = escHtml(c.name || c.id)+sortMark;
     th.style.cursor = 'pointer';
     th.addEventListener('click', function(){ sortBy(c.id); });
     $tr.append(th);
@@ -275,18 +281,19 @@ function renderHead() {
 function appendFilterRow() {
   var $fr = $('<tr class="filter-row"></tr>');
   $fr.append('<td></td>');
+  // Name filter (searches main val)
+  var nameFilterVal = filterVals['_val_'] || '';
+  $fr.append('<td><input type="text" value="'+escHtml(nameFilterVal)+'" placeholder="%" data-col="_val_" onchange="filterChange(this)" onkeydown="filterKeyDown(event)"></td>');
   cols.forEach(function(c) {
     var td = document.createElement('td');
     var base = c.base || 'SHORT';
     var val = filterVals[c.id] || '';
     if (base==='DATE'||base==='DATETIME'||base==='NUMBER'||base==='SIGNED') {
       var parts = (val||'').split('~');
-      td.innerHTML = '<input type="'+(base==='DATE'?'date':'text')+'" placeholder="от" value="'+escHtml(parts[0]||'')+'" data-col="'+c.id+'" data-part="0" onchange="filterRangeChange(this)" style="width:48%;margin-right:2%">'
-                   + '<input type="'+(base==='DATE'?'date':'text')+'" placeholder="до" value="'+escHtml(parts[1]||'')+'" data-col="'+c.id+'" data-part="1" onchange="filterRangeChange(this)" style="width:48%">';
-    } else if (c.ref_type) {
-      td.innerHTML = '<input type="text" value="'+escHtml(val)+'" data-col="'+c.id+'" onchange="filterChange(this)" placeholder="%" title="% = любой">';
+      td.innerHTML = '<input type="'+(base==='DATE'?'date':'text')+'" placeholder="от" value="'+escHtml(parts[0]||'')+'" data-col="'+c.id+'" data-part="0" onchange="filterRangeChange(this)" onkeydown="filterKeyDown(event)" style="width:48%;margin-right:2%">'
+                   + '<input type="'+(base==='DATE'?'date':'text')+'" placeholder="до" value="'+escHtml(parts[1]||'')+'" data-col="'+c.id+'" data-part="1" onchange="filterRangeChange(this)" onkeydown="filterKeyDown(event)" style="width:48%">';
     } else {
-      td.innerHTML = '<input type="text" value="'+escHtml(val)+'" data-col="'+c.id+'" onchange="filterChange(this)">';
+      td.innerHTML = '<input type="text" value="'+escHtml(val)+'" data-col="'+c.id+'" onchange="filterChange(this)" onkeydown="filterKeyDown(event)" placeholder="%">';
     }
     $fr.append(td);
   });
@@ -305,9 +312,24 @@ function renderBody(rows) {
     var editHref = 'edit_obj.html?db='+encodeURIComponent(db)+'&id='+encodeURIComponent(id)+'&up='+encodeURIComponent(typeId);
     var $tr = $('<tr class="data-row"></tr>').attr('id','row-'+id).attr('data-id', id);
 
-    // Edit icon cell
+    // Edit icon
     $tr.append('<td style="width:28px;padding:2px 4px;text-align:center"><a href="'+editHref+'" title="Edit"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M14 1L19 6L6 19H1V14L14 1Z" stroke="#aaa" stroke-linecap="round" stroke-linejoin="round"/></svg></a></td>');
 
+    // Primary name (val) — clickable, goes to edit_obj
+    var valDisplay = row.val || '';
+    if (valDisplay.length > 120) valDisplay = valDisplay.slice(0,120)+'…';
+    var $valTd = $('<td class="fixed-td col-val" style="cursor:pointer" title="'+escHtml(row.val)+'"></td>');
+    $valTd.text(valDisplay || '('+id+')');
+    $valTd.on('click', function(){
+      if (inlineMode) {
+        startInlineValEdit($valTd[0], id, row.val);
+      } else {
+        location.href = editHref;
+      }
+    });
+    $tr.append($valTd);
+
+    // Requisite columns
     cols.forEach(function(c) {
       var val = row[c.id];
       if (val === null || val === undefined) val = '';
@@ -319,23 +341,17 @@ function renderBody(rows) {
       if (c.ref_type) td.setAttribute('data-ref-type', c.ref_type);
       if (c.arr_type) td.setAttribute('data-arr-type', c.arr_type);
 
-      // Determine alignment
       var base = c.base || 'SHORT';
       if (base==='NUMBER'||base==='SIGNED') td.style.textAlign='right';
-      else if (base==='DATE'||base==='DATETIME'||base==='BOOL') td.style.textAlign='center';
+      else if (base==='DATE'||base==='DATETIME') td.style.textAlign='center';
 
       var div = document.createElement('div');
 
       if (c.arr_type) {
-        // Sub-object count link
         var href = 'object.html?db='+encodeURIComponent(db)+'&type='+c.arr_type+'&up='+encodeURIComponent(id);
         var cnt = val ? String(val) : '0';
         div.innerHTML = '<a href="'+href+'" class="ms-link">('+escHtml(cnt)+')</a>';
-      } else if (base === 'FILE') {
-        // Trust server HTML for file links
-        div.innerHTML = String(val);
-      } else if (c.ref_type && String(val).indexOf('<A ') === 0) {
-        // Pre-rendered reference HTML from reqs
+      } else if (base === 'FILE' || (c.ref_type && String(val).match(/^<A /i))) {
         div.innerHTML = String(val);
       } else {
         var display = String(val);
@@ -346,9 +362,8 @@ function renderBody(rows) {
 
       td.appendChild(div);
 
-      // Click: inline edit or navigate
-      td.style.cursor = 'pointer';
       if (!c.arr_type) {
+        td.style.cursor = 'pointer';
         td.addEventListener('click', function(e){
           if (inlineMode && base !== 'FILE') {
             e.preventDefault();
@@ -364,23 +379,69 @@ function renderBody(rows) {
   });
 }
 
-// ── Inline Edit ───────────────────────────────────────────────────────────────
+// ── Inline edit on val column ─────────────────────────────────────────────────
+function startInlineValEdit(td, rowId, origVal) {
+  if (td.classList.contains('editing')) return;
+  $('.editing').each(function(){ cancelInline(this); });
+  td.classList.add('editing');
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.value = origVal || '';
+  input.className = 'inline-edit';
+  input.style.cssText = 'width:100%;border:0;outline:none;font-size:inherit;padding:2px 4px;background:transparent;';
+  td.textContent = '';
+  td.appendChild(input);
+  input.focus();
+  try { input.select(); } catch(e){}
+
+  input.addEventListener('blur', function(){ saveInlineVal(td, rowId, input.value); });
+  input.addEventListener('keydown', function(e){
+    if (e.key==='Enter') input.blur();
+    if (e.key==='Escape') { cancelInline(td); }
+  });
+}
+
+function saveInlineVal(td, rowId, val) {
+  if (!td.classList.contains('editing')) return;
+  td.classList.remove('editing');
+  td.classList.add('saving');
+  var fd = new FormData();
+  fd.append('_xsrf', xsrf);
+  fd.append('val', val);
+  fetch('/'+db+'/_m_set/'+rowId+'?JSON', {method:'POST', credentials:'include', body:fd})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      td.classList.remove('saving');
+      if (j && !j.error) {
+        td.setAttribute('data-orig', val);
+        var display = val.length>120 ? val.slice(0,120)+'…' : val;
+        td.textContent = display || '('+rowId+')';
+      } else {
+        showWarn((j && j.error) || 'Save error');
+        var orig = td.getAttribute('data-orig') || '';
+        var d = orig.length>120 ? orig.slice(0,120)+'…' : orig;
+        td.textContent = d || '('+rowId+')';
+      }
+    })
+    .catch(function(e){ td.classList.remove('saving'); showWarn(String(e)); });
+}
+
+// ── Inline Edit (req columns) ─────────────────────────────────────────────────
 function updateInlineBtn() {
   var btn = byId('btn-inline');
+  if (!btn) return;
   if (inlineMode) btn.classList.add('inline-toggle-active');
   else btn.classList.remove('inline-toggle-active');
 }
 
-function toggleInline(btn) {
+function toggleInline() {
   inlineMode = !inlineMode;
   document.cookie = 'inline_'+db+'_'+typeId+'='+(inlineMode?'1':'0')+'; path=/; max-age=31536000';
   updateInlineBtn();
 }
 
 function startInlineEdit(td, rowId, col) {
-  // Cancel any open editor
   $('.editing').not(td).each(function(){ cancelInline(this); });
-
   var base = col.base || 'SHORT';
   var origVal = td.getAttribute('data-orig') || '';
   td.classList.add('editing');
@@ -397,12 +458,9 @@ function startInlineEdit(td, rowId, col) {
     }
     td.querySelector('div').innerHTML = '';
     td.querySelector('div').appendChild(input);
-    // Init select2 with AJAX
     $(input).select2({
-      width:'100%',
-      dropdownParent: $(td),
-      placeholder: t9n('[RU]Выберите[EN]Select'),
-      allowClear: true,
+      width:'100%', dropdownParent: $(td),
+      placeholder: t9n('[RU]Выберите[EN]Select'), allowClear: true,
       ajax:{
         url: function(params){ return '/'+db+'/object/'+col.ref_type+'?JSON_DATA&LIMIT=50&order_val=val&F_val=%25'+encodeURIComponent(params.term||'')+'%25'; },
         dataType:'json', cache:true, delay:250,
@@ -411,29 +469,18 @@ function startInlineEdit(td, rowId, col) {
           return {results: arr.map(function(r){ return {id: r.id||r.i, text: r.val||String(r.id||r.i)}; })};
         }
       }
-    }).on('change', function(){
-      saveInline(td, rowId, col, $(input).val());
-    });
+    }).on('change', function(){ saveInline(td, rowId, col, $(input).val()); });
     input.focus();
     return;
   } else if (base==='MEMO') {
-    input = document.createElement('textarea');
-    input.rows = 3;
-    input.value = origVal;
+    input = document.createElement('textarea'); input.rows = 3; input.value = origVal;
   } else if (base==='DATE') {
-    input = document.createElement('input');
-    input.type = 'date';
-    // Convert dd.mm.yyyy to yyyy-mm-dd
-    var dv = origVal.replace(/(\d{2})\.(\d{2})\.(\d{4})/,'$3-$2-$1');
-    input.value = dv || origVal;
+    input = document.createElement('input'); input.type = 'date';
+    input.value = origVal.replace(/(\d{2})\.(\d{2})\.(\d{4})/,'$3-$2-$1') || origVal;
   } else if (base==='NUMBER'||base==='SIGNED') {
-    input = document.createElement('input');
-    input.type = 'number';
-    input.value = origVal;
+    input = document.createElement('input'); input.type = 'number'; input.value = origVal;
   } else {
-    input = document.createElement('input');
-    input.type = 'text';
-    input.value = origVal;
+    input = document.createElement('input'); input.type = 'text'; input.value = origVal;
   }
 
   input.className = 'inline-edit';
@@ -442,45 +489,29 @@ function startInlineEdit(td, rowId, col) {
   td.querySelector('div').appendChild(input);
   input.focus();
   try { input.select(); } catch(e){}
-
   input.addEventListener('blur',  function(){ saveInline(td, rowId, col, input.value); });
   input.addEventListener('keydown', function(e){
-    if (e.key==='Enter') { input.blur(); }
-    if (e.key==='Escape') { cancelInline(td); }
+    if (e.key==='Enter') input.blur();
+    if (e.key==='Escape') cancelInline(td);
   });
 }
 
 function saveInline(td, rowId, col, val) {
   if (!td.classList.contains('editing')) return;
-  td.classList.remove('editing');
-  td.classList.add('saving');
-
-  var base = col.base || 'SHORT';
-
-  // Convert date back if needed
-  if (base==='DATE' && val && val.match(/^\d{4}-\d{2}-\d{2}$/)) {
-    // store as-is, server accepts ISO
-  }
-
+  td.classList.remove('editing'); td.classList.add('saving');
   var fd = new FormData();
   fd.append('_xsrf', xsrf);
   fd.append('t'+col.id, val===null?'':val);
-
-  fetch('/'+db+'/_m_set/'+rowId+'?JSON', {
-    method:'POST', credentials:'include', body:fd
-  }).then(function(r){ return r.json(); })
+  fetch('/'+db+'/_m_set/'+rowId+'?JSON', {method:'POST', credentials:'include', body:fd})
+    .then(function(r){ return r.json(); })
     .then(function(j){
       td.classList.remove('saving');
       if (j && !j.error && (j.id || j.obj !== undefined)) {
         td.setAttribute('data-orig', val===null?'':val);
         var div = td.querySelector('div');
-        if (div) {
-          var display = val===null?'':String(val);
-          if (display.length > 150) display = display.slice(0,150)+'…';
-          div.textContent = display;
-        }
+        if (div) { var d=val===null?'':String(val); div.textContent = d.length>150?d.slice(0,150)+'…':d; }
       } else {
-        showWarn((j && j.error) || (j && j.msg) || 'Save error');
+        showWarn((j && j.error)||(j && j.msg)||'Save error');
         cancelInlineRestore(td);
       }
     })
@@ -491,18 +522,21 @@ function cancelInline(td) {
   td.classList.remove('editing');
   var origVal = td.getAttribute('data-orig') || '';
   var div = td.querySelector('div');
-  if (!div) return;
-  var display = origVal.length>150 ? origVal.slice(0,150)+'…' : origVal;
-  div.textContent = display;
+  if (div) { var d=origVal.length>150?origVal.slice(0,150)+'…':origVal; div.textContent = d; }
+  else { var d2=origVal.length>120?origVal.slice(0,120)+'…':origVal; td.textContent = d2||'(?)'; }
 }
-function cancelInlineRestore(td) { cancelInline(td); }
+function cancelInlineRestore(td){ cancelInline(td); }
 
 // ── Sort ──────────────────────────────────────────────────────────────────────
 function sortBy(colId) {
   if (sortColId === colId) sortDir = sortDir * -1;
   else { sortColId = colId; sortDir = 1; }
-  offset = 0;
-  loadData();
+  offset = 0; loadData();
+}
+function sortByVal() {
+  if (sortColId === 'val') sortDir = sortDir * -1;
+  else { sortColId = 'val'; sortDir = 1; }
+  offset = 0; loadData();
 }
 
 // ── Filter ────────────────────────────────────────────────────────────────────
@@ -510,50 +544,44 @@ function toggleFilter() {
   filterVisible = !filterVisible;
   renderHead();
 }
-
 function filterChange(inp) {
   var col = inp.getAttribute('data-col');
   filterVals[col] = inp.value;
   updateClearBtn();
 }
-
 function filterRangeChange(inp) {
   var col = inp.getAttribute('data-col');
   var part = parseInt(inp.getAttribute('data-part'),10);
   var cur = (filterVals[col]||'').split('~');
-  cur[0] = cur[0]||''; cur[1] = cur[1]||'';
+  cur[0]=cur[0]||''; cur[1]=cur[1]||'';
   cur[part] = inp.value;
   filterVals[col] = cur.join('~');
   if (filterVals[col]==='~') filterVals[col]='';
   updateClearBtn();
 }
-
+function filterKeyDown(e) {
+  if (e.key==='Enter') { offset=0; loadData(); }
+}
 function clearFilter() {
-  filterVals = {};
-  offset = 0;
-  updateClearBtn();
-  loadData();
+  filterVals = {}; offset = 0;
+  updateClearBtn(); loadData();
 }
-
 function updateClearBtn() {
-  var hasFilter = Object.keys(filterVals).some(function(k){ return !!filterVals[k]; });
-  byId('btn-clear-filter').style.display = hasFilter ? '' : 'none';
+  var has = Object.keys(filterVals).some(function(k){ return !!filterVals[k]; });
+  byId('btn-clear-filter').style.display = has ? '' : 'none';
 }
-
-// Search on Enter in filter inputs
-$(document).on('keydown', '.filter-row input', function(e){
-  if (e.key==='Enter'){ offset=0; loadData(); }
-});
 
 // ── Pager ─────────────────────────────────────────────────────────────────────
 function renderPager() {
   var from = offset+1, to = offset + allData.length;
-  byId('pager-info').textContent = allData.length ? from+'-'+to : '';
+  var info = allData.length ? (from+'-'+to) : '';
+  if (totalRows > 0) info += ' / '+totalRows;
+  byId('pager-info').textContent = info;
   byId('btn-prev').style.display = offset > 0 ? '' : 'none';
-  byId('btn-next').style.display = (offset + allData.length >= limit) ? '' : 'none';
+  byId('btn-next').style.display = (totalRows > 0 ? (to < totalRows) : (allData.length >= limit)) ? '' : 'none';
 }
 
-function prevPage() { if(offset>=limit){offset-=limit;loadData();} }
+function prevPage() { if(offset>=limit){offset-=limit; loadData();} }
 function nextPage() { offset+=limit; loadData(); }
 
 // ── Add record ────────────────────────────────────────────────────────────────
@@ -563,23 +591,26 @@ function addRec() {
   location.href = href;
 }
 
-// ── Misc ──────────────────────────────────────────────────────────────────────
 function showWarn(msg) {
-  var w = byId('warn'); w.textContent = msg; w.style.display='';
+  var w=byId('warn'); w.textContent=msg; w.style.display='';
   setTimeout(function(){w.style.display='none';},5000);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-// Handle F_xxx params from URL (pre-filled filters)
+// Pre-fill filters from URL F_xxx params
 p.forEach(function(val, key){
-  if (key.match(/^F_[0-9]+$/)) {
-    var colId = key.slice(2);
-    filterVals[colId] = val;
-  }
+  if (key.match(/^F_[0-9]+$/)) { filterVals[key.slice(2)] = val; }
 });
 updateClearBtn();
 updateInlineBtn();
 loadData();
+
+// Process <t9n> tags in static HTML
+$(function(){
+  document.querySelectorAll('t9n').forEach(function(el){
+    el.textContent = t9n(el.innerHTML);
+  });
+});
 </script>
 <script src="/js/popper.min.js"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
