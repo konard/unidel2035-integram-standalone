@@ -8,20 +8,15 @@
 <link rel="stylesheet" href="/css/css.css">
 <link href="/css/select2.min.css" rel="stylesheet">
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
 <script src="/js/select2.min.js"></script>
 <script>
 var p = new URLSearchParams(location.search);
 var db     = p.get('db')  || (window.parent && window.parent.db) || localStorage.getItem('_db') || '';
-var objId  = p.get('id')  || '';   // 'new' for create
-var upId   = p.get('up')  || '';   // parent type id
-var token  = localStorage.getItem(db+'_token') || '';
-var xsrf   = localStorage.getItem(db+'_xsrf')  || '';
-var uid    = localStorage.getItem(db+'_userId')|| '';
-var user   = localStorage.getItem(db+'_user')  || '';
-var role   = localStorage.getItem(db+'_role')  || '';
-var typeId = 0, typeName = '', isNew = (objId==='new'||objId==='');
-if (!token) { location.href = 'login.html?db='+encodeURIComponent(db); }
+var objId  = p.get('id')  || '';
+var upId   = p.get('up')  || '';
+var xsrf   = localStorage.getItem(db+'_xsrf') || '';
+var inIframe = (window.parent !== window);
+var typeId = '', typeName = '', isNew = (objId === 'new' || objId === '');
 function byId(i){return document.getElementById(i);}
 function getCookie(n){var m=document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+)');return m?decodeURIComponent(m[2]):null;}
 function t9n(s){var locale=getCookie(db+'_locale')||'RU';var m=s.match('\\['+locale+'\\]([^\\[]+)');return m?m[1]:s.replace(/\[[A-Z]+\]/g,'').trim();}
@@ -29,27 +24,29 @@ function escHtml(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&a
 </script>
 <style>
 label{font-size:90%;color:gray;}
-.dict-title{padding:20px 0 10px 0;font-size:24px;line-height:24px;color:#172D4E;display:block;}
+.dict-title{padding:12px 0 8px 0;font-size:22px;line-height:24px;color:#172D4E;display:block;}
 .comp-control{display:flex;flex-direction:column;justify-content:flex-end;}
 .hidden{display:none;}
-.btn-xs{padding:1px 5px;line-height:1.5;border-radius:3px;}
-.breadcrumb{padding:2px;margin:0;}
-.select2-selection__rendered{line-height:38px!important;}
-.select2-container .select2-selection--single{height:38px!important;}
-.select2-selection__arrow,.select2-selection__clear{height:38px!important;}
-a[disabled]{display:none;}
-#messages{min-height:0;}
+#topbar{background:#343a40;color:#fff;padding:4px 8px;display:flex;align-items:center;gap:8px;font-size:13px;}
+#topbar a{color:#adb5bd;text-decoration:none;}
+#topbar a:hover{color:#fff;}
+#topbar .dbname{color:#fff;font-weight:600;}
+#topbar .spacer{flex:1;}
 </style>
 </head>
-<body>
-<nav aria-label="breadcrumb">
-  <ol class="breadcrumb pl-2 pt-1 pb-1">
-    <li class="breadcrumb-item"><a id="bc-db" href="dict.html?db="></a></li>
-    <li class="breadcrumb-item"><a id="bc-dict" href="dict.html?db="><t9n>[RU]Таблицы[EN]Tables</t9n></a></li>
-    <li class="breadcrumb-item parent-table"><a id="bc-parent" href="#"></a></li>
-    <li class="breadcrumb-item active" id="bc-title" aria-current="page"></li>
-  </ol>
-</nav>
+<body style="margin:0;padding:0">
+
+<div id="topbar">
+  <span id="tb-dbname" class="dbname"></span>
+  <span>&rsaquo;</span>
+  <a id="tb-dict" href="#">Tables</a>
+  <span>&rsaquo;</span>
+  <a id="tb-type" href="#">...</a>
+  <span>&rsaquo;</span>
+  <span id="tb-id" style="color:#ccc"></span>
+  <span class="spacer"></span>
+  <span id="tb-user" style="color:#adb5bd;font-size:11px"></span>
+</div>
 
 <div class="container">
   <div id="messages" class="msgs" onclick="this.innerHTML=''"></div>
@@ -62,243 +59,293 @@ a[disabled]{display:none;}
     <div class="dict-title">
       <span id="title-type"></span>
       <span style="color:lightgray;font-size:16px" id="title-id"></span>
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" class="float-right" onclick="toggleGrid()" style="cursor:pointer" title="Toggle grid">
-        <path fill-rule="evenodd" clip-rule="evenodd" d="M4.5 5C4.5 4.72386 4.72386 4.5 5 4.5H12C12.2761 4.5 12.5 4.72386 12.5 5V12C12.5 12.2761 12.2761 12.5 12 12.5H5C4.72386 12.5 4.5 12.2761 4.5 12V5ZM5.5 5.5V11.5H11.5V5.5H5.5ZM15.5 5C15.5 4.72386 15.7239 4.5 16 4.5H23C23.2761 4.5 23.5 4.72386 23.5 5V12C23.5 12.2761 23.2761 12.5 23 12.5H16C15.7239 12.5 15.5 12.2761 15.5 12V5ZM16.5 5.5V11.5H22.5V5.5H16.5ZM4.5 16C4.5 15.7239 4.72386 15.5 5 15.5H12C12.2761 15.5 12.5 15.7239 12.5 16V23C12.5 23.2761 12.2761 23.5 12 23.5H5C4.72386 23.5 4.5 23.2761 4.5 23V16ZM5.5 16.5V22.5H11.5V16.5H5.5ZM15.5 16C15.5 15.7239 15.7239 15.5 16 15.5H23C23.2761 15.5 23.5 15.7239 23.5 16V23C23.5 23.2761 23.2761 23.5 23 23.5H16C15.7239 23.5 15.5 23.2261 15.5 23V16ZM16.5 16.5V22.5H22.5V16.5H16.5Z" fill="#1A1A1A"/>
-      </svg>
     </div>
 
     <div id="warnings"></div>
 
     <div class="form-row no-gutters" id="form-fields">
-      <!-- fields rendered by JS -->
     </div>
 
-    <div id="extras"></div>
-
-    <div class="pt-3 pb-2" id="buttons">
-      <!-- action buttons rendered by JS -->
-    </div>
+    <div class="pt-3 pb-2" id="buttons"></div>
 
     <div class="row t9n" style="padding:0 5px 5px 15px" id="save-row">
-      <div class="col-6 col-sm-4 col-md-3 col-xl-3 p-0 pr-2 copy-dub">
-        <input id="savebtn" type="submit" name="savebtn" class="btn btn-primary btn-block mb-2" value="Save">
+      <div class="col-6 col-sm-4 col-md-3 p-0 pr-2">
+        <input id="savebtn" type="submit" class="btn btn-primary btn-block mb-2" value="Save">
       </div>
-      <div class="col-6 col-sm-4 col-md-3 col-xl-3 p-0 pr-2 undo-btn">
-        <a id="cancel-btn" href="#"><button type="button" class="btn btn-outline-secondary btn-block mb-2"><t9n>[RU]Отменить[EN]Cancel</t9n></button></a>
+      <div class="col-6 col-sm-4 col-md-3 p-0 pr-2">
+        <a id="cancel-btn" href="#"><button type="button" class="btn btn-outline-secondary btn-block mb-2">
+          <t9n>[RU]Отменить[EN]Cancel</t9n>
+        </button></a>
       </div>
-      <div class="col-6 col-sm-4 col-md-3 col-xl-3 p-0 pr-2 del-btn" id="del-btn-wrap" style="display:none">
-        <button type="button" class="btn btn-warning btn-block mb-2" onclick="showDelConfirm()"><t9n>[RU]Удалить[EN]Delete</t9n></button>
+      <div class="col-6 col-sm-4 col-md-3 p-0 pr-2" id="del-btn-wrap" style="display:none">
+        <button type="button" class="btn btn-warning btn-block mb-2" onclick="showDelConfirm()">
+          <t9n>[RU]Удалить[EN]Delete</t9n>
+        </button>
       </div>
     </div>
-    <div class="confirm-del" id="confirm-del" style="display:none;border:2px #f0ad4e solid;border-radius:10px;padding:6px;">
+    <div id="confirm-del" style="display:none;border:2px #f0ad4e solid;border-radius:10px;padding:6px;">
       <p><b><t9n>[RU]Подтвердите удаление[EN]Confirm deletion</t9n></b></p>
       <div class="row" style="padding:0 5px 5px 15px">
         <div class="col-6 col-sm-4 col-md-3 p-0 pr-2">
-          <button type="button" class="btn btn-warning btn-block mb-2" onclick="deleteRec()"><t9n>[RU]Да, удалить[EN]Yes, delete</t9n></button>
+          <button type="button" class="btn btn-warning btn-block mb-2" onclick="deleteRec()">
+            <t9n>[RU]Да, удалить[EN]Yes, delete</t9n>
+          </button>
         </div>
         <div class="col-6 col-sm-4 col-md-3 p-0 pr-2">
-          <button type="button" class="btn btn-outline-secondary btn-block mb-2" onclick="hideDelConfirm()"><t9n>[RU]Отмена[EN]Cancel</t9n></button>
+          <button type="button" class="btn btn-outline-secondary btn-block mb-2" onclick="hideDelConfirm()">
+            <t9n>[RU]Отмена[EN]Cancel</t9n>
+          </button>
         </div>
       </div>
     </div>
   </form>
-  <div id="external"></div>
   </div>
   </div>
 </div>
 
-<script src="/js/popper.min.js"></script>
 <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
-// ---- helpers ----
+// ---- topbar ----
 byId('xsrf-inp').value = xsrf;
-byId('bc-db').href = 'dict.html?db='+encodeURIComponent(db);
-byId('bc-db').textContent = db.charAt(0).toUpperCase()+db.slice(1);
-byId('bc-dict').href = 'dict.html?db='+encodeURIComponent(db);
+byId('tb-dbname').textContent = db;
+byId('tb-dict').href = inIframe ? '#' : ('dict.html?db=' + encodeURIComponent(db));
+byId('tb-dict').textContent = t9n('[RU]Таблицы[EN]Tables');
+var uname = localStorage.getItem(db + '_user') || '';
+if (uname) byId('tb-user').textContent = uname;
 
 function showMsg(msg, level) {
-  byId('messages').innerHTML = '<div class="alert alert-'+(level||'danger')+'" role="alert">'+escHtml(msg)+'</div>';
-  setTimeout(function(){ byId('messages').innerHTML=''; }, 7000);
+  byId('messages').innerHTML = '<div class="alert alert-' + (level||'danger') + '" role="alert">' + escHtml(msg) + '</div>';
+  setTimeout(function(){ byId('messages').innerHTML = ''; }, 7000);
 }
-
-function toggleGrid() {
-  document.querySelectorAll('.comp-control').forEach(function(el){
-    if (el.classList.contains('col-12')) {
-      el.setAttribute('class', el.getAttribute('data-orig-class')||'comp-control pb-3 col-6 col-sm-4 col-md-3');
-    } else {
-      if (!el.getAttribute('data-orig-class')) el.setAttribute('data-orig-class', el.className);
-      el.className = 'comp-control pb-3 col-12';
-    }
-  });
-}
-
-function showDelConfirm() {
-  $('.copy-dub,.undo-btn,.del-btn').hide();
-  byId('confirm-del').style.display = '';
-}
-function hideDelConfirm() {
-  $('.copy-dub,.undo-btn,.del-btn').show();
-  byId('confirm-del').style.display = 'none';
-}
+function showDelConfirm() { byId('confirm-del').style.display = ''; byId('del-btn-wrap').style.display = 'none'; }
+function hideDelConfirm() { byId('confirm-del').style.display = 'none'; byId('del-btn-wrap').style.display = ''; }
 
 // ---- field rendering ----
-var fieldDefs = []; // [{id, name, base, val, disabled, options, multi, ref, restrict}]
+var fieldDefs = [];
 
-function getAlignClass(base) {
-  if (base==='13'||base==='14') return 'text-right';
-  if (base==='11'||base==='9') return 'text-center';
-  return '';
-}
-
-function renderField(f, i) {
+function renderField(f) {
   var disabled = f.disabled ? 'disabled' : '';
-  var label = '<label for="t'+f.id+'" class="t9n">'
-    + (f.not_null ? '<a title="Mandatory"><font color="RED"><b>' : '')
-    + escHtml(f.name||f.id)
-    + (f.not_null ? '</b></font></a>' : '')
+  var label = '<label for="t' + f.id + '">'
+    + (f.not_null ? '<b style="color:red">' : '')
+    + escHtml(f.name || f.id)
+    + (f.not_null ? '</b>' : '')
     + '</label>';
 
+  var base = String(f.base || 'SHORT').toUpperCase();
   var input = '';
   var wrapClass = 'comp-control pb-3 col-12 col-sm-4 col-md-3';
 
-  switch(String(f.base||f.type||'3')) {
-    case '3':  // chars
-    case '8':  // chars
-      input = '<input class="form-control" type="text" id="t'+f.id+'" name="t'+f.id+'" value="'+escHtml(String(f.val||''))+'" '+disabled+'>';
-      break;
-    case '12': // memo
-      wrapClass = 'comp-control pb-3 col-12';
-      input = '<textarea class="form-control" id="t'+f.id+'" name="t'+f.id+'" rows="4" '+disabled+'>'+escHtml(String(f.val||''))+'</textarea>';
-      break;
-    case '15': // html
-      wrapClass = 'comp-control pb-3 col-12';
-      input = '<textarea class="form-control" id="t'+f.id+'" name="t'+f.id+'" rows="6" '+disabled+'>'+escHtml(String(f.val||''))+'</textarea>';
-      break;
-    case '9':  // date
-      var dval = f.val ? String(f.val) : '';
-      // convert DD.MM.YYYY -> YYYY-MM-DD for <input type=date>
-      if (/^\d{2}\.\d{2}\.\d{4}$/.test(dval)) {
-        dval = dval.split('.').reverse().join('-');
-      }
-      input = '<input class="form-control datepicker" type="date" id="t'+f.id+'" name="t'+f.id+'" value="'+escHtml(dval)+'" '+disabled+'>';
-      break;
-    case '4':  // datetime
-      var dtval = f.val ? String(f.val) : '';
-      if (/^\d{2}\.\d{2}\.\d{4}/.test(dtval)) {
-        var parts = dtval.split(' ');
-        var dp = parts[0].split('.').reverse().join('-');
-        dtval = dp + (parts[1] ? 'T'+parts[1] : 'T00:00');
-      }
-      wrapClass = 'comp-control pb-3 col-6 col-sm-6 col-md-4';
-      input = '<input class="form-control" type="datetime-local" id="t'+f.id+'" name="t'+f.id+'" step="1" value="'+escHtml(dtval)+'" '+disabled+'>';
-      break;
-    case '13': // signed integer
-    case '14': // number
-      input = '<input class="form-control" type="text" id="t'+f.id+'" name="t'+f.id+'" value="'+escHtml(String(f.val||''))+'" '+disabled+'>';
-      break;
-    case '11': // boolean
-      var checked = (f.val==1||f.val===true||f.val==='1'||f.val==='true') ? 'checked' : '';
-      input = '<input class="form-control" type="checkbox" id="t'+f.id+'" name="t'+f.id+'" value="1" '+checked+' '+disabled+'><input type="hidden" name="b'+f.id+'" value="1">';
-      break;
-    case '20': // password
-      input = '<input type="password" class="form-control" id="t'+f.id+'" name="t'+f.id+'" value="'+escHtml(String(f.val||''))+'" '+disabled+'>';
-      break;
-    case '5':  // file
-      wrapClass = 'comp-control pb-3 col-12 col-sm-9 col-md-6 pt-1';
-      var fval = f.val ? '<span class="file-'+f.id+'">' + escHtml(String(f.val)) + '</span>' : '';
-      input = fval + '<input class="form-control-file mt-2" type="file" id="t'+f.id+'" name="t'+f.id+'" '+disabled+'>';
-      break;
-    case '6':  // reference (select2)
-    case '7':  // reference
-      wrapClass = 'comp-control pb-3 col-12 col-sm-8 col-md-6 t9n';
-      var opts = '<option value=""></option>';
-      if (f.options) {
-        f.options.forEach(function(opt){
-          var sel = (String(opt.id)===String(f.val)) ? ' selected' : '';
-          opts += '<option value="'+escHtml(String(opt.id))+'"'+sel+'>'+escHtml(opt.val||opt.name||String(opt.id))+'</option>';
-        });
-      }
-      input = '<select id="t'+f.id+'" name="t'+f.id+'" class="form-control select2" '+disabled+' '
-        + 'i-orig="'+f.id+'" multi="'+(f.multi?'1':'0')+'">'
-        + opts + '</select>';
-      break;
-    case '100': // calculatable (read-only display)
-      wrapClass = 'comp-control pb-3 col-12 col-sm-9 col-md-10';
-      input = '<div class="form-control-plaintext">'+escHtml(String(f.val||''))+'</div>';
-      break;
-    default:
-      input = '<input class="form-control" type="text" id="t'+f.id+'" name="t'+f.id+'" value="'+escHtml(String(f.val||''))+'" '+disabled+'>';
+  if (base === 'MEMO' || base === '12') {
+    wrapClass = 'comp-control pb-3 col-12';
+    input = '<textarea class="form-control" id="t' + f.id + '" name="t' + f.id + '" rows="4" ' + disabled + '>' + escHtml(String(f.val || '')) + '</textarea>';
+
+  } else if (base === 'HTML' || base === '15') {
+    wrapClass = 'comp-control pb-3 col-12';
+    input = '<textarea class="form-control" id="t' + f.id + '" name="t' + f.id + '" rows="6" ' + disabled + '>' + escHtml(String(f.val || '')) + '</textarea>';
+
+  } else if (base === 'DATE' || base === '9') {
+    var dval = String(f.val || '');
+    if (/^\d{2}\.\d{2}\.\d{4}$/.test(dval)) dval = dval.split('.').reverse().join('-');
+    input = '<input class="form-control" type="date" id="t' + f.id + '" name="t' + f.id + '" value="' + escHtml(dval) + '" ' + disabled + '>';
+
+  } else if (base === 'DATETIME' || base === '4') {
+    var dtval = String(f.val || '');
+    if (/^\d{2}\.\d{2}\.\d{4}/.test(dtval)) {
+      var parts = dtval.split(' ');
+      dtval = parts[0].split('.').reverse().join('-') + 'T' + (parts[1] ? parts[1].substr(0, 5) : '00:00');
+    }
+    wrapClass = 'comp-control pb-3 col-6 col-sm-6 col-md-4';
+    input = '<input class="form-control" type="datetime-local" id="t' + f.id + '" name="t' + f.id + '" value="' + escHtml(dtval) + '" ' + disabled + '>';
+
+  } else if (base === 'NUMBER' || base === '14' || base === 'SIGNED' || base === '13') {
+    input = '<input class="form-control text-right" type="text" id="t' + f.id + '" name="t' + f.id + '" value="' + escHtml(String(f.val || '')) + '" ' + disabled + '>';
+
+  } else if (base === 'BOOL' || base === '11') {
+    var checked = (f.val == 1 || f.val === true || f.val === '1') ? 'checked' : '';
+    input = '<div class="pt-2"><input type="checkbox" id="t' + f.id + '" name="t' + f.id + '" value="1" ' + checked + ' ' + disabled + '>'
+          + '<input type="hidden" name="b' + f.id + '" value="1"></div>';
+
+  } else if (base === 'PWD' || base === '20') {
+    input = '<input type="password" class="form-control" id="t' + f.id + '" name="t' + f.id + '" value="" placeholder="(unchanged)" ' + disabled + '>';
+
+  } else if (base === 'FILE' || base === '5') {
+    wrapClass = 'comp-control pb-3 col-12 col-sm-9 col-md-6';
+    var fval = f.val ? '<div class="mb-1 small text-muted">' + escHtml(String(f.val).replace(/<[^>]+>/g, '')) + '</div>' : '';
+    input = fval + '<input class="form-control-file" type="file" id="t' + f.id + '" name="t' + f.id + '" ' + disabled + '>';
+
+  } else if (f.ref_type || base === 'REFERENCE' || base === '6' || base === '7') {
+    // Reference field — dropdown with pre-loaded options
+    wrapClass = 'comp-control pb-3 col-12 col-sm-8 col-md-6';
+    var currentVal = String(f.val || '');
+    var opts = '<option value=""></option>';
+    var hasSelected = false;
+    if (f.options && f.options.length) {
+      f.options.forEach(function(opt) {
+        var sel = opt.selected || (String(opt.id) === currentVal);
+        if (sel) hasSelected = true;
+        opts += '<option value="' + escHtml(String(opt.id)) + '"' + (sel ? ' selected' : '') + '>'
+              + escHtml(opt.val || String(opt.id)) + '</option>';
+      });
+    }
+    // If current value not in options, add it
+    if (currentVal && !hasSelected) {
+      opts += '<option value="' + escHtml(currentVal) + '" selected>' + escHtml(currentVal) + '</option>';
+    }
+    input = '<select id="t' + f.id + '" name="t' + f.id + '" class="form-control select2" ' + disabled
+          + ' data-ref-type="' + escHtml(String(f.ref_type || '')) + '"'
+          + (f.multi ? ' multiple' : '') + '>'
+          + opts + '</select>';
+
+  } else {
+    // SHORT, CHARS, default
+    // Strip HTML from displayed value (FILE values may have <a> tags)
+    var sval = String(f.val || '').replace(/<[^>]+>/g, '');
+    input = '<input class="form-control" type="text" id="t' + f.id + '" name="t' + f.id + '" value="' + escHtml(sval) + '" ' + disabled + '>';
   }
 
-  return '<div class="'+wrapClass+'" id="wrap-'+f.id+'">'+label+input+'</div>';
+  return '<div class="' + wrapClass + '" id="wrap-' + f.id + '">' + label + input + '</div>';
 }
 
-function renderForm(data) {
-  // data may be: {reqs:[{id,name,base,val,...}], id, type, type_name, up, val, buttons:[{href,name}]}
-  var id   = data.id || objId;
-  var tname = data.type_name || data.typ_name || typeName || '';
-  var ttype = data.type || data.typ || typeId || '';
-  var up   = data.up || upId || '';
+// ---- parse API response → fieldDefs array ----
+function parseReqs(data) {
+  var reqsDict = data.reqs || {};
+  var oreqs    = data['&main.a.&object.&object_reqs'] || {};
+  var fieldOrder = oreqs.typ || [];
 
-  typeName = tname; typeId = String(ttype);
+  // Reference field metadata
+  var refBlock = data['&main.a.&object.&object_reqs.&editreq_reference'] || {};
+  var refTyps  = refBlock.typ || [];
+  var refRefs  = refBlock['_parent_.ref'] || [];
+  var refMulti = refBlock['_parent_.multi'] || [];
+
+  // Pre-loaded options: id/val/selected/r arrays
+  var addRef  = data['&main.a.&object.&object_reqs.&editreq_reference.&add_obj_ref_reqs'] || {};
+  var addIds  = addRef.id  || [];
+  var addVals = addRef.val || [];
+  var addSels = addRef.selected || [];
+  var addRs   = addRef.r || [];
+
+  // Build per-field options map
+  var fieldOptions = {};
+  for (var i = 0; i < addIds.length; i++) {
+    var fid = addRs[i];
+    if (!fieldOptions[fid]) fieldOptions[fid] = [];
+    fieldOptions[fid].push({
+      id: addIds[i],
+      val: addVals[i],
+      selected: addSels[i] && addSels[i].trim().toUpperCase() === 'SELECTED'
+    });
+  }
+
+  // Build fieldDefs from ordered field list
+  var defs;
+  if (fieldOrder.length > 0) {
+    defs = fieldOrder.map(function(id) {
+      var r = reqsDict[id] || {};
+      var refIdx = refTyps.indexOf(String(id));
+      var def = {
+        id:       String(id),
+        name:     r.type || String(id),
+        base:     r.base || 'SHORT',
+        val:      r.value !== undefined ? r.value : '',
+        disabled: !!r.disabled,
+        not_null: !!r.not_null
+      };
+      if (refIdx >= 0) {
+        def.ref_type = refRefs[refIdx] || r.ref_type || '';
+        def.multi    = refMulti[refIdx] === '1';
+        def.options  = fieldOptions[String(id)] || [];
+      } else if (r.ref_type) {
+        def.ref_type = r.ref_type;
+        def.options  = fieldOptions[String(id)] || [];
+      }
+      return def;
+    });
+  } else {
+    // Fallback: sort by order
+    defs = Object.keys(reqsDict).map(function(id) {
+      var r = reqsDict[id];
+      var def = {
+        id:   String(id),
+        name: r.type || String(id),
+        base: r.base || 'SHORT',
+        val:  r.value !== undefined ? r.value : '',
+        order: parseInt(r.order || 0, 10)
+      };
+      if (r.ref_type) { def.ref_type = r.ref_type; def.options = fieldOptions[String(id)] || []; }
+      return def;
+    }).sort(function(a, b) { return a.order - b.order; });
+  }
+  return defs;
+}
+
+// ---- renderForm ----
+function renderForm(data) {
+  var obj   = data.obj || {};
+  var id    = obj.id    || data.id    || objId;
+  var ttype = obj.typ   || data.type  || data.typ   || typeId || upId || '';
+  var tname = obj.typ_name || data.type_name || data.typ_name || typeName || '';
+  var val   = obj.val   || data.val   || '';
+
+  typeName = tname;
+  typeId   = String(ttype);
+
   byId('title-type').textContent = tname;
   if (!isNew) {
-    byId('title-id').textContent = ' #'+id;
+    byId('title-id').textContent = ' #' + id;
     byId('del-btn-wrap').style.display = '';
   }
-  document.title = isNew ? t9n('[RU]Новая запись[EN]New record') : String(data.val||id);
-  byId('bc-title').textContent = document.title;
+  document.title = isNew ? t9n('[RU]Новая запись[EN]New record') : (val || String(id));
 
-  // breadcrumb parent
-  if (up) {
-    byId('bc-parent').href = 'object.html?db='+encodeURIComponent(db)+'&type='+encodeURIComponent(up);
-    byId('bc-parent').textContent = tname;
+  // Update topbar
+  var typeUrl = inIframe ? '#' : ('object.html?db=' + encodeURIComponent(db) + '&type=' + encodeURIComponent(ttype) + '&up=0');
+  byId('tb-type').href        = typeUrl;
+  byId('tb-type').textContent = tname || ttype;
+  byId('tb-id').textContent   = isNew ? t9n('[RU]новая[EN]new') : ('#' + id);
+
+  // cancel button goes back to object list
+  byId('cancel-btn').href = inIframe ? '#' : ('object.html?db=' + encodeURIComponent(db) + '&type=' + encodeURIComponent(upId || ttype) + '&up=0');
+
+  // Build fieldDefs
+  fieldDefs = parseReqs(data);
+
+  // Render fields
+  var $ff = $('#form-fields');
+  $ff.empty();
+  if (fieldDefs.length === 0) {
+    $ff.html('<div class="col-12 text-muted">' + t9n('[RU]Нет полей[EN]No fields') + '</div>');
+  } else {
+    fieldDefs.forEach(function(f) { $ff.append(renderField(f)); });
   }
-  byId('cancel-btn').href = 'object.html?db='+encodeURIComponent(db)+'&type='+encodeURIComponent(up||ttype);
 
-  // render warnings
-  if (data.warnings && data.warnings.length) {
-    byId('warnings').innerHTML = data.warnings.map(function(w){
-      return '<div class="alert alert-danger">'+escHtml(w)+'</div>';
-    }).join('');
-  }
-
-  // render fields
-  var $ff = $('#form-fields'); $ff.empty();
-  fieldDefs = data.reqs || data.fields || [];
-  if (!fieldDefs.length && data.val !== undefined) {
-    // minimal: just show the main value field
-    fieldDefs = [{id: ttype, name: tname, base:'3', val: data.val}];
-  }
-  fieldDefs.forEach(function(f, i){ $ff.append(renderField(f, i)); });
-
-  // init select2
-  $('.select2').each(function(){
-    var el = this;
-    $(this).select2({
+  // Init select2 for reference fields
+  $('select.select2').each(function() {
+    var $el = $(this);
+    var refType = $el.attr('data-ref-type');
+    $el.select2({
       placeholder: t9n('[RU]Выберите[EN]Select'),
       allowClear: true,
-      ajax: {
-        url: function(params){ return '/'+db+'/_ref_reqs/'+$(el).attr('id').substr(1)+'?JSON&id='+id; },
-        processResults: function(data){
-          var r=[];
-          if(data) for(var k in data) r.push({id:k,text:data[k]});
-          return {results:r};
+      ajax: refType ? {
+        url: function(params) {
+          return '/' + db + '/object/' + refType + '?JSON&LIMIT=50&order_val=val&F_val=' +
+                 encodeURIComponent(params.term || '');
         },
-        dataType:'json', cache:true, delay:330
-      }
+        processResults: function(resp) {
+          var items = (resp && resp.object) ? resp.object : [];
+          return { results: items.map(function(r) { return { id: r.id, text: r.val || r.id }; }) };
+        },
+        dataType: 'json', cache: true, delay: 300
+      } : undefined
     });
   });
 
-  // render buttons
-  if (data.buttons && data.buttons.length) {
-    var $btn = $('#buttons'); $btn.empty();
-    data.buttons.forEach(function(b){
-      $btn.append('<a href="/'+db+'/'+escHtml(b.href)+'"><button type="button" class="btn btn-secondary btn-sm mb-1 mr-1">'+escHtml(b.val||b.name)+'</button></a>');
-    });
+  // warnings
+  if (data.warnings && data.warnings.length) {
+    byId('warnings').innerHTML = data.warnings.map(function(w) {
+      return '<div class="alert alert-danger">' + escHtml(w) + '</div>';
+    }).join('');
   }
 
-  // update savebtn text
   byId('savebtn').value = t9n('[RU]Сохранить[EN]Save');
 }
 
@@ -309,100 +356,91 @@ function saveForm(e) {
   byId('xsrf-inp').value = xsrf;
 
   var fd = new FormData(byId('form'));
-  var url, method = 'POST';
+  var url = isNew
+    ? '/' + db + '/_m_new/' + (upId || typeId) + '?JSON&up=1'
+    : '/' + db + '/_m_save/' + objId + '?JSON';
 
-  if (isNew) {
-    // create: POST /{db}/_m_new/{up}
-    url = '/'+db+'/_m_new/'+(upId||typeId)+'?JSON&up=1';
-  } else {
-    // save: POST /{db}/_m_save/{id}
-    url = '/'+db+'/_m_save/'+objId+'?JSON';
-  }
-
-  fetch(url, { method: method, credentials:'include', body: fd })
-    .then(function(r){ return r.json(); })
-    .then(function(j){
+  fetch(url, { method: 'POST', credentials: 'include', body: fd })
+    .then(function(r) { return r.json(); })
+    .then(function(j) {
       byId('savebtn').disabled = false;
-      if (j.id || j.obj || j.msg && j.msg.indexOf('[err')===-1) {
+      var ok = j.id || j.obj || (j.msg && j.msg.indexOf('[err') === -1 && j.msg !== '');
+      if (ok) {
         var newId = j.id || j.obj || objId;
         if (isNew) {
-          // redirect to edit the newly created record
-          location.href = 'edit_obj.html?db='+encodeURIComponent(db)+'&id='+encodeURIComponent(newId)+'&up='+encodeURIComponent(upId||typeId);
+          location.href = 'edit_obj.html?db=' + encodeURIComponent(db) + '&id=' + encodeURIComponent(newId) + '&up=' + encodeURIComponent(upId || typeId);
         } else {
           showMsg(j.msg || t9n('[RU]Сохранено[EN]Saved'), 'success');
-          // refresh xsrf if provided
-          if (j.xsrf) { xsrf = j.xsrf; byId('xsrf-inp').value = xsrf; localStorage.setItem(db+'_xsrf', xsrf); }
+          if (j.xsrf) { xsrf = j.xsrf; byId('xsrf-inp').value = xsrf; localStorage.setItem(db + '_xsrf', xsrf); }
         }
       } else {
-        showMsg((j.msg||JSON.stringify(j)).replace(/\[err[^\]]*\]/g,''), 'danger');
+        showMsg((j.msg || JSON.stringify(j)).replace(/\[err[^\]]*\]/g, ''), 'danger');
       }
     })
-    .catch(function(err){ byId('savebtn').disabled=false; showMsg(String(err),'danger'); });
+    .catch(function(err) { byId('savebtn').disabled = false; showMsg(String(err), 'danger'); });
   return false;
 }
 
 // ---- delete ----
 function deleteRec() {
   if (!objId || isNew) return;
-  fetch('/'+db+'/_m_del/'+objId+'?JSON', {
-    method:'POST', credentials:'include',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    body:'_xsrf='+encodeURIComponent(xsrf)
+  fetch('/' + db + '/_m_del/' + objId + '?JSON', {
+    method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: '_xsrf=' + encodeURIComponent(xsrf)
   })
-  .then(function(r){return r.json();})
-  .then(function(j){
-    if(j.id||j.ok||j.msg&&j.msg.indexOf('[err')===-1){
-      location.href='object.html?db='+encodeURIComponent(db)+'&type='+encodeURIComponent(upId||typeId);
+  .then(function(r) { return r.json(); })
+  .then(function(j) {
+    if (j.id || j.ok || (j.msg && j.msg.indexOf('[err') === -1)) {
+      location.href = 'object.html?db=' + encodeURIComponent(db) + '&type=' + encodeURIComponent(upId || typeId) + '&up=0';
     } else {
       hideDelConfirm();
-      showMsg((j.msg||'Error').replace(/\[err[^\]]*\]/g,''), 'danger');
+      showMsg((j.msg || 'Error').replace(/\[err[^\]]*\]/g, ''), 'danger');
     }
   })
-  .catch(function(e){ hideDelConfirm(); showMsg(String(e),'danger'); });
+  .catch(function(e) { hideDelConfirm(); showMsg(String(e), 'danger'); });
 }
 
 // ---- init ----
 if (isNew) {
-  // fetch type metadata to get fields
-  var metaUrl = '/'+db+'/object/'+upId+'?JSON';
-  fetch(metaUrl, {credentials:'include'})
-    .then(function(r){
-      if(r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
+  // fetch type metadata for empty form
+  fetch('/' + db + '/object/' + upId + '?JSON', { credentials: 'include' })
+    .then(function(r) {
+      if (r.status === 401 || r.status === 403) { if (!inIframe) location.href = 'login.html?db=' + encodeURIComponent(db); return null; }
       return r.json();
     })
-    .then(function(data){
+    .then(function(data) {
       if (!data) return;
-      // build a minimal renderForm from meta
-      var tmeta = {
-        id: 'new', type: upId,
-        type_name: data.title||data.name||upId,
-        up: upId,
-        reqs: (data.cols||data.columns||[]).filter(function(c){return !c.auto;}).map(function(c){
-          return {id:c.id, name:c.name||c.id, base:c.base||c.type||'3', val:''};
-        })
-      };
-      renderForm(tmeta);
+      // Build empty reqs from req_order/req_type/req_base
+      var reqOrder = data.req_order || [];
+      var reqType  = data.req_type  || {};
+      var reqBase  = data.req_base  || {};
+      var reqs = {};
+      reqOrder.forEach(function(id, i) {
+        reqs[id] = { base: reqBase[id] || 'SHORT', type: reqType[id] || id, value: '', order: String(i) };
+      });
+      renderForm({
+        obj: { id: 'new', typ: upId, typ_name: (data.type && data.type.val) || upId, val: '' },
+        reqs: reqs,
+        '&main.a.&object.&object_reqs': { typ: reqOrder }
+      });
     })
-    .catch(function(e){
-      console.error('meta',e);
-      renderForm({id:'new',type:upId,type_name:upId,up:upId,reqs:[]});
+    .catch(function(e) {
+      console.error('meta', e);
+      renderForm({ obj: { id: 'new', typ: upId, typ_name: upId, val: '' }, reqs: {} });
     });
 } else {
-  // fetch existing object
-  var editUrl = '/'+db+'/edit_obj/'+objId+'?JSON';
-  fetch(editUrl, {credentials:'include'})
-    .then(function(r){
-      if(r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
+  fetch('/' + db + '/edit_obj/' + objId + '?JSON', { credentials: 'include' })
+    .then(function(r) {
+      if (r.status === 401 || r.status === 403) { if (!inIframe) location.href = 'login.html?db=' + encodeURIComponent(db); return null; }
       return r.json();
     })
-    .then(function(data){
+    .then(function(data) {
       if (!data) return;
+      if (data.error) { showMsg(data.error, 'danger'); return; }
       renderForm(data);
     })
-    .catch(function(e){
-      console.error('edit_obj',e);
-      showMsg('Load error: '+e,'danger');
-    });
+    .catch(function(e) { showMsg('Load error: ' + e, 'danger'); });
 }
 </script>
 </body>
