@@ -136,8 +136,7 @@ function loadData() {
   if (fetchAbort) fetchAbort.abort();
   fetchAbort = new AbortController();
 
-  var url = '/'+db+'/object/'+typeId+'?JSON&LIMIT='+limit;
-  if (offset) url += '&OFFSET='+offset;
+  var url = '/'+db+'/object/'+typeId+'?JSON&LIMIT='+(offset ? offset+','+limit : limit);
   if (upId && upId !== '0') url += '&F_U='+encodeURIComponent(upId);
 
   for (var k in filterVals) {
