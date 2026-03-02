@@ -605,10 +605,11 @@ updateClearBtn();
 updateInlineBtn();
 loadData();
 
-// Process <t9n> tags in static HTML
+// Process <t9n> tags in static HTML (replace each element with its translated text node)
 $(function(){
   document.querySelectorAll('t9n').forEach(function(el){
-    el.textContent = t9n(el.innerHTML);
+    var txt = document.createTextNode(t9n(el.textContent || el.innerHTML));
+    el.parentNode.replaceChild(txt, el);
   });
 });
 </script>
