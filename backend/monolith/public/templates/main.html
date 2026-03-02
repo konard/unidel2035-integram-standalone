@@ -126,22 +126,37 @@ if (uid || user) byId('nav-username').textContent = user || ('uid: '+uid);
 // localize
 if(typeof localize === 'function') localize();
 
-// ---- load menu ----
-$.getJSON('/'+db+'/terms?JSON', function(data) {
-  var items = Array.isArray(data) ? data : (data.terms||data.menu||[]);
-  menu = items;
+// ---- load menu from role menu (matches PHP MyRoleMenu) ----
+$.getJSON('/'+db+'/?JSON', function(data) {
+  var menuData = data['&main.myrolemenu'] || {};
+  var hrefs = menuData.href || [];
+  var names = menuData.name || [];
+  menu = hrefs.map(function(h,i){return {href:h,name:names[i]||h};});
   var list = byId('navbar-list');
-  // remove template divs content but keep structure
   $('#navlist').empty(); $('#extralist').empty();
 
-  items.forEach(function(t) {
-    var href = 'object.html?db='+encodeURIComponent(db)+'&type='+encodeURIComponent(t.id)+'&up=0';
-    var name = t.name || t.val || String(t.id);
+  function toNodeHref(phpHref) {
+    if (!phpHref) return '#';
+    var om = phpHref.match(/^object\/(\d+)$/);
+    if (om) return 'object.html?db='+encodeURIComponent(db)+'&type='+om[1]+'&up=0';
+    var page = phpHref.replace(/^integram\/[^/]+\//, '').split('/')[0];
+    var map = {dict:'dict.html',edit_types:'edit_types.html',sql:'sql.html',
+               upload:'upload.html',smartq:'smartq.html',dir_admin:'dir_admin.html',
+               report:'report.html',bi:'bi.html',welcome:'main.html',
+               info:'info.html',table:'dict.html'};
+    if (map[page]) return map[page]+'?db='+encodeURIComponent(db);
+    if (phpHref.charAt(0)==='/') return phpHref;
+    return '/'+db+'/'+phpHref;
+  }
+
+  for (var i = 0; i < hrefs.length; i++) {
+    var name = names[i] || hrefs[i] || '';
+    if (!name) continue;
     var li = document.createElement('li');
     li.className = 'nav-item';
-    li.innerHTML = '<a class="nav-link" href="'+href+'">'+name+'</a>';
+    li.innerHTML = '<a class="nav-link" href="'+toNodeHref(hrefs[i])+'">'+name+'</a>';
     list.insertBefore(li, list.querySelector('#extralist') || null);
-  });
+  }
 }).fail(function(xhr) {
   if (xhr.status===401||xhr.status===403) location.href='login.html?db='+encodeURIComponent(db);
 });

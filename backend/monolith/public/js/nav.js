@@ -137,20 +137,43 @@
     }
   });
 
-  // ── Load menu from /{db}/terms ─────────────────────────────────────────────
+  // ── Load menu from /{db}/?JSON (role menu, matches PHP MyRoleMenu) ──────────
   if (_db) {
-    $.getJSON('/' + _db + '/terms?JSON', function (data) {
-      var items = Array.isArray(data) ? data : (data.terms || data.menu || []);
+    $.getJSON('/' + _db + '/?JSON', function (data) {
+      var menuData = data['&main.myrolemenu'] || {};
+      var hrefs = menuData.href || [];
+      var names = menuData.name || [];
       var $list = $('#nav-menu-list');
-      items.forEach(function (t) {
-        var href = 'object.html?db=' + encodeURIComponent(_db) +
-                   '&type=' + encodeURIComponent(t.id) + '&up=0';
-        var name = t.name || t.val || String(t.id);
+
+      // Convert PHP-style href to Node.js template URL
+      function toNodeHref(phpHref) {
+        if (!phpHref) return '#';
+        // object/N → object.html?db=...&type=N
+        var om = phpHref.match(/^object\/(\d+)$/);
+        if (om) return 'object.html?db=' + encodeURIComponent(_db) + '&type=' + om[1] + '&up=0';
+        // single-word pages: dict, edit_types, sql, upload, smartq, dir_admin, report, bi
+        var page = phpHref.replace(/^integram\/[^/]+\//, '').split('/')[0];
+        var singlePageMap = {
+          dict: 'dict.html', edit_types: 'edit_types.html', sql: 'sql.html',
+          upload: 'upload.html', smartq: 'smartq.html', dir_admin: 'dir_admin.html',
+          report: 'report.html', bi: 'bi.html', welcome: 'main.html',
+          info: 'info.html', table: 'dict.html'
+        };
+        if (singlePageMap[page]) return singlePageMap[page] + '?db=' + encodeURIComponent(_db);
+        // external / unknown: build absolute path
+        if (phpHref.charAt(0) === '/') return phpHref;
+        return '/' + _db + '/' + phpHref;
+      }
+
+      for (var i = 0; i < hrefs.length; i++) {
+        var name = names[i] || hrefs[i] || '';
+        if (!name) continue;
+        var href = toNodeHref(hrefs[i]);
         $list.append(
           '<li class="nav-item"><a class="nav-link" href="' + _h(href) + '">' +
           _h(name) + '</a></li>'
         );
-      });
+      }
     }).fail(function (xhr) {
       if (xhr.status === 401 || xhr.status === 403) {
         location.href = 'login.html?db=' + encodeURIComponent(_db);
