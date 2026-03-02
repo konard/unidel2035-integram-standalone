@@ -961,6 +961,36 @@ async function dbExists(db) {
  *   SELECT u.id, u.val username FROM db u JOIN db tok ON tok.up=u.id AND tok.t=130 AND tok.val=?
  * XSRF is generated as: xsrf($tok, $username) → phpSalt(secret, username, db)
  */
+/**
+ * GET /:db/auth?JSON - PHP auth status check
+ */
+router.get('/:db/auth', async (req, res, next) => {
+  if (req.query.secret !== undefined) return next();
+  const { db } = req.params;
+  if (!isApiRequest(req)) return next();
+  if (!isValidDbName(db)) return res.status(200).json([{ error: 'Invalid database name' }]);
+  const token = extractToken(req, db);
+  if (!token) return res.status(200).json([{ error: 'not logged' }]);
+  try {
+    const pool = getPool();
+    const [rows] = await pool.query(
+      `SELECT u.id uid, u.val uname, x.val xsrf_val
+       FROM \`${db}\` u
+       JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
+       LEFT JOIN \`${db}\` x ON x.up = u.id AND x.t = ${TYPE.XSRF}
+       WHERE u.t = ${TYPE.USER} LIMIT 1`,
+      [token]
+    );
+    if (rows.length === 0) return res.status(200).json([{ error: 'not logged' }]);
+    const u = rows[0];
+    const xsrf = u.xsrf_val || generateXsrf(token, u.uname || '', db);
+    return res.status(200).json({ _xsrf: xsrf, token, id: u.uid, msg: '' });
+  } catch (err) {
+    logger.error('[GET /:db/auth] DB error', { error: err.message, db });
+    return res.status(200).json([{ error: 'server error' }]);
+  }
+});
+
 router.all('/:db/auth', async (req, res, next) => {
   const secret = req.body.secret || req.query.secret;
   if (!secret) return next(); // Not a secret auth request
