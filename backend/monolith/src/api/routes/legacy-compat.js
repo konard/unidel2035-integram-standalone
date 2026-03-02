@@ -78,22 +78,48 @@ function extractToken(req, db) {
 }
 
 /**
- * Build &main.myrolemenu from role row's menu items.
- * Menu items are non-type children of the role row (up=roleRowId, id!=t)
- * that have their own non-type children with non-empty vals (the Address/href children).
- * name = menu item's own val, href = first non-empty child val.
+ * Build &main.myrolemenu.
+ * PHP approach: runs the 'MyRoleMenu' report from the DB (Get_block_data('MyRoleMenu')
+ * looks up val='MyRoleMenu' AND t=REPORT, then runs Compile_Report).
+ * Fallback: query role row's SHORT-typed children with Address child hrefs.
  *
- * @param {object} pool  - MySQL pool
- * @param {string} db      - database name
- * @param {number} roleObjId - ID of the role OBJECT (e.g. 145 for "admin"), NOT the assignment row
+ * @param {object} pool      - MySQL pool
+ * @param {string} db        - database name
+ * @param {number} roleObjId - ID of the role OBJECT, NOT the assignment row
  * @returns {object} {href: [...], name: [...]}
  */
 async function buildMyrolemenu(pool, db, roleObjId) {
   const empty = { href: [], name: [] };
+
+  // Primary: run the 'MyRoleMenu' report from the DB (matches PHP Get_block_data behavior)
+  try {
+    const [repRows] = await pool.query(
+      `SELECT id FROM \`${db}\` WHERE val = 'MyRoleMenu' AND t = ${TYPE.REPORT} LIMIT 1`
+    );
+    if (repRows.length > 0) {
+      const report = await compileReport(pool, db, repRows[0].id);
+      if (report && report.columns.length > 0) {
+        const results = await executeReport(pool, db, report, {}, 500, 0);
+        // PHP template uses {HREF} and {Name} block variables (case-insensitive match)
+        const hrefCol = report.columns.find(c => c.name.toLowerCase() === 'href');
+        const nameCol = report.columns.find(c => c.name.toLowerCase() === 'name');
+        if (hrefCol && nameCol) {
+          const hrefs = [], names = [];
+          for (const row of results.data) {
+            const h = row[hrefCol.alias] || '';
+            const n = row[nameCol.alias] || '';
+            if (h || n) { hrefs.push(h); names.push(n); }
+          }
+          return { href: hrefs, name: names };
+        }
+      }
+    }
+  } catch (_e) { /* fall through to custom query */ }
+
+  // Fallback: query role row's SHORT-typed children with Address child hrefs
   if (!roleObjId) return empty;
   try {
     // Get menu items: children of role row whose type has base SHORT (t=3)
-    // Excludes GRANT-type (Objects) and MEMO-type (Description) children.
     const [menuItems] = await pool.query(
       `SELECT m.id, m.val AS name
        FROM \`${db}\` m
@@ -117,7 +143,6 @@ async function buildMyrolemenu(pool, db, roleObjId) {
     for (const a of addrRows) {
       if (hrefByParent[a.up] === undefined) hrefByParent[a.up] = a.href;
     }
-    // Only include menu items that have an href child
     const items = menuItems.filter(m => hrefByParent[m.id] !== undefined);
     if (items.length === 0) return empty;
     return {
@@ -2797,7 +2822,7 @@ router.get('/:db/:page*', async (req, res, next) => {
 
         for (const k of reqsMetaOrder) {
           const meta     = reqsMeta.get(k);
-          const baseName = REV_BASE_TYPE[meta.base_typ] || null;
+          const baseName = meta.base_typ === 0 ? 'TAB_DELIMITER' : (REV_BASE_TYPE[meta.base_typ] || null);
           if (baseName === 'BUTTON') continue;
 
           const row = getReqRow(k);
@@ -5699,6 +5724,15 @@ router.all('/:db/metadata/:typeId?', async (req, res) => {
 
   try {
     const pool = getPool();
+
+    // Special case: /metadata/base returns base types (id=t, up=0)
+    if (typeId === 'base') {
+      const [baseRows] = await pool.query(
+        `SELECT id, val FROM ${db} WHERE up=0 AND id=t ORDER BY id`
+      );
+      return res.json(baseRows.map(r => ({ id: r.id, val: r.val })));
+    }
+
     const isOneType = typeId && parseInt(typeId, 10) > 0;
     const id = isOneType ? parseInt(typeId, 10) : null;
 
@@ -6617,7 +6651,16 @@ router.all('/:db/report/:reportId?', async (req, res) => {
 
   try {
     const pool = getPool();
-    const id = reportId ? parseInt(reportId, 10) : null;
+    let id = reportId ? parseInt(reportId, 10) : null;
+
+    // PHP supports report lookup by name (e.g. /:db/report/MyRoleMenu)
+    if (reportId && !id) {
+      const [nameRows] = await pool.query(
+        `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+        [decodeURIComponent(reportId)]
+      );
+      if (nameRows.length > 0) id = nameRows[0].id;
+    }
 
     if (!id) {
       // List available reports
@@ -6835,6 +6878,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         (results.totals || {})[col.alias] !== undefined ? (results.totals || {})[col.alias] : null
       );
       return res.json({
+        title: report.header,
         columns: simpleCols,
         data: rowData,
         totals: topTotals,

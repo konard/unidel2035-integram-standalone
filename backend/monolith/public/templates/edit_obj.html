@@ -135,6 +135,15 @@ function renderField(f) {
   var input = '';
   var wrapClass = 'comp-control pb-3 col-12 col-sm-4 col-md-3';
 
+  // Tab separator — no input, handled by tab nav
+  if (base === 'TAB_DELIMITER') return '';
+
+  // ARRAY field — show count link to child object list
+  if (f.arr_type) {
+    var arrHref = 'object.html?db='+encodeURIComponent(db)+'&type='+encodeURIComponent(f.arr_type)+'&up='+encodeURIComponent(objId);
+    return '<div class="comp-control pb-3 col-6 col-sm-4 col-md-3" id="wrap-'+f.id+'">'+label+'<a id="t'+f.id+'" href="'+arrHref+'"><b>('+escHtml(String(f.arr||0))+')</b></a></div>';
+  }
+
   if (base === 'MEMO' || base === '12') {
     wrapClass = 'comp-control pb-3 col-12';
     input = '<textarea class="form-control" id="t' + f.id + '" name="t' + f.id + '" rows="4" ' + disabled + '>' + escHtml(String(f.val || '')) + '</textarea>';
@@ -187,9 +196,10 @@ function renderField(f) {
               + escHtml(opt.val || String(opt.id)) + '</option>';
       });
     }
-    // If current value not in options, add it
+    // If current value not in options, add it with display name from f.ref
     if (currentVal && !hasSelected) {
-      opts += '<option value="' + escHtml(currentVal) + '" selected>' + escHtml(currentVal) + '</option>';
+      var refDisplay = f.ref || currentVal;
+      opts += '<option value="' + escHtml(currentVal) + '" selected>' + escHtml(String(refDisplay)) + '</option>';
     }
     input = '<select id="t' + f.id + '" name="t' + f.id + '" class="form-control select2" ' + disabled
           + ' data-ref-type="' + escHtml(String(f.ref_type || '')) + '"'
@@ -255,10 +265,13 @@ function parseReqs(data) {
         def.ref_type = refRefs[refIdx] || r.ref_type || '';
         def.multi    = refMulti[refIdx] === '1';
         def.options  = fieldOptions[String(id)] || [];
+        if (r.ref !== undefined) def.ref = r.ref;
       } else if (r.ref_type) {
         def.ref_type = r.ref_type;
         def.options  = fieldOptions[String(id)] || [];
+        if (r.ref !== undefined) def.ref = r.ref;
       }
+      if (r.arr_type) { def.arr_type = r.arr_type; def.arr = r.arr || 0; }
       return def;
     });
   } else {
@@ -272,7 +285,8 @@ function parseReqs(data) {
         val:  r.value !== undefined ? r.value : '',
         order: parseInt(r.order || 0, 10)
       };
-      if (r.ref_type) { def.ref_type = r.ref_type; def.options = fieldOptions[String(id)] || []; }
+      if (r.ref_type) { def.ref_type = r.ref_type; def.options = fieldOptions[String(id)] || []; if (r.ref !== undefined) def.ref = r.ref; }
+      if (r.arr_type) { def.arr_type = r.arr_type; def.arr = r.arr || 0; }
       return def;
     }).sort(function(a, b) { return a.order - b.order; });
   }
@@ -309,13 +323,49 @@ function renderForm(data) {
   // Build fieldDefs
   fieldDefs = parseReqs(data);
 
-  // Render fields
+  // Split field list into tab groups at TAB_DELIMITER markers
+  var tabGroups = [];
+  var curGrp = { name: t9n('[RU]Реквизиты[EN]Fields'), fields: [] };
+  tabGroups.push(curGrp);
+  fieldDefs.forEach(function(f) {
+    if (f.base === 'TAB_DELIMITER') {
+      curGrp = { name: f.name || '—', fields: [] };
+      tabGroups.push(curGrp);
+    } else {
+      curGrp.fields.push(f);
+    }
+  });
+
+  // Render fields (with tabs if multiple groups)
   var $ff = $('#form-fields');
   $ff.empty();
   if (fieldDefs.length === 0) {
-    $ff.html('<div class="col-12 text-muted">' + t9n('[RU]Нет полей[EN]No fields') + '</div>');
+    $ff.append('<div class="col-12 text-muted">' + t9n('[RU]Нет полей[EN]No fields') + '</div>');
+  } else if (tabGroups.length > 1) {
+    // Build tab nav
+    var tabNav = '<ul class="nav nav-tabs mb-2 form-tabs">';
+    tabGroups.forEach(function(g, i) {
+      tabNav += '<li class="nav-item"><a class="nav-link' + (i === 0 ? ' active' : '') + '" href="#tab-' + i + '">' + escHtml(g.name) + '</a></li>';
+    });
+    tabNav += '</ul>';
+    $ff.append(tabNav);
+    $ff.on('click', '.form-tabs a.nav-link', function(e) {
+      e.preventDefault();
+      var idx = $(this).attr('href').replace('#tab-', '');
+      $ff.find('.form-tabs a.nav-link').removeClass('active');
+      $(this).addClass('active');
+      $ff.find('[data-tab-idx]').hide();
+      $ff.find('[data-tab-idx="' + idx + '"]').show();
+    });
+    tabGroups.forEach(function(g, i) {
+      var $tab = $('<div class="form-row no-gutters" data-tab-idx="' + i + '">');
+      if (i !== 0) $tab.css('display', 'none');
+      g.fields.forEach(function(f) { var h = renderField(f); if (h) $tab.append(h); });
+      $ff.append($tab);
+    });
   } else {
-    fieldDefs.forEach(function(f) { $ff.append(renderField(f)); });
+    // Single group — render directly
+    tabGroups[0].fields.forEach(function(f) { var h = renderField(f); if (h) $ff.append(h); });
   }
 
   // Init select2 for reference fields
@@ -445,6 +495,6 @@ if (isNew) {
 </script>
 <script src="/js/popper.min.js"></script>
 <script src="/js/bootstrap.min.js"></script>
-<script src="/js/nav.js"></script>
+<script>if (!inIframe) { var _ns=document.createElement('script'); _ns.src='/js/nav.js'; document.body.appendChild(_ns); }</script>
 </body>
 </html>

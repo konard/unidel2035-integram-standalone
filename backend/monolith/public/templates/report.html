@@ -87,12 +87,11 @@ byId('xlsx-link').onclick = function(){
 };
 
 function loadReport() {
-  var url = '/'+db+'/report/'+objId+'?JSON';
-  var qp = [];
-  for (var k in filterVals) { if(filterVals[k]!==undefined&&filterVals[k]!=='') qp.push(k+'='+encodeURIComponent(filterVals[k])); }
-  if (qp.length) url += '&'+qp.join('&');
+  var url = '/'+db+'/report/'+objId;
+  var body = new URLSearchParams({ _xsrf: xsrf });
+  for (var k in filterVals) { if(filterVals[k]!==undefined&&filterVals[k]!=='') body.append(k, filterVals[k]); }
 
-  fetch(url, {credentials:'include'})
+  fetch(url, {method:'POST', credentials:'include', body:body})
     .then(function(r){
       if(r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
       return r.json();
@@ -128,12 +127,12 @@ function renderReport(data) {
   // filter row (hidden by default)
   html += '<tr id="filter_row" style="display:none">';
   cols.forEach(function(c, i){
-    var cid = c.id||String(i);
-    var fr = filterVals['FR_'+cid]||'';
-    var to = filterVals['TO_'+cid]||'';
+    var ckey = (c.name||String(i)).replace(/ /g,'_');
+    var fr = filterVals['FR_'+ckey]||'';
+    var to = filterVals['TO_'+ckey]||'';
     html += '<td style="padding:0;text-align:center">'
-      + '<input type="text" name="FR_'+cid+'" value="'+escHtml(fr)+'" size="2" id="FR_'+cid+'" oninput="adjustInput(\'FR_'+cid+'\')">'
-      + '-<input type="text" name="TO_'+cid+'" value="'+escHtml(to)+'" size="2" id="TO_'+cid+'" oninput="adjustInput(\'TO_'+cid+'\')">'
+      + '<input type="text" name="FR_'+ckey+'" value="'+escHtml(fr)+'" size="2" id="FR_'+ckey+'" oninput="adjustInput(\'FR_'+ckey+'\')">'
+      + '-<input type="text" name="TO_'+ckey+'" value="'+escHtml(to)+'" size="2" id="TO_'+ckey+'" oninput="adjustInput(\'TO_'+ckey+'\')">'
       + '</td>';
   });
   html += '</tr>';

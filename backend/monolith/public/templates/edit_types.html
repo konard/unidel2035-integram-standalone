@@ -160,22 +160,24 @@ function loadTypes() {
       if (Array.isArray(items)) {
         items.forEach(function(item) {
           if (t[item.id] === undefined)
-            t[item.id] = { t: item.type || 0, r: item.orig || '', u: item.unique ? 1 : 0, v: item.val || '' };
+            // r: if item.type is a user type (not a known primitive in bt{}), this is a reference definition
+            t[item.id] = { t: item.type || 0, r: (item.type && !bt[item.type]) ? String(item.type) : '', u: item.unique ? 1 : 0, v: item.val || '' };
           if (item.reqs && item.reqs.length) {
             item.reqs.forEach(function(req) {
               var ord = req.num || req.ord || req.id;
               if (ord !== undefined && ord !== '') {
                 if (r[item.id] === undefined) r[item.id] = {};
+                // req.ref_id = direct reqs.t (when field is a reference); req.orig = reqs.t (non-reference)
+                var rqT = req.ref_id || req.orig || 0;
                 r[item.id][ord] = {
                   i: req.id,
-                  t: req.type || req.t || 0,
+                  t: rqT,
                   a: req.attrs || req.a || '',
-                  r: req.ref || req.r || ''
+                  r: req.ref || ''
                 };
-                // Ensure the requisite type is also in t{}
-                var rqType = req.type || req.t || 0;
-                if (t[rqType] === undefined && rqType) {
-                  t[rqType] = { t: 0, r: '', u: 0, v: String(rqType) };
+                // Ensure the requisite type is in t{} (may be skipped by metadata as req-only type)
+                if (t[rqT] === undefined && rqT) {
+                  t[rqT] = { t: req.ref || req.type || 0, r: req.ref ? String(req.ref) : '', u: 0, v: String(rqT) };
                 }
               }
             });
@@ -825,6 +827,22 @@ document.querySelectorAll('a[href="/app/templates/main.html?db=__DB__"]').forEac
   el.href = '/app/templates/main.html?db=' + encodeURIComponent(db);
 });
 localize();
+</script>
+
+<!-- Hidden POST form used by js.js post() helper -->
+<form method="POST" id="post" action="/"><input type="hidden" name="_xsrf" id="xsrf-post" value=""></form>
+<script>
+var _xsrfPost = localStorage.getItem(db + '_xsrf') || '';
+if (document.getElementById('xsrf-post')) document.getElementById('xsrf-post').value = _xsrfPost;
+// patch post() to use correct base URL
+var _origPost = window.post;
+window.post = function(a) {
+  var frm = document.getElementById('post');
+  if (!frm) return;
+  frm.action = '/' + db + '/' + a;
+  frm.submit();
+  if (typeof event !== 'undefined' && event && event.preventDefault) event.preventDefault();
+};
 </script>
 </div><!-- /content -->
 </body>
