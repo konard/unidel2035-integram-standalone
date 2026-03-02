@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Report</title>
-<link rel="stylesheet" href="/css/bootstrap337.min.css">
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+<link rel="stylesheet" href="/css/css.css">
 <script>
 var p = new URLSearchParams(location.search);
 var db     = p.get('db')     || (window.parent && window.parent.db) || localStorage.getItem('_db') || '';
@@ -17,10 +18,10 @@ function getCookie(n){var m=document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+
 function t9n(s){var locale=getCookie(db+'_locale')||'RU';var m=s.match('\\['+locale+'\\]([^\\[]+)');return m?m[1]:s.replace(/\[[A-Z]+\]/g,'').trim();}
 function escHtml(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 </script>
-<script src="/js/jquery-3.5.1.slim.min.js"></script>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
 <script src="/js/js.js"></script>
 <style>
-body{font-family:Verdana,Tahoma,sans-serif;font-size:13px;line-height:normal;padding:2px}
+body{font-family:Verdana,Tahoma,sans-serif;font-size:13px;line-height:normal;padding:2px;padding-top:58px}
 .table-condensed td,.table-condensed th{padding:2px 4px!important}
 #filter_row td input{font-size:11px;}
 </style>
@@ -200,5 +201,8 @@ document.addEventListener('keydown', function(e){
 // ---- init ----
 loadReport();
 </script>
+<script src="/js/popper.min.js"></script>
+<script src="/js/bootstrap.min.js"></script>
+<script src="/js/nav.js"></script>
 </body>
 </html>

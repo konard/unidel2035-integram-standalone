@@ -61,7 +61,7 @@ function t9n(s){
 </style>
 </head>
 <body>
-<div class="dictionary" style="padding:20px">
+<div class="dictionary" style="padding:20px;margin-top:56px">
   <div class="dict-title-box">
     <div class="dict-title"><t9n>[RU]Таблицы[EN]Tables</t9n></div>&nbsp;
     <a class="dict-new-href" id="createBtn" onclick="toggleCreateTable()" style="display:none">
@@ -238,5 +238,6 @@ fetch('/'+db+'/_dict?JSON',{credentials:'include'})
     renderTables();
   }).catch(function(e){console.error('dict',e);});
 </script>
+<script src="/js/nav.js"></script>
 </body>
 </html>
