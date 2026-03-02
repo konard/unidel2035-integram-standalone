@@ -20,6 +20,7 @@
 import '../src/config/env.js';
 
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'path';
@@ -36,6 +37,7 @@ const app = express();
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
+app.use(compression());
 app.use(cors({ origin: '*', credentials: true }));
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
