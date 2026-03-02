@@ -67,6 +67,7 @@
     "dronedoc"
   ],
   "dependencies": {
+    "compression": "^1.7.4",
     "@anthropic-ai/sdk": "^0.32.1",
     "@bitwarden/sdk-napi": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.20.0",

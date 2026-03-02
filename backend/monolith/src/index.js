@@ -4,6 +4,7 @@
 import './config/env.js';
 
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import http from 'http';
 import https from 'https';
@@ -261,6 +262,8 @@ class IntegramBackend {
    */
   setupExpress() {
     this.app = express();
+
+    this.app.use(compression());
 
     // ========================================
     // Security Middleware (Issue #77, #1890)
