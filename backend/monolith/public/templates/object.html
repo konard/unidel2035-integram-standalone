@@ -136,7 +136,7 @@ function renderData(data) {
       newCols = cols.length ? cols : Object.keys(rows[0]).map(function(k){ return {id:k,name:k,base:'3'}; });
     }
   } else {
-    rows = data.data || data.rows || data.objects || [];
+    rows = data.data || data.rows || data.objects || data.object || [];
     if (data.cols || data.columns) newCols = data.cols || data.columns;
     if (data.title || data.name) setTitle(data.title || data.name);
     if (data.create_granted !== undefined) createGranted = !!data.create_granted;
