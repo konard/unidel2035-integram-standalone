@@ -1,468 +1,336 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
-        integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">
-  <link rel="stylesheet" href="/css/css.css">
-  <link rel="stylesheet" href="/css/select2.min.css">
-  <title>Integram</title>
-  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
-  <script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
-  <script>
-    // ── Session init ──────────────────────────────────────────────────────────
-    var p = new URLSearchParams(location.search);
-    var db    = p.get('db')   || localStorage.getItem('_db') || '';
-    var xsrf  = localStorage.getItem(db + '_xsrf')   || '';
-    var token = localStorage.getItem(db + '_token')  || '';
-    var uid   = localStorage.getItem(db + '_userId') || '';
-    var id    = parseInt(p.get('type')) || 0;   // type id
-    var F_U   = parseInt(p.get('up'))   || 0;   // parent object id
-    var action = '';
-    var menu = [];
-    if (!token) location.href = '/app/templates/login.html?db=' + encodeURIComponent(db);
-  </script>
-  <script src="/js/js.js"></script>
-  <style>
-    th { font-weight: normal; position: relative; }
-    .ms-link { color: #333; }
-    td.fixed-td div, td.fixed-tr div { max-height: 1rem; }
-    .fixed-td {
-      max-width: 180px; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap; padding: 2px 1px 0 1px !important;
-    }
-    .fixed-tr {
-      max-width: 30vw; overflow: hidden; text-overflow: ellipsis;
-      white-space: nowrap; padding: 2px 1px 0 1px !important;
-    }
-    .edit {
-      border: 1px solid lightgray; border-radius: 5px; width: max-content;
-      max-width: 266px; padding: 15px; list-style-type: none; margin-bottom: 0;
-    }
-    .edit-table, .edit-column { position: fixed; background-color: #fff; }
-    .edit li:hover { box-shadow: 5px 5px 20px 5px rgba(169,176,181,.2); border-radius: 5px; }
-    .edit a { color: #777; font-size: 12px; text-decoration: none; }
-    .edit li { padding: 4px; margin-bottom: 10px; }
-    .th-plus { cursor: pointer; font-size: 24px; font-weight: 600; text-align: center; width: 70px; }
-    .table thead th { border: 1px solid #dee2e6; vertical-align: middle; text-align: center; padding-top: 0; padding-bottom: 0; }
-    .table td { border: 1px solid #dee2e6; }
-    .edit-btn { position: absolute; right: 3px; top: 0; display: inline-flex; }
-    .edit-btn-column:hover, .edit-btn-table:hover { cursor: pointer; background-color: #e7e7e7; border-radius: 6px; }
-    .filter-row input { width: 100%; box-sizing: border-box; border: 1px solid #ccc; border-radius: 3px; padding: 1px 3px; }
-    .filter-row { display: none; }
-    #tb { transition: font-size .15s; }
-    .i-edit { display: none; }
-    tr:hover .i-edit { display: inline-flex; }
-    .pagination-wrap { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
-    #loading { display: none; text-align: center; padding: 20px; }
-    .sort-asc::after { content: ' ▲'; font-size: .7em; }
-    .sort-desc::after { content: ' ▼'; font-size: .7em; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Object list</title>
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+<link rel="stylesheet" href="/css/css.css">
+<link href="/css/select2.min.css" rel="stylesheet">
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+<script src="/js/select2.min.js"></script>
+<script>
+var p = new URLSearchParams(location.search);
+var db      = p.get('db')   || (window.parent && window.parent.db) || localStorage.getItem('_db') || '';
+var typeId  = p.get('type') || p.get('id') || '';
+var upId    = p.get('up')   || '0';
+var token   = localStorage.getItem(db+'_token') || '';
+var xsrf    = localStorage.getItem(db+'_xsrf')  || '';
+var uid     = localStorage.getItem(db+'_userId')|| '';
+var user    = localStorage.getItem(db+'_user')  || '';
+var role    = localStorage.getItem(db+'_role')  || '';
+if (!token) { location.href = 'login.html?db='+encodeURIComponent(db); }
+function byId(i){return document.getElementById(i);}
+function getCookie(n){var m=document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+)');return m?decodeURIComponent(m[2]):null;}
+function t9n(s){var locale=getCookie(db+'_locale')||'RU';var m=s.match('\\['+locale+'\\]([^\\[]+)');return m?m[1]:s.replace(/\[[A-Z]+\]/g,'').trim();}
+function escHtml(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+</script>
+<style>
+th{font-weight:normal;position:relative;}
+.table thead th{border:1px solid #dee2e6;vertical-align:middle;text-align:center;padding-top:4px;padding-bottom:4px;white-space:nowrap;}
+.table td{border:1px solid #dee2e6;vertical-align:middle;}
+.fixed-td,.fixed-tr{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 4px!important;}
+.data-row:hover{background-color:#fafafa;}
+.breadcrumb{padding:2px;margin:0;}
+.controls{display:flex;align-items:center;padding:4px 8px;flex-wrap:wrap;gap:4px;position:sticky;top:0;background:#fff;z-index:10;border-bottom:1px solid #dee2e6;}
+.controls a{cursor:pointer;padding:4px 6px;display:inline-flex;align-items:center;gap:2px;color:#333;text-decoration:none;border-radius:4px;}
+.controls a:hover{background-color:#f0f0f0;}
+.controls a small{font-size:11px;}
+.filter-row input{width:100%;border:1px solid #ccc;padding:1px 4px;font-size:12px;}
+.btn-xs{padding:1px 5px;line-height:1.5;border-radius:3px;}
+#warn{display:none;position:sticky;top:40px;z-index:100;}
+.edit-inline-td{padding:0!important;}
+.inline-edit{border:0!important;outline:none;width:100%;padding:2px 4px;}
+.saving{background-color:#fff5f5;}
+.pager{display:flex;align-items:center;gap:8px;padding:6px 8px;}
+#loading-row td{text-align:center;color:#999;padding:16px;}
+</style>
 </head>
 <body>
-<!-- ── Navbar ──────────────────────────────────────────────────────────────── -->
-<nav id="nav" class="navbar shadow-sm navbar-expand-562 fixed-top dark navbar-fixed-top">
-  <a id="brand" class="navbar-brand" href="/app/templates/main.html?db=">
-    <img src="/i/lamp.png" width="30" loading="lazy"/>
-  </a>
-  <button onclick="burgerClick(this)" class="navbar-toggler expand-menu" type="button"
-          data-target="#navbarSupportedContent" aria-controls="navbarSupportedContent"
-          aria-expanded="false" aria-label="Toggle navigation">
-    <span class="navbar-toggler-icon">
-      <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 16 16" class="icon"
-           style="shape-rendering:geometricprecision;margin-top:0px;">
-        <path fill-rule="evenodd" fill="currentColor"
-              d="M2,12 C2,11.4477153 2.45576096,11 3.00247329,11 L12.9975267,11 C13.5511774,11 14,11.4438648 14,12 C14,12.5522847 13.544239,13 12.9975267,13 L3.00247329,13 C2.44882258,13 2,12.5561352 2,12 Z M2,8 C2,7.44771525 2.45576096,7 3.00247329,7 L12.9975267,7 C13.5511774,7 14,7.44386482 14,8 C14,8.55228475 13.544239,9 12.9975267,9 L3.00247329,9 C2.44882258,9 2,8.55613518 2,8 Z M2,4 C2,3.44771525 2.45576096,3 3.00247329,3 L12.9975267,3 C13.5511774,3 14,3.44386482 14,4 C14,4.55228475 13.544239,5 12.9975267,5 L3.00247329,5 C2.44882258,5 2,4.55613518 2,4 Z"/>
-      </svg>
-    </span>
-  </button>
-  <div class="collapse navbar-collapse" id="navbarSupportedContent">
-    <ul id="navbar-list" class="navbar-nav">
-      <div id="navlist" class="hidden">
-        <li class="nav-item"><a class="nav-link" id="list:id:" href="/app/templates/object.html?db=__DB__&amp;type=:href:">:name:</a></li>
-      </div>
-      <div id="extralist" class="hidden">
-        <li id="dropdown-link" class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle expand-menu" role="button" data-toggle="dropdown">Еще</a>
-          <div class="dropdown-menu" id="dropdown-list">
-            <a class="dropdown-item" href="/app/templates/object.html?db=__DB__&amp;type=:href:">:name:</a>
-          </div>
-        </li>
-      </div>
-    </ul>
-  </div>
-  <div class="right-block" id="right_block">
-    <div class="nav-item dropdown">
-      <a class="user-link dropdown-toggle user-margin" href="#" role="button" data-toggle="dropdown">
-        <svg height="30" viewBox="0 0 18 20" fill="white" xmlns="http://www.w3.org/2000/svg">
-          <path d="M17 19V17C17 15.9391 16.5786 14.9217 15.8284 14.1716C15.0783 13.4214 14.0609 13 13 13H5C3.93913 13 2.92172 13.4214 2.17157 14.1716C1.42143 14.9217 1 15.9391 1 17V19M13 5C13 7.20914 11.2091 9 9 9C6.79086 9 5 7.20914 5 5C5 2.79086 6.79086 1 9 1C11.2091 1 13 2.79086 13 5Z"
-                stroke="#fafafa" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </a>
-      <div class="dropdown-menu dropdown-menu-right shadow">
-        <a class="dropdown-item" onclick="doExit()"><t9n>[RU]Выход[EN]Exit</t9n></a>
-      </div>
-    </div>
-  </div>
+<div class="alert alert-warning" id="warn" onclick="this.style.display='none'"></div>
+
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb pl-2 pt-1 pb-1">
+    <li class="breadcrumb-item"><a id="bc-db" href="dict.html?db="></a></li>
+    <li class="breadcrumb-item"><a id="bc-dict" href="dict.html?db="><t9n>[RU]Таблицы[EN]Tables</t9n></a></li>
+    <li class="breadcrumb-item active" id="bc-title" aria-current="page"></li>
+  </ol>
 </nav>
 
-<!-- ── Page content ───────────────────────────────────────────────────────── -->
-<div class="content" style="padding-top:50px;">
+<div class="controls t9n" id="controls">
+  <a id="btn-create" title="Create" onclick="addRec()">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 2C8.27614 2 8.5 2.22386 8.5 2.5V7.5H13.5C13.7761 7.5 14 7.72386 14 8C14 8.27614 13.7761 8.5 13.5 8.5H8.5V13.5C8.5 13.7761 8.27614 14 8 14C7.72386 14 7.5 13.7761 7.5 13.5V8.5H2.5C2.22386 8.5 2 8.27614 2 8C2 7.72386 2.22386 7.5 2.5 7.5H7.5V2.5C7.5 2.22386 7.72386 2 8 2Z" fill="#212529"/></svg>
+    <small><t9n>[RU]Добавить[EN]Create</t9n></small>
+  </a>
+  <a title="Search" onclick="toggleFilter()">
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M16.43 16.43L13.32 13.32M15 9.29C15 12.44 12.44 15 9.29 15C6.13 15 3.57 12.44 3.57 9.29C3.57 6.13 6.13 3.57 9.29 3.57C12.44 3.57 15 6.13 15 9.29Z" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <small><t9n>[RU]Поиск[EN]Search</t9n></small>
+  </a>
+  <a title="Clear filter" id="btn-clear-filter" onclick="clearFilter()" style="display:none">
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M16.43 16.43L13.32 13.32M15 9.29C15 12.44 12.44 15 9.29 15C6.13 15 3.57 12.44 3.57 9.29C3.57 6.13 6.13 3.57 9.29 3.57C12.44 3.57 15 6.13 15 9.29Z" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 7L12 12M12 7L7 12" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <small><t9n>[RU]Очистить[EN]Clear</t9n></small>
+  </a>
+  <a title="Refresh" onclick="loadData()">
+    <svg width="16" height="16" viewBox="0 0 18 18" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M9 3.38C6.9 3.38 5.02 4.49 3.94 6.17L5.48 6.17V7.17H2.5C2.22 7.17 2 6.95 2 6.67V3.69H3V5.16C4.27 3.21 6.49 1.88 9 1.88C12.87 1.88 16 5.01 16 8.88C16 12.75 12.87 15.88 9 15.88C5.13 15.88 2 12.75 2 8.88H3C3 12.2 5.68 14.88 9 14.88C12.32 14.88 15 12.2 15 8.88C15 5.56 12.32 2.88 9 2.88L9 3.38Z" fill="#212529"/></svg>
+    <small><t9n>[RU]Обновить[EN]Refresh</t9n></small>
+  </a>
+  <div style="flex:1"></div>
+  <span id="pager-info" style="font-size:12px;color:#999;"></span>
+  <a id="btn-prev" onclick="prevPage()" style="display:none" title="Prev">&laquo;</a>
+  <a id="btn-next" onclick="nextPage()" style="display:none" title="Next">&raquo;</a>
+</div>
 
-  <!-- Breadcrumb -->
-  <nav aria-label="breadcrumb">
-    <ol class="breadcrumb pl-2">
-      <li class="breadcrumb-item"><a id="bc-home" href="/app/templates/main.html?db="></a></li>
-      <li class="breadcrumb-item parent-table" style="display:none"><a id="bc-parent-table" href="#"></a></li>
-      <li class="breadcrumb-item parent-object" style="display:none"><a id="bc-parent-obj" href="#"></a></li>
-      <li class="breadcrumb-item active" id="bc-current" aria-current="page">…</li>
-    </ol>
-  </nav>
-
-  <div class="alert alert-warning hidden" id="warn" role="alert" onclick="$(this).addClass('hidden')"></div>
-
-  <!-- Controls toolbar -->
-  <div id="controls" style="z-index:99;position:relative;" class="controls t9n">
-    <div class="controls-left">
-      <a class="create-btn" onclick="addRec()" title="<t9n>[RU]Добавить запись[EN]Create a record</t9n>">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path fill-rule="evenodd" clip-rule="evenodd" d="M8 2C8.13261 2 8.25979 2.05268 8.35355 2.14645C8.44732 2.24021 8.5 2.36739 8.5 2.5V7.5H13.5C13.6326 7.5 13.7598 7.55268 13.8536 7.64645C13.9473 7.74021 14 7.86739 14 8C14 8.13261 13.9473 8.25979 13.8536 8.35355C13.7598 8.44732 13.6326 8.5 13.5 8.5H8.5V13.5C8.5 13.6326 8.44732 13.7598 8.35355 13.8536C8.25979 13.9473 8.13261 14 8 14C7.86739 14 7.74021 13.9473 7.64645 13.8536C7.55268 13.7598 7.5 13.6326 7.5 13.5V8.5H2.5C2.36739 8.5 2.24021 8.44732 2.14645 8.35355C2.05268 8.25979 2 8.13261 2 8C2 7.86739 2.05268 7.74021 2.14645 7.64645C2.24021 7.55268 2.36739 7.5 2.5 7.5H7.5V2.5C7.5 2.36739 7.55268 2.24021 7.64645 2.14645C7.74021 2.05268 7.86739 2 8 2Z" fill="#212529"/>
-        </svg>
-        <small class="tips-text"><font color="#1A1A1A"><t9n>[RU]Добавить[EN]Create</t9n></font></small>
-      </a>
-      <a onclick="toggleFilter()" title="<t9n>[RU]Показать / применить фильтры[EN]Show / apply filters</t9n>">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M16.4286 16.4286L13.3214 13.3214M15 9.2857C15 12.4416 12.4416 15 9.2857 15C6.12978 15 3.57141 12.4416 3.57141 9.2857C3.57141 6.12978 6.12978 3.57141 9.2857 3.57141C12.4416 3.57141 15 6.12978 15 9.2857Z" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <small class="tips-text"><font color="#1A1A1A"><t9n>[RU]Искать[EN]Search</t9n></font></small>
-      </a>
-      <a onclick="clearFilters()" id="clearSearch" style="display:none" title="<t9n>[RU]Очистить фильтр[EN]Clear filter</t9n>">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M16.4286 16.4286L13.3214 13.3214M15 9.2857C15 12.4416 12.4416 15 9.2857 15C6.12978 15 3.57141 12.4416 3.57141 9.2857C3.57141 6.12978 6.12978 3.57141 9.2857 3.57141C12.4416 3.57141 15 6.12978 15 9.2857Z" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/>
-          <path d="M7 7L12 12M12 7L7 12" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <small class="tips-text"><font color="#1A1A1A"><t9n>[RU]Очистить[EN]Clear</t9n></font></small>
-      </a>
-      <a onclick="sendForm()" title="<t9n>[RU]Обновить[EN]Refresh</t9n>">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path fill-rule="evenodd" clip-rule="evenodd" d="M9.00001 3.37664C7.25401 3.37664 5.69251 4.17201 4.66088 5.42188C4.61482 5.48159 4.55722 5.53143 4.49151 5.56843C4.42579 5.60543 4.35331 5.62883 4.27837 5.63726C4.20343 5.64569 4.12756 5.63896 4.05528 5.61747C3.98299 5.59599 3.91576 5.56019 3.85759 5.5122C3.79941 5.46421 3.75148 5.40502 3.71664 5.33813C3.68181 5.27125 3.66077 5.19805 3.6548 5.12287C3.64882 5.0477 3.65802 4.97209 3.68185 4.90054C3.70568 4.82899 3.74365 4.76296 3.79351 4.70638C4.61722 3.7091 5.71005 2.9694 6.94201 2.57525C8.17396 2.1811 9.49321 2.14909 10.7428 2.48304C11.9925 2.81698 13.1199 3.50282 13.991 4.45898C14.8621 5.41515 15.4402 6.60139 15.6566 7.87663H14.5125C14.2528 6.60629 13.5623 5.46463 12.5579 4.64467C11.5534 3.82472 10.2966 3.37679 9.00001 3.37664Z" fill="#212529"/>
-        </svg>
-        <small class="tips-text"><font color="#1A1A1A"><t9n>[RU]Обновить[EN]Refresh</t9n></font></small>
-      </a>
-    </div>
-  </div>
-
-  <!-- Hidden form fields (filter state) -->
-  <form id="obj-form" style="display:none">
-    <input type="hidden" id="sort-col" name="sort_col" value="">
-    <input type="hidden" id="sort-dir" name="sort_dir" value="">
-    <input type="hidden" id="page-num" name="page_num" value="0">
-    <input type="hidden" id="lnx-val" name="lnx" value="">
-    <input type="hidden" id="full-val" name="full" value="">
-  </form>
-
-  <!-- Table -->
-  <div id="loading"><img src="/i/ajax.gif" alt="loading"><br><small>Загрузка…</small></div>
-  <div id="tb-wrap" style="overflow-x:auto;">
-    <table id="tb" class="table table-bordered table-sm" style="font-size:13px;">
-      <thead id="tb-head"></thead>
-      <tbody id="tb-body"></tbody>
-    </table>
-  </div>
-
-  <!-- Pagination -->
-  <div class="pagination-wrap" id="pagination"></div>
-
-</div><!-- /content -->
+<div style="overflow-x:auto;">
+  <table class="table table-sm table-hover" id="tb" style="font-size:13px;margin:0">
+    <thead id="tb-head"><tr></tr></thead>
+    <tbody id="tb-body">
+      <tr id="loading-row"><td colspan="99"><t9n>[RU]Загрузка...[EN]Loading...</t9n></td></tr>
+    </tbody>
+  </table>
+</div>
 
 <script src="/js/popper.min.js"></script>
-<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"
-        integrity="sha384-B4gt1jrGC7Jh4AgTPSdUtOBvfO8shuf57BaghqFfPlYxofvL8/KUEfYiJOMMV+rV" crossorigin="anonymous"></script>
-<script src="/js/select2.min.js"></script>
-<!-- Replace __DB__ BEFORE main.js captures the navlist template -->
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
-document.getElementById('brand').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
-document.getElementById('navlist').innerHTML =
-  document.getElementById('navlist').innerHTML.replace(/__DB__/g, encodeURIComponent(db));
-document.getElementById('extralist').innerHTML =
-  document.getElementById('extralist').innerHTML.replace(/__DB__/g, encodeURIComponent(db));
-</script>
-<script src="/js/main.js"></script>
-<script>
-localize();
-
-// ── State ────────────────────────────────────────────────────────────────────
-var typeInfo   = null;   // from GET /:db/_dict/:type?JSON
-var filterVals = {};     // col_id → {from, to}
-var sortCol    = '';
-var sortDir    = '';
-var pageNum    = 0;
-var PAGE_SIZE  = 50;
+// ---- state ----
+var cols = [], allData = [], limit = 50, offset = 0, filterVals = {}, sortCol = null, sortDir = 1;
+var totalRows = 0, typeName = '', typeBase = '', upField = null, createGranted = true;
 var filterVisible = false;
 
-// ── Navbar / breadcrumb ───────────────────────────────────────────────────────
-document.getElementById('bc-home').href = '/app/templates/main.html?db=' + encodeURIComponent(db);
-document.getElementById('bc-home').textContent = db.charAt(0).toUpperCase() + db.slice(1);
+// breadcrumb
+byId('bc-db').href = 'dict.html?db='+encodeURIComponent(db);
+byId('bc-db').textContent = db.charAt(0).toUpperCase()+db.slice(1);
+byId('bc-dict').href = 'dict.html?db='+encodeURIComponent(db);
 
-// Load menu for navbar
-fetch('/' + db + '/terms?JSON', { credentials: 'include' })
-  .then(function(r){ return r.json(); })
-  .then(function(terms) {
-    menu = terms.map(function(t){ return { href: t.id, name: t.name }; });
-    if (typeof resizeMutations === 'function') resizeMutations();
-  });
-
-// ── Align helper ─────────────────────────────────────────────────────────────
-function getAlign(typeCode) {
-  switch (String(typeCode)) {
-    case '13': case '14': return 'right';
-    case '11': case '20': case '9': return 'center';
-  }
-  return 'left';
+function setTitle(name) {
+  typeName = name || typeId;
+  byId('bc-title').textContent = typeName;
+  document.title = typeName;
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
-function init() {
-  if (!id) {
-    document.getElementById('tb-body').innerHTML = '<tr><td colspan="10" class="text-center text-muted">Укажите тип в URL (?type=...)</td></tr>';
+// ---- load ----
+function loadData() {
+  byId('tb-body').innerHTML = '<tr id="loading-row"><td colspan="99">'+t9n('[RU]Загрузка...[EN]Loading...')+'</td></tr>';
+  var url = '/'+db+'/object/'+typeId+'?JSON_DATA&LIMIT='+limit+'&OFFSET='+offset;
+  if (upId && upId !== '0') url += '&F_U='+encodeURIComponent(upId);
+  for (var k in filterVals) { if (filterVals[k]) url += '&F_'+k+'='+encodeURIComponent(filterVals[k]); }
+  if (sortCol !== null) url += '&SORT='+sortCol+'&DIR='+(sortDir===1?'ASC':'DESC');
+  fetch(url, {credentials:'include'})
+    .then(function(r){
+      if (r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
+      return r.json();
+    })
+    .then(function(data){
+      if (!data) return;
+      renderData(data);
+    })
+    .catch(function(e){ console.error('object load',e); byId('tb-body').innerHTML='<tr><td colspan="99" class="text-danger">Error: '+escHtml(String(e))+'</td></tr>'; });
+}
+
+function renderData(data) {
+  // data structure varies: may be array of rows, or object with .cols/.data/.title
+  var rows, newCols;
+  if (Array.isArray(data)) {
+    rows = data;
+    if (rows.length && typeof rows[0] === 'object') {
+      newCols = cols.length ? cols : Object.keys(rows[0]).map(function(k){ return {id:k,name:k,base:'3'}; });
+    }
+  } else {
+    rows = data.data || data.rows || data.objects || [];
+    if (data.cols || data.columns) newCols = data.cols || data.columns;
+    if (data.title || data.name) setTitle(data.title || data.name);
+    if (data.create_granted !== undefined) createGranted = !!data.create_granted;
+    if (typeof data.total !== 'undefined') totalRows = data.total;
+    if (data.up_field) upField = data.up_field;
+    if (data.role) { role = data.role; localStorage.setItem(db+'_role', role); }
+  }
+  if (newCols && newCols.length) cols = newCols;
+  if (!cols.length && rows.length && typeof rows[0]==='object') {
+    cols = Object.keys(rows[0]).filter(function(k){return k!='id';}).map(function(k){return {id:k,name:k,base:'3'};});
+  }
+  allData = rows;
+  if (typeof totalRows === 'undefined' || totalRows === 0) totalRows = rows.length;
+  renderHead();
+  renderBody(rows);
+  renderPager();
+}
+
+function renderHead() {
+  var $tr = $('#tb-head tr'); $tr.empty();
+  // edit column
+  $tr.append('<th style="width:28px">&nbsp;</th>');
+  cols.forEach(function(c, i) {
+    var th = document.createElement('th');
+    th.className = 'col-header';
+    th.style.cursor = 'pointer';
+    th.innerHTML = escHtml(c.name||c.id||String(c))+(sortCol===i?(sortDir===1?' &#9650;':' &#9660;'):'');
+    th.addEventListener('click', function(){ sortBy(i); });
+    $tr.append(th);
+  });
+  if (filterVisible) appendFilterRow();
+}
+
+function appendFilterRow() {
+  var $tr = $('<tr class="filter-row"></tr>');
+  $tr.append('<td></td>');
+  cols.forEach(function(c) {
+    var fid = 'f_'+c.id;
+    var val = filterVals[c.id] || '';
+    var td = document.createElement('td');
+    td.innerHTML = '<input type="text" value="'+escHtml(val)+'" data-col="'+escHtml(String(c.id))+'" onchange="filterChange(this)" style="width:100%;border:1px solid #ccc;font-size:11px;padding:1px 3px">';
+    $tr.append(td);
+  });
+  $('#tb-head').append($tr);
+}
+
+function filterChange(inp) {
+  var col = inp.getAttribute('data-col');
+  filterVals[col] = inp.value;
+}
+
+function renderBody(rows) {
+  var $tb = $('#tb-body'); $tb.empty();
+  if (!rows.length) {
+    $tb.html('<tr><td colspan="99" class="text-muted text-center py-3">'+t9n('[RU]Нет данных[EN]No data')+'</td></tr>');
     return;
   }
-  // Fetch type metadata (dict)
-  fetch('/' + db + '/_dict/' + id + '?JSON', { credentials: 'include' })
-    .then(function(r){ return r.json(); })
-    .then(function(dict) {
-      typeInfo = dict;
-      document.title = dict.name || 'Integram';
-      document.getElementById('bc-current').textContent = dict.name || String(id);
-
-      // Parent breadcrumb
-      if (F_U) {
-        var pbObj = document.getElementById('bc-parent-obj');
-        pbObj.textContent = 'Объект #' + F_U;
-        pbObj.href = '/app/templates/edit_obj.html?db=' + encodeURIComponent(db) + '&id=' + F_U;
-        pbObj.closest('li').style.display = '';
+  rows.forEach(function(row) {
+    var id = row.id || row.ID || '';
+    var $tr = $('<tr class="data-row"></tr>').attr('id', 'row-'+id);
+    // edit link cell
+    var editHref = 'edit_obj.html?db='+encodeURIComponent(db)+'&id='+encodeURIComponent(id)+'&up='+encodeURIComponent(typeId);
+    $tr.append('<td style="width:28px;padding:2px 4px;text-align:center"><a href="'+editHref+'" title="Edit"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M14 1L19 6L6 19H1V14L14 1Z" stroke="#aaa" stroke-linecap="round" stroke-linejoin="round"/></svg></a></td>');
+    cols.forEach(function(c) {
+      var cid = c.id || c;
+      var val = row[cid];
+      if (val === null || val === undefined) val = '';
+      var td = document.createElement('td');
+      td.className = 'fixed-td';
+      // determine alignment by base type
+      var base = c.base || c.type || '';
+      if (base==='13'||base==='14') td.style.textAlign='right';
+      else if (base==='11'||base==='9') td.style.textAlign='center';
+      // if value looks like an object (reference), try to show ref text
+      var display = '';
+      if (typeof val === 'object' && val !== null) {
+        display = val.val || val.name || val.text || JSON.stringify(val);
+      } else {
+        display = String(val);
       }
-
-      renderHead(dict.requisites || []);
-      loadData();
-    })
-    .catch(function(e){
-      showWarn('Ошибка загрузки структуры: ' + e.message);
+      if (display.length > 127) display = display.slice(0,127)+'…';
+      td.innerHTML = '<div title="'+escHtml(String(val))+'">'+escHtml(display)+'</div>';
+      td.style.cursor = 'pointer';
+      td.addEventListener('click', function(){ location.href = editHref; });
+      $tr.append(td);
     });
+    $tb.append($tr);
+  });
 }
 
-// ── Strip PHP directives from column val to get display name ─────────────────
-function colDisplayName(val) {
-  var s = String(val || '');
-  var aliasMatch = s.match(/:ALIAS=(.+?):/);
-  if (aliasMatch) return aliasMatch[1];
-  return s.replace(/:!NULL:/g, '').replace(/:MULTI:/g, '').replace(/\[TODAY\]/g, '').trim();
-}
-
-// ── Render table head ─────────────────────────────────────────────────────────
-function renderHead(reqs) {
-  var html = '<tr>';
-  // Edit button column
-  html += '<th style="width:30px;"></th>';
-  // Name column
-  html += '<th style="cursor:pointer;" data-col="0" onclick="sortBy(0)">' +
-          '<t9n>[RU]Наименование[EN]Name</t9n>' + sortIndicator(0) + '</th>';
-  // Requisites
-  reqs.forEach(function(r) {
-    html += '<th style="cursor:pointer;" data-col="' + r.id + '" onclick="sortBy(' + r.id + ')">' +
-            escHtml(colDisplayName(r.name)) + sortIndicator(r.id) + '</th>';
-  });
-  html += '</tr>';
-
-  // Filter row
-  var fhtml = '<tr class="filter-row" id="filter_row">';
-  fhtml += '<td></td>';
-  fhtml += '<td style="padding:1px;"><input type="text" placeholder="..." oninput="filterInput(0,this.value)" value="' +
-           escHtml(filterVals[0] || '') + '"></td>';
-  reqs.forEach(function(r) {
-    fhtml += '<td style="padding:1px;"><input type="text" placeholder="..." oninput="filterInput(' + r.id + ',this.value)" value="' +
-             escHtml(filterVals[r.id] || '') + '"></td>';
-  });
-  fhtml += '</tr>';
-
-  document.getElementById('tb-head').innerHTML = html + fhtml;
-
-  if (filterVisible) {
-    document.querySelectorAll('.filter-row').forEach(function(el){ el.style.display = ''; });
+function renderPager() {
+  var info = '';
+  if (totalRows > 0) {
+    var from = offset+1, to = Math.min(offset+limit, totalRows);
+    info = from+'-'+to+' / '+totalRows;
   }
+  byId('pager-info').textContent = info;
+  byId('btn-prev').style.display = offset > 0 ? '' : 'none';
+  byId('btn-next').style.display = (offset+limit < totalRows) ? '' : 'none';
 }
 
-// ── Sort indicator ────────────────────────────────────────────────────────────
-function sortIndicator(col) {
-  if (String(col) !== String(sortCol)) return '';
-  return sortDir === 'desc' ? ' ▼' : ' ▲';
-}
-
-function sortBy(col) {
-  if (String(col) === String(sortCol)) {
-    sortDir = (sortDir === 'asc' ? 'desc' : 'asc');
+function sortBy(i) {
+  if (sortCol === i) sortDir = -sortDir;
+  else { sortCol = i; sortDir = 1; }
+  offset = 0;
+  renderHead();
+  // client-side sort if all data loaded
+  if (allData.length <= limit) {
+    var cid = cols[i].id || cols[i];
+    var sorted = allData.slice().sort(function(a,b){
+      var av = a[cid]||'', bv = b[cid]||'';
+      if (typeof av === 'number' && typeof bv === 'number') return (av-bv)*sortDir;
+      return String(av).localeCompare(String(bv))*sortDir;
+    });
+    renderBody(sorted);
   } else {
-    sortCol = col;
-    sortDir = 'asc';
+    loadData();
   }
-  pageNum = 0;
-  renderHead(typeInfo ? (typeInfo.requisites || []) : []);
-  loadData();
-}
-
-// ── Filter ────────────────────────────────────────────────────────────────────
-var filterTimer = null;
-function filterInput(col, val) {
-  filterVals[col] = val;
-  clearTimeout(filterTimer);
-  filterTimer = setTimeout(function(){ pageNum = 0; loadData(); }, 400);
 }
 
 function toggleFilter() {
   filterVisible = !filterVisible;
-  document.querySelectorAll('.filter-row').forEach(function(el){
-    el.style.display = filterVisible ? '' : 'none';
-  });
-  document.getElementById('clearSearch').style.display = filterVisible ? '' : 'none';
+  renderHead();
+  if (filterVisible) byId('btn-clear-filter').style.display='';
 }
 
-function clearFilters() {
-  filterVals = {};
-  filterVisible = false;
-  document.querySelectorAll('.filter-row input').forEach(function(el){ el.value = ''; });
-  document.querySelectorAll('.filter-row').forEach(function(el){ el.style.display = 'none'; });
-  document.getElementById('clearSearch').style.display = 'none';
-  pageNum = 0;
+function clearFilter() {
+  filterVals = {}; filterVisible = false; offset = 0;
+  byId('btn-clear-filter').style.display='none';
+  renderHead(); loadData();
+}
+
+function prevPage() { offset = Math.max(0, offset-limit); loadData(); }
+function nextPage() { offset += limit; loadData(); }
+
+function applyFilter() {
+  offset = 0;
+  // collect filter values from inputs
+  document.querySelectorAll('.filter-row input').forEach(function(inp){
+    var col = inp.getAttribute('data-col');
+    filterVals[col] = inp.value;
+  });
   loadData();
 }
 
-// ── sendForm (legacy compat) ──────────────────────────────────────────────────
-function sendForm() { loadData(); }
+// filter search on Enter
+$(document).on('keydown', '.filter-row input', function(e){
+  if(e.keyCode===13) applyFilter();
+});
 
-// ── Load data ─────────────────────────────────────────────────────────────────
-function loadData() {
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('tb-wrap').style.opacity = '0.4';
-
-  var url = '/' + db + '/_list/' + id + '?JSON&up=' + F_U +
-            '&LIMIT=' + PAGE_SIZE + '&F=' + (pageNum * PAGE_SIZE);
-
-  // Sort
-  if (sortCol !== '') url += '&sort=' + sortCol + '&dir=' + (sortDir || 'asc');
-
-  // Filters
-  Object.keys(filterVals).forEach(function(k) {
-    if (filterVals[k]) url += '&f_' + k + '=' + encodeURIComponent(filterVals[k]);
-  });
-
-  fetch(url, { credentials: 'include' })
-    .then(function(r){ return r.json(); })
-    .then(function(res) {
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('tb-wrap').style.opacity = '1';
-
-      var rows = res.data || res;
-      var total = res.total || rows.length;
-      renderRows(rows);
-      renderPagination(total);
-    })
-    .catch(function(e) {
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('tb-wrap').style.opacity = '1';
-      showWarn('Ошибка загрузки данных: ' + e.message);
-    });
-}
-
-// ── Render rows ───────────────────────────────────────────────────────────────
-function renderRows(rows) {
-  var reqs = typeInfo ? (typeInfo.requisites || []) : [];
-  var html = '';
-
-  if (!rows || rows.length === 0) {
-    var colspan = reqs.length + 2;
-    html = '<tr><td colspan="' + colspan + '" class="text-center text-muted py-3">Нет данных</td></tr>';
-  } else {
-    rows.forEach(function(row) {
-      var editUrl = '/app/templates/edit_obj.html?db=' + encodeURIComponent(db) + '&id=' + row.id +
-                   '&type=' + id + '&up=' + F_U;
-      var childUrl = '/app/templates/object.html?db=' + encodeURIComponent(db) +
-                     '&type=' + id + '&up=' + row.id;
-      html += '<tr>';
-      // Edit/view button
-      html += '<td style="padding:1px 3px;white-space:nowrap;">' +
-              '<a href="' + editUrl + '" class="i-edit" title="Редактировать">' +
-              '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-              '<path d="M11.013 1.427a1.75 1.75 0 012.474 2.474L5.91 11.479l-2.396.296.296-2.396 7.203-7.952z" fill="#555"/>' +
-              '</svg></a></td>';
-      // Name cell
-      html += '<td class="fixed-td ms-link" style="text-align:left;">' +
-              '<a href="' + childUrl + '" class="ms-link">' + escHtml(row.val || '') + '</a></td>';
-      // Requisite cells
-      reqs.forEach(function(r) {
-        var val = '';
-        if (row.reqs && row.reqs[r.id] !== undefined) {
-          val = row.reqs[r.id];
-        } else if (row.ord && row.ord[r.id] !== undefined) {
-          val = row.ord[r.id];
-        }
-        var align = getAlign(r.type);
-        html += '<td class="fixed-td" style="text-align:' + align + ';">' + escHtml(String(val || '')) + '</td>';
-      });
-      html += '</tr>';
-    });
-  }
-
-  document.getElementById('tb-body').innerHTML = html;
-}
-
-// ── Pagination ────────────────────────────────────────────────────────────────
-function renderPagination(total) {
-  var totalPages = Math.ceil(total / PAGE_SIZE);
-  var html = '';
-  if (totalPages <= 1) { document.getElementById('pagination').innerHTML = ''; return; }
-
-  html += '<small class="text-muted">Стр. ' + (pageNum + 1) + ' из ' + totalPages + ' (всего ' + total + ')</small>';
-  if (pageNum > 0) {
-    html += '<button class="btn btn-sm btn-outline-secondary" onclick="gotoPage(' + (pageNum - 1) + ')">‹ Назад</button>';
-  }
-  if (pageNum < totalPages - 1) {
-    html += '<button class="btn btn-sm btn-outline-secondary" onclick="gotoPage(' + (pageNum + 1) + ')">Вперёд ›</button>';
-  }
-  document.getElementById('pagination').innerHTML = html;
-}
-
-function gotoPage(n) { pageNum = n; loadData(); }
-
-// ── Add record ────────────────────────────────────────────────────────────────
 function addRec() {
-  location.href = '/app/templates/edit_obj.html?db=' + encodeURIComponent(db) +
-                  '&type=' + id + '&up=' + F_U + '&new=1';
+  location.href = 'edit_obj.html?db='+encodeURIComponent(db)+'&id=new&up='+encodeURIComponent(typeId);
 }
 
-// ── Warn ──────────────────────────────────────────────────────────────────────
+function deleteRec(id) {
+  if (!confirm(t9n('[RU]Удалить запись #[EN]Delete record #')+id+'?')) return;
+  fetch('/'+db+'/_m_del/'+id+'?JSON', {method:'POST', credentials:'include',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'_xsrf='+encodeURIComponent(xsrf)})
+  .then(function(r){return r.json();})
+  .then(function(j){
+    if(j.id||j.ok||j.msg&&j.msg.indexOf('[err')===-1){
+      $('#row-'+id).remove();
+      totalRows = Math.max(0, totalRows-1);
+      renderPager();
+    } else {
+      showWarn(j.msg||'Error deleting');
+    }
+  }).catch(function(e){showWarn(String(e));});
+}
+
 function showWarn(msg) {
-  var el = document.getElementById('warn');
-  el.textContent = msg;
-  el.classList.remove('hidden');
+  var w = byId('warn'); w.textContent = msg; w.style.display='';
+  setTimeout(function(){w.style.display='none';},5000);
 }
 
-// ── Escape HTML ───────────────────────────────────────────────────────────────
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ── Exit ──────────────────────────────────────────────────────────────────────
-function doExit() {
-  localStorage.removeItem(db + '_xsrf');
-  localStorage.removeItem(db + '_token');
-  localStorage.removeItem(db + '_userId');
-  document.cookie = encodeURIComponent(db) + '=; path=/; max-age=0';
-  location.href = '/app/templates/login.html?db=' + encodeURIComponent(db);
-}
-
-// ── Start ─────────────────────────────────────────────────────────────────────
-init();
+// ---- init ----
+// load type metadata first, then data
+fetch('/'+db+'/object/'+typeId+'?JSON',{credentials:'include'})
+  .then(function(r){
+    if(r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
+    return r.json();
+  })
+  .then(function(data){
+    if(!data)return;
+    // set title from metadata
+    if(data.title||data.name||data.type_name)setTitle(data.title||data.name||data.type_name);
+    renderData(data);
+  })
+  .catch(function(e){
+    console.error('object init',e);
+    // fallback: try JSON_DATA endpoint directly
+    loadData();
+  });
 </script>
 </body>
 </html>

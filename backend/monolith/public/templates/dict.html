@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tables</title>
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+<link rel="stylesheet" href="/css/css.css">
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+<script src="https://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
+<script>
+var p = new URLSearchParams(location.search);
+var db = p.get('db') || (window.parent && window.parent.db) || localStorage.getItem('_db') || '';
+var token = localStorage.getItem(db+'_token') || '';
+var xsrf  = localStorage.getItem(db+'_xsrf') || '';
+var uid   = localStorage.getItem(db+'_userId') || '';
+var user  = localStorage.getItem(db+'_user') || '';
+var role  = localStorage.getItem(db+'_role') || '';
+if (!token) { location.href = 'login.html?db='+encodeURIComponent(db); }
+function byId(i){return document.getElementById(i);}
+function getCookie(n){var m=document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+)');return m?decodeURIComponent(m[2]):null;}
+function t9n(s){
+  var locale = getCookie(db+'_locale') || 'RU';
+  var m = s.match('\\['+locale+'\\]([^\\[]+)');
+  return m ? m[1] : s.replace(/\[[A-Z]+\]/g,'').trim();
+}
+</script>
+<style>
+.dict-title{max-width:900px;font-size:45px;color:#1283da;font-weight:100;}
+#addForm{max-width:900px;}
+.dict-list{max-width:900px;padding:3px;display:flex;flex-wrap:wrap;padding-bottom:35px;user-select:none;}
+.dict-item{font:400 14px;padding:10px;margin:7px;border-radius:5px;cursor:pointer;text-align:center;border:1px solid #CCDFFF;}
+.dict-exist{color:#4675AC;}
+.dict-new{color:rgb(102 188 254);width:40px;height:40px;border:1px solid #a2ceef;font-size:35px;font-weight:lighter;border-radius:3px;line-height:0.6;text-align:center;display:flex;margin-left:10px;padding:8px 7px 7px 7px;}
+.dict-new:hover{background:linear-gradient(92.58deg,rgb(65,156,225) 4.59%,rgb(18,131,218) 90.68%);}
+.dict-new svg{fill:#a2ceef;} .dict-new:hover svg{fill:#fff;}
+.dict-href{flex-grow:1;} .dict-href:hover{text-decoration:none;}
+.dict-item:hover{background:linear-gradient(92.58deg,#419CE1 4.59%,#1283DA 90.68%);box-shadow:0px 5px 7px rgba(0,97,254,.21);color:#fff;}
+.dict-item:active{border:1px solid #1283da;background:linear-gradient(to right,#0E69AE,#0E69AE);}
+.dictionary__search{padding-left:10px;align-self:center;margin-left:auto;width:300px;}
+@media(max-width:560px){.dictionary__search{padding-left:10px;margin-left:0;margin-bottom:10px;width:300px;}}
+.dictionary__search input{border:0;padding-left:25px;border-bottom:1px solid #CCDFFF;line-height:34px;font-size:14px;width:100%;max-width:350px;transition:all .3s;}
+.dictionary__search>.dictionary__search--active{border-bottom:1px solid #1283da;padding-left:0;padding-right:25px;outline:none;}
+.dict-category-edit input,.dict-category-new-input input{border-bottom:1px solid #a2ceef;border-top:0;border-left:0;border-right:0;color:#1283da;font-size:1.2rem;font-weight:lighter;outline:none;margin-left:8px;}
+.dict-category-new-input input{width:300px;margin-bottom:10px;}
+.create-btn{margin-left:10px;} .hidden{display:none;}
+.dict-title-box{display:flex;align-items:baseline;margin-top:10px;flex-wrap:wrap;margin-bottom:20px;max-width:890px;}
+.dict-category{color:#1283da;font-size:1.2rem;font-weight:lighter;padding-left:9px;}
+.dict-category-new{color:grey;font-size:1.2rem;font-weight:lighter;padding-left:9px;cursor:pointer;margin-bottom:40px;}
+.dict-category-new-input{display:none;margin-bottom:40px;}
+.chevron{transition:transform .3s ease-in-out;stroke:#1283da;cursor:pointer;}
+.dict-category .edit{display:none;cursor:pointer;} .dict-category:hover .edit{display:inline;}
+.dict-category .move{cursor:move;display:none;} .dict-category:hover .move{display:inline;}
+.rotate{transform:rotate(-90deg);stroke:#CCCCCC!important;} .inactive{color:#CCCCCC!important;}
+.dict-category-name{cursor:pointer;}
+.dict-category-list,.dict-category-list li{list-style:none;margin:0;padding:0;}
+.placeholder{border:1px #1283da;border-style:dotted;height:40px;}
+.highlight{background-color:#ebf7ff!important;}
+.dict-category-sortable{border:1px solid #e4e4e6;box-shadow:0px 5px 7px rgba(0,97,254,.21);background:#fff;}
+.draggable-helper div,.draggable-helper:hover div{box-shadow:10px 5px 5px grey;z-index:1000;}
+</style>
+</head>
+<body>
+<div class="dictionary" style="padding:20px">
+  <div class="dict-title-box">
+    <div class="dict-title"><t9n>[RU]Таблицы[EN]Tables</t9n></div>&nbsp;
+    <a class="dict-new-href" id="createBtn" onclick="toggleCreateTable()" style="display:none">
+      <div class="dict-new"><svg width="24" height="24" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd"><path d="M11 11v-11h1v11h11v1h-11v11h-1v-11h-11v-1h11z"/></svg></div>
+    </a>
+    <div class="dictionary__search"><input id="dictionary__search" type="text" autocomplete="off"></div>
+  </div>
+  <form id="addForm" style="display:none" class="t9n pl-2 pr-2">
+    <div class="row p-0 m-0">
+      <div class="col-sm-6 col-md-7 pl-0 pr-0">
+        <input type="text" id="val" name="val" placeholder="Enter table name" maxlength="127" onkeyup="filterTypes()" class="form-control">
+      </div>
+      <div class="col-sm-6 col-md-5 p-0 mt-1 mt-sm-0">
+        <div class="input-group mb-2"><select name="t" id="baseTypes" onchange="filterTypes()" class="form-control"></select></div>
+      </div>
+    </div>
+    <div class="pt-3 pb-3">
+      <div class="form-check">
+        <input class="form-check-input" type="checkbox" name="unique" value="1" id="fcd">
+        <label class="form-check-label" for="fcd"><t9n>[RU]Сделать первую колонку уникальной[EN]Make the first column unique</t9n></label>
+      </div>
+    </div>
+    <div class="btn-group">
+      <button type="submit" class="btn btn-primary mb-2 pl-5 pr-5 mr-3" id="addbtn" disabled><t9n>[RU]Создать[EN]Create</t9n></button>
+      <button type="button" class="btn btn-outline-secondary mb-2 pl-5 pr-5" onclick="toggleCreateTable()"><t9n>[RU]Отменить[EN]Cancel</t9n></button>
+    </div>
+  </form>
+  <ul class="dict-category-list"></ul>
+  <div class="dict-category-new" onclick="showNewCategoryInput(this)" style="display:none"><t9n>[RU]Новая категория + [EN]New category +</t9n></div>
+  <div class="dict-category-new-input">
+    <input type="text" id="new-category-input">
+    <div class="btn-group">
+      <button type="button" class="btn btn-primary mb-2 pl-5 pr-5 mr-3" onclick="newCategory()"><t9n>[RU]Создать[EN]Create</t9n></button>
+      <button type="button" class="btn btn-outline-secondary mb-2 pl-5 pr-5" onclick="hideNewCategoryInput()"><t9n>[RU]Отменить[EN]Cancel</t9n></button>
+    </div>
+  </div>
+</div>
+<script src="/js/popper.min.js"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+<script>
+var tables={},settingsID,tablesSet;
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function buildCatHTML(name,id){
+  return '<li class="dict-category-point">'
+    +'<div class="dict-category inactive" data-id="'+id+'">'
+    +'<span class="dict-category-name">'+escHtml(name)+'</span>'
+    +'<svg class="chevron" width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 11L14 17L20 11" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    +'<svg class="edit" onclick="editCategory(this)" width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M14 1L19 6L6 19H1V14L14 1Z" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    +'<svg class="move" width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M4 8L1 11M1 11L4 14M1 11H21M8 4L11 1M11 1L14 4M11 1V21M14 18L11 21M11 21L8 18M18 8L21 11M21 11L18 14" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    +'</div><div class="dict-list" tabs-id="'+id+'"></div></li>';
+}
+function buildItem(id,val,type){
+  return '<a class="dict-href dict-table" href="object.html?db='+encodeURIComponent(db)+'&type='+id+'" data-table-id="'+id+'">'
+    +'<div class="dict-item dict-exist" type="'+escHtml(String(type||''))+'">'+escHtml(val)+'</div></a>';
+}
+function renderTables(){
+  var ts=tablesSet||{'All':{open:true,tabs:[]}};
+  var $ul=$('.dict-category-list'); $ul.empty();
+  var n=0;
+  for(var cat in ts){
+    $ul.append(buildCatHTML(cat,n));
+    var $tabs=$('[tabs-id="'+n+'"]');
+    (ts[cat].tabs||[]).forEach(function(tid){if(tables[String(tid)])$tabs.append(buildItem(tid,tables[String(tid)].val,tables[String(tid)].type));});
+    n++;
+  }
+  var assigned={};
+  for(var cat in ts)(ts[cat].tabs||[]).forEach(function(id){assigned[String(id)]=1;});
+  var $f=$('[tabs-id="0"]');
+  for(var id in tables){if(!assigned[id])$f.append(buildItem(id,tables[id].val,tables[id].type));}
+  n=0;
+  for(var cat in ts){
+    var $c=$('.dict-category[data-id="'+n+'"]');
+    if(ts[cat].open){$c.removeClass('inactive');$c.find('.chevron').removeClass('rotate');$c.next('.dict-list').show();}
+    else{$c.addClass('inactive');$c.find('.chevron').addClass('rotate');$c.next('.dict-list').hide();}
+    n++;
+  }
+  bindEvents(); $('.dict-category-new').show();
+}
+function bindEvents(){
+  $('.dict-category-name,.chevron').off('click').on('click',function(){clickOnCategory(this);});
+  $('.move').off('mousedown').on('mousedown',function(){
+    if(!$(this).parent().hasClass('inactive'))$(this).parent().next('.dict-list').toggle();
+    $(this).parent().addClass('dict-category-sortable');
+    $(document).on('mouseup.me',function(){
+      var el=$('.dict-category-sortable');
+      if(!el.hasClass('inactive'))el.next('.dict-list').toggle();
+      el.removeClass('dict-category-sortable');$(document).off('mouseup.me');
+    });
+  });
+  $('.dict-href').draggable({revert:'invalid',helper:'clone',
+    start:function(e,ui){$(this).css({opacity:0});$(ui.helper).css({width:$(this).width()}).addClass('draggable-helper');},
+    stop:function(e,ui){$(this).css({opacity:1});}
+  });
+  $('.dict-category-point').droppable({accept:'.dict-href',
+    drop:function(e,ui){var t=ui.draggable,o=t.closest('.dict-list'),n=$(this).find('.dict-list');if(o[0]!==n[0]){t.detach().appendTo(n);setTimeout(saveCatsConfig,400);}$(this).removeClass('highlight');},
+    over:function(e,ui){$(this).addClass('highlight');},out:function(e,ui){$(this).removeClass('highlight');}
+  });
+  $('.dict-category-list').sortable({revert:true,handle:'.move',axis:'y',placeholder:'placeholder',update:function(){saveCatsConfig();}});
+}
+function clickOnCategory(el){$(el).parent().next('.dict-list').toggle('fast');$(el).parent().find('.chevron').toggleClass('rotate');$(el).parent().toggleClass('inactive');saveCatsConfig();}
+function saveCatsConfig(){
+  var conf={};
+  $('.dict-category').each(function(){
+    var nm=$(this).find('.dict-category-name').html();
+    conf[nm]={open:!$(this).hasClass('inactive'),tabs:[]};
+    $('[tabs-id='+$(this).attr('data-id')+']').find('a.dict-table').each(function(){conf[nm].tabs.push($(this).attr('data-table-id'));});
+  });
+  tablesSet=conf;try{localStorage.setItem(db+'_tablesSet',JSON.stringify(conf));}catch(e){}
+}
+function showNewCategoryInput(el){$('.dict-category-new-input').show();$(el).hide();$('.dict-category-new-input input').focus();}
+function hideNewCategoryInput(){$('.dict-category-new-input').hide();$('.dict-category-new').show();$('#new-category-input').val('');}
+function newCategory(){var n=$('#new-category-input').val().trim();if(!n)return;if(!tablesSet)tablesSet={};tablesSet[n]={open:true,tabs:[]};renderTables();saveCatsConfig();hideNewCategoryInput();}
+function editCategory(category){
+  var id=$(category).parent().data('id'),cn=$(category).parent().find('.dict-category-name').text().trim();
+  $(category).parent().after("<div class='dict-category-edit' id='edit"+id+"'><input type='text' value='"+escHtml(cn)+"'></div>");
+  $(category).parent().hide();
+  var inp=$('#edit'+id+' input'); inp.focus(); inp[0].setSelectionRange(inp[0].value.length,inp[0].value.length);
+  inp.keydown(function(e){if(e.keyCode===13)saveCategory(id);else if(e.keyCode===27)cancelEdit(id);});
+  inp.blur(function(){saveCategory(id);});
+}
+function saveCategory(id){var nn=$('#edit'+id+' input').val().trim();if(nn){$('[data-id="'+id+'"] .dict-category-name').html(escHtml(nn));saveCatsConfig();}else cancelEdit(id);$('#edit'+id).remove();$('[data-id="'+id+'"]').show();}
+function cancelEdit(id){$('#edit'+id).remove();$('[data-id="'+id+'"]').show();}
+function toggleCreateTable(){$('#addForm,.dictionary__search,#createBtn').toggle();$('.dict-table').show();$('#val').focus();}
+function filterTypes(){
+  var v=document.querySelector('#val').value.toLowerCase(),t=document.querySelector('#baseTypes').value;
+  if(v!==''&&t!=='')document.querySelector('#addbtn').removeAttribute('disabled');
+  document.querySelectorAll('.dict-item').forEach(function(item){
+    if(item.textContent.toLowerCase().includes(v))$(item.parentElement).show();else $(item.parentElement).hide();
+    if(item.textContent.toLowerCase()===v&&item.getAttribute('type')===t)document.querySelector('#addbtn').setAttribute('disabled','disabled');
+  });
+}
+function layoutSwitcher(text){var lm={'q':'й','w':'ц','e':'у','r':'к','t':'е','y':'н','u':'г','i':'ш','o':'щ','p':'з','[':'х',']':'ъ','a':'ф','s':'ы','d':'в','f':'а','g':'п','h':'р','j':'о','k':'л','l':'д',';':'ж',"'":'э','z':'я','x':'ч','c':'с','v':'м','b':'и','n':'т','m':'ь',',':'б','.':'ю','й':'q','ц':'w','у':'e','к':'r','е':'t','н':'y','г':'u','ш':'i','щ':'o','з':'p','х':'[','ъ':']','ф':'a','ы':'s','в':'d','а':'f','п':'g','р':'h','о':'j','л':'k','д':'l','ж':';','э':"'",'я':'z','ч':'x','с':'c','м':'v','и':'b','т':'n','ь':'m','б':',','ю':'.'};return text.split('').map(function(c){return lm[c]||c;}).join('');}
+function isSubstring(str,sub){var ls=str.toLowerCase(),lsub=sub.toLowerCase(),k=ls.indexOf(lsub);if(k!==-1)return k;k=ls.indexOf(layoutSwitcher(lsub));return k!==-1?k:-1;}
+$('#dictionary__search').on('keyup',function(){
+  var sv=$(this).val();
+  $('.dict-item').each(function(){
+    var et=($(this).data('originaltext')||$(this).text()).toString(),idx=isSubstring(et,sv);
+    if(idx===-1){$(this).parent().hide();return;}
+    $(this).parent().show();
+    if($(this).parent().parent('.dict-list').prev('.dict-category').hasClass('inactive')&&sv!==''){
+      $(this).parent().parent().toggle();$(this).parent().parent('.dict-list').prev('.dict-category').find('.chevron').toggleClass('rotate');$(this).parent().parent('.dict-list').prev('.dict-category').toggleClass('inactive');
+    }
+    var html;if(!$(this).data('originaltext')){html=$(this).html();$(this).attr('data-originaltext',html);}else html=$(this).data('originaltext').toString();
+    $(this).html(html.substring(0,idx)+'<b>'+html.substring(idx,idx+sv.length)+'</b>'+html.substring(idx+sv.length));
+  });
+});
+var ph=t9n('[RU]Быстрый поиск...[EN]Quick search...');
+var sInp=document.querySelector('.dictionary__search input');
+sInp.setAttribute('placeholder',ph);
+sInp.onfocus=function(){sInp.classList.add('dictionary__search--active');sInp.setAttribute('placeholder','');};
+sInp.onblur=function(){if(!$('#dictionary__search').val()){sInp.classList.remove('dictionary__search--active');sInp.setAttribute('placeholder',ph);}};
+document.querySelector('#addForm').addEventListener('submit',function(e){
+  e.preventDefault();
+  fetch('/'+db+'/_d_new?JSON',{method:'POST',credentials:'include',body:new FormData(this)})
+    .then(function(r){return r.json();}).then(function(j){
+      if(j.id!==undefined||j.obj!==undefined)location.href='object.html?db='+encodeURIComponent(db)+'&type='+(j.obj||j.id);
+      else alert('Error: '+(j.msg||JSON.stringify(j)));
+    }).catch(function(e){alert('Fetch error: '+e);});
+});
+document.title=t9n('[RU]Таблицы[EN]Tables');
+try{tablesSet=JSON.parse(localStorage.getItem(db+'_tablesSet'));}catch(e){}
+fetch('/'+db+'/_dict?JSON',{credentials:'include'})
+  .then(function(r){if(r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}return r.json();})
+  .then(function(data){
+    if(!data)return;
+    var arr=Array.isArray(data)?data:(data.data||data.types||data.tables||[]);
+    arr.forEach(function(t){tables[String(t.id)]={val:t.val||t.name||String(t.id),type:t.type||''};});
+    if(data.role){role=data.role;localStorage.setItem(db+'_role',role);}
+    if(role==='admin'||role==='Admin'){
+      byId('baseTypes').innerHTML='<option value="">'+t9n('[RU]Выберите тип[EN]Select type')+'</option><option value="3">'+t9n('[RU]Строка[EN]Text')+'</option><option value="9">'+t9n('[RU]Дата[EN]Date')+'</option><option value="13">'+t9n('[RU]Целое число[EN]Integer')+'</option><option value="14">'+t9n('[RU]Дробное[EN]Decimal')+'</option><option value="11">'+t9n('[RU]Да/Нет[EN]Boolean')+'</option><option value="12">'+t9n('[RU]Текст[EN]Multiline')+'</option><option value="4">'+t9n('[RU]Дата и время[EN]Datetime')+'</option>';
+      $('#createBtn').show();
+    }
+    if(!tablesSet)tablesSet={'All':{open:true,tabs:Object.keys(tables)}};
+    renderTables();
+  }).catch(function(e){console.error('dict',e);});
+</script>
+</body>
+</html>

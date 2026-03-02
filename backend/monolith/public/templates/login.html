@@ -3,224 +3,148 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Integram — Login</title>
-  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
-        integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">
+  <title>Integram — Вход</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">
+  <link rel="stylesheet" href="/css/css.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
   <style>
-    body { background: #f5f5f5; }
-    .login-card {
-      max-width: 380px;
-      margin: 60px auto 0;
-      background: #fff;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      padding: 32px;
-      box-shadow: 0 2px 8px rgba(0,0,0,.08);
-    }
-    .login-card h4 { text-align: center; margin-bottom: 24px; }
-    .logo { text-align: center; margin-bottom: 16px; }
-    .logo img { width: 48px; }
-    #msg { display: none; }
-    .form-mode { display: none; }
-    .form-mode.active { display: block; }
-    .mode-links { text-align: center; margin-top: 16px; font-size: 13px; }
-    .mode-links a { cursor: pointer; color: #007bff; text-decoration: underline; margin: 0 8px; }
+    body { background:#f5f5f5; }
+    .login-wrap { max-width:380px; margin:80px auto; }
+    .card { border:1px solid #dee2e6; }
+    .card-header { background:#fff; }
+    .brand-img { width:36px; }
   </style>
 </head>
 <body>
-<div class="login-card">
-  <div class="logo">
-    <img src="/i/lamp.png" alt="Integram" onerror="this.style.display='none'">
+<div class="login-wrap">
+  <div class="text-center mb-3">
+    <img src="/i/lamp.png" class="brand-img" onerror="this.style.display='none'">
+    <h4 class="mt-2">Integram</h4>
   </div>
-  <h4>Integram</h4>
-  <div id="msg" class="alert"></div>
+  <div class="card shadow-sm">
+    <div class="card-header">
+      <ul class="nav nav-tabs card-header-tabs">
+        <li class="nav-item"><a class="nav-link active" href="#" id="tab-login-btn" onclick="switchTab('login');return false;">Вход</a></li>
+        <li class="nav-item"><a class="nav-link" href="#" id="tab-reg-btn" onclick="switchTab('reg');return false;">Регистрация</a></li>
+      </ul>
+    </div>
+    <div class="card-body">
+      <div id="alert-box" class="alert" style="display:none"></div>
 
-  <!-- ── Login form ───────────────────────────────────────── -->
-  <div id="form-login" class="form-mode active">
-    <div class="form-group">
-      <label for="inp-db">База данных</label>
-      <input type="text" id="inp-db" class="form-control" placeholder="mydb" autocomplete="off">
-    </div>
-    <div class="form-group">
-      <label for="inp-login">Логин</label>
-      <input type="text" id="inp-login" class="form-control" autocomplete="username">
-    </div>
-    <div class="form-group">
-      <label for="inp-pwd">Пароль</label>
-      <input type="password" id="inp-pwd" class="form-control" autocomplete="current-password">
-    </div>
-    <button id="btn-login" class="btn btn-primary btn-block" onclick="doLogin()">Войти</button>
-    <div class="mode-links">
-      <a onclick="showMode('reset')">Забыли пароль?</a>
-      <a onclick="showMode('reg')">Регистрация</a>
+      <div id="tab-login">
+        <div class="form-group">
+          <label>База данных</label>
+          <input id="l-db" class="form-control" placeholder="mydb" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label>Логин</label>
+          <input id="l-login" class="form-control" autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label>Пароль</label>
+          <input id="l-pwd" class="form-control" type="password" autocomplete="current-password">
+        </div>
+        <button class="btn btn-primary btn-block" id="login-btn" onclick="doLogin()">Войти</button>
+      </div>
+
+      <div id="tab-reg" style="display:none">
+        <div class="form-group">
+          <label>База данных</label>
+          <input id="r-db" class="form-control" placeholder="mydb" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label>Логин</label>
+          <input id="r-login" class="form-control" autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label>Пароль</label>
+          <input id="r-pwd" class="form-control" type="password" autocomplete="new-password">
+        </div>
+        <button class="btn btn-success btn-block" onclick="doRegister()">Зарегистрироваться</button>
+      </div>
     </div>
   </div>
-
-  <!-- ── Reset password form ──────────────────────────────── -->
-  <div id="form-reset" class="form-mode">
-    <p class="text-muted small">Введите базу данных и логин — мы пришлём новый пароль.</p>
-    <div class="form-group">
-      <label for="res-db">База данных</label>
-      <input type="text" id="res-db" class="form-control">
-    </div>
-    <div class="form-group">
-      <label for="res-login">Логин / email</label>
-      <input type="text" id="res-login" class="form-control">
-    </div>
-    <button id="btn-reset" class="btn btn-primary btn-block" onclick="doReset()">Напомнить пароль</button>
-    <div class="mode-links"><a onclick="showMode('login')">← Назад</a></div>
-  </div>
-
-  <!-- ── Registration form ────────────────────────────────── -->
-  <div id="form-reg" class="form-mode">
-    <div class="form-group">
-      <label for="reg-email">Email</label>
-      <input type="email" id="reg-email" class="form-control" placeholder="user@example.com">
-    </div>
-    <div class="form-group">
-      <label for="reg-pwd">Пароль</label>
-      <input type="password" id="reg-pwd" class="form-control" placeholder="мин. 6 символов">
-    </div>
-    <div class="form-group">
-      <label for="reg-pwd2">Повторите пароль</label>
-      <input type="password" id="reg-pwd2" class="form-control">
-    </div>
-    <button id="btn-reg" class="btn btn-primary btn-block" onclick="doRegister()">Зарегистрироваться</button>
-    <div class="mode-links"><a onclick="showMode('login')">← Назад</a></div>
+  <div class="text-center mt-3">
+    <small class="text-muted"><a href="dict.html?db=" id="to-dict" class="text-muted">Вернуться к таблицам</a></small>
   </div>
 </div>
 
 <script>
-(function () {
-  var p = new URLSearchParams(location.search);
-  var dbParam = p.get('db') || localStorage.getItem('_db') || '';
-  if (dbParam) document.getElementById('inp-db').value = dbParam;
-
-  // Enter key submits active form
-  document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter') return;
-    var mode = document.querySelector('.form-mode.active');
-    if (!mode) return;
-    var id = mode.id;
-    if (id === 'form-login') doLogin();
-    else if (id === 'form-reset') doReset();
-    else if (id === 'form-reg') doRegister();
-  });
-})();
-
-function showMode(mode) {
-  document.querySelectorAll('.form-mode').forEach(function(el){ el.classList.remove('active'); });
-  document.getElementById('form-' + mode).classList.add('active');
-  hideMsg();
+var p = new URLSearchParams(location.search);
+var dbParam = p.get('db') || '';
+if (dbParam) {
+  $('#l-db,#r-db').val(dbParam);
+  document.getElementById('to-dict').href = 'dict.html?db='+encodeURIComponent(dbParam);
 }
 
-function showMsg(type, text) {
-  var el = document.getElementById('msg');
-  el.className = 'alert alert-' + type;
-  el.textContent = text;
-  el.style.display = 'block';
-}
-function hideMsg() {
-  document.getElementById('msg').style.display = 'none';
+function switchTab(tab) {
+  $('#tab-login,#tab-reg').hide();
+  $('#tab-'+tab).show();
+  $('#tab-login-btn,#tab-reg-btn').removeClass('active');
+  $('#tab-'+tab+'-btn').addClass('active');
+  $('#alert-box').hide();
 }
 
-// ── Login ─────────────────────────────────────────────────
+function showAlert(msg, type) {
+  $('#alert-box').removeClass('alert-danger alert-success alert-warning')
+    .addClass('alert-'+(type||'danger')).text(msg).show();
+}
+
 function doLogin() {
-  var db    = document.getElementById('inp-db').value.trim();
-  var login = document.getElementById('inp-login').value.trim();
-  var pwd   = document.getElementById('inp-pwd').value;
+  var db    = $('#l-db').val().trim();
+  var login = $('#l-login').val().trim();
+  var pwd   = $('#l-pwd').val();
+  if (!db || !login || !pwd) return showAlert('Заполните все поля');
 
-  if (!db)    return showMsg('danger', 'Укажите базу данных');
-  if (!login) return showMsg('danger', 'Укажите логин');
-  if (!pwd)   return showMsg('danger', 'Укажите пароль');
+  var btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.textContent = '...';
 
-  var btn = document.getElementById('btn-login');
-  btn.disabled = true;
-  btn.textContent = '…';
-
-  var body = 'login=' + encodeURIComponent(login) + '&pwd=' + encodeURIComponent(pwd);
-  xhr('POST', '/' + db + '/auth?JSON', body, function(json) {
-    btn.disabled = false;
-    btn.textContent = 'Войти';
-    if (!json || !json.token) {
-      return showMsg('danger', (json && (json.msg || (json[0] && json[0].error))) || 'Неверный логин или пароль');
-    }
-    localStorage.setItem('_db', db);
-    localStorage.setItem(db + '_xsrf',   json._xsrf  || '');
-    localStorage.setItem(db + '_token',  json.token  || '');
-    localStorage.setItem(db + '_userId', json.id     || '');
-    localStorage.setItem(db + '_user',   login);         // store username for changePwd
-    document.cookie = encodeURIComponent(db) + '=' + encodeURIComponent(json.token) + '; path=/';
-    location.href = '/app/templates/main.html?db=' + encodeURIComponent(db);
-  }, function() {
-    btn.disabled = false;
-    btn.textContent = 'Войти';
-    showMsg('danger', 'Ошибка сети');
-  });
+  $.post('/'+db+'/auth?JSON', {login: login, pwd: pwd})
+    .done(function(r) {
+      btn.disabled = false; btn.textContent = 'Войти';
+      if (!r.token) return showAlert(r.msg || 'Неверный логин или пароль');
+      // store session
+      localStorage.setItem(db+'_token', r.token);
+      localStorage.setItem(db+'_xsrf',  r._xsrf || r.xsrf || '');
+      localStorage.setItem(db+'_userId', r.id || r.user_id || '');
+      localStorage.setItem(db+'_user',  r.user || login);
+      localStorage.setItem('_db', db);
+      // set cookie for server-side auth (legacy compat)
+      document.cookie = db+'_token='+encodeURIComponent(r.token)+';path=/;SameSite=Lax';
+      document.cookie = db+'='+encodeURIComponent(r.token)+';path=/;SameSite=Lax';
+      // redirect
+      location.href = 'main.html?db='+encodeURIComponent(db);
+    })
+    .fail(function(xhr) {
+      btn.disabled = false; btn.textContent = 'Войти';
+      var msg = 'Ошибка';
+      try { var j=JSON.parse(xhr.responseText); msg=j.error||j.msg||msg; } catch(e){}
+      showAlert(msg);
+    });
 }
 
-// ── Reset password ────────────────────────────────────────
-function doReset() {
-  var db    = document.getElementById('res-db').value.trim();
-  var login = document.getElementById('res-login').value.trim();
-  if (!db)    return showMsg('danger', 'Укажите базу данных');
-  if (!login) return showMsg('danger', 'Укажите логин');
-
-  var btn = document.getElementById('btn-reset');
-  btn.disabled = true;
-  var body = 'login=' + encodeURIComponent(login);
-  xhr('POST', '/' + db + '/auth?JSON&reset', body, function(json) {
-    btn.disabled = false;
-    if (json && json.message && ':NEW_PWD:MAIL:SMS:'.indexOf(json.message) !== -1) {
-      showMsg('success', json.details || 'Новый пароль отправлен');
-    } else {
-      showMsg('danger', (json && json.details) || 'Ошибка сброса пароля');
-    }
-  }, function() {
-    btn.disabled = false;
-    showMsg('danger', 'Ошибка сети');
-  });
-}
-
-// ── Registration ──────────────────────────────────────────
 function doRegister() {
-  var email  = document.getElementById('reg-email').value.trim();
-  var pwd    = document.getElementById('reg-pwd').value;
-  var pwd2   = document.getElementById('reg-pwd2').value;
-
-  if (!email) return showMsg('danger', 'Укажите email');
-  if (pwd.length < 6) return showMsg('danger', 'Пароль не менее 6 символов');
-  if (pwd !== pwd2)   return showMsg('danger', 'Пароли не совпадают');
-
-  var btn = document.getElementById('btn-reg');
-  btn.disabled = true;
-  var body = 'email=' + encodeURIComponent(email) + '&regpwd=' + encodeURIComponent(pwd) + '&regpwd1=' + encodeURIComponent(pwd2);
-  xhr('POST', '/my/register?JSON', body, function(json) {
-    btn.disabled = false;
-    if (json && json.message === 'toConfirm') {
-      showMsg('success', 'Регистрация успешна! Подтвердите email.');
-    } else {
-      showMsg('danger', (json && (json.error || (json[0] && json[0].error))) || 'Ошибка регистрации');
-    }
-  }, function() {
-    btn.disabled = false;
-    showMsg('danger', 'Ошибка сети');
-  });
+  var db    = $('#r-db').val().trim();
+  var login = $('#r-login').val().trim();
+  var pwd   = $('#r-pwd').val();
+  if (!db || !login || !pwd) return showAlert('Заполните все поля');
+  $.post('/my/register?JSON', {db: db, login: login, pwd: pwd})
+    .done(function(r) {
+      if (r.error) return showAlert(r.error);
+      showAlert('Готово! Теперь войдите.', 'success');
+      switchTab('login');
+      $('#l-db').val(db); $('#l-login').val(login);
+    })
+    .fail(function(xhr) {
+      var msg='Ошибка';
+      try{var j=JSON.parse(xhr.responseText);msg=j.error||j.msg||msg;}catch(e){}
+      showAlert(msg);
+    });
 }
 
-// ── XHR helper ────────────────────────────────────────────
-function xhr(method, url, body, onok, onerr) {
-  var req = new XMLHttpRequest();
-  req.open(method, url, true);
-  req.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-  req.onload = function() {
-    var json;
-    try { json = JSON.parse(req.responseText); } catch(e) {}
-    onok(json);
-  };
-  req.onerror = onerr;
-  req.send(body);
-}
+$('#l-pwd').keypress(function(e){ if(e.which===13) doLogin(); });
+$('#r-pwd').keypress(function(e){ if(e.which===13) doRegister(); });
+$('#l-login').keypress(function(e){ if(e.which===13) $('#l-pwd').focus(); });
 </script>
 </body>
 </html>
