@@ -6,20 +6,13 @@
 <title>Object list</title>
 <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
 <link rel="stylesheet" href="/css/css.css">
-<link href="/css/select2.min.css" rel="stylesheet">
 <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-<script src="/js/select2.min.js"></script>
 <script>
 var p = new URLSearchParams(location.search);
 var db      = p.get('db')   || (window.parent && window.parent.db) || localStorage.getItem('_db') || '';
 var typeId  = p.get('type') || p.get('id') || '';
 var upId    = p.get('up')   || '0';
-var token   = localStorage.getItem(db+'_token') || '';
-var xsrf    = localStorage.getItem(db+'_xsrf')  || '';
-var uid     = localStorage.getItem(db+'_userId')|| '';
-var user    = localStorage.getItem(db+'_user')  || '';
-var role    = localStorage.getItem(db+'_role')  || '';
-if (!token) { location.href = 'login.html?db='+encodeURIComponent(db); }
+var inIframe = (window.parent !== window);
 function byId(i){return document.getElementById(i);}
 function getCookie(n){var m=document.cookie.match('(^|;)\\s*'+n+'\\s*=\\s*([^;]+)');return m?decodeURIComponent(m[2]):null;}
 function t9n(s){var locale=getCookie(db+'_locale')||'RU';var m=s.match('\\['+locale+'\\]([^\\[]+)');return m?m[1]:s.replace(/\[[A-Z]+\]/g,'').trim();}
@@ -27,310 +20,317 @@ function escHtml(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&a
 </script>
 <style>
 th{font-weight:normal;position:relative;}
-.table thead th{border:1px solid #dee2e6;vertical-align:middle;text-align:center;padding-top:4px;padding-bottom:4px;white-space:nowrap;}
-.table td{border:1px solid #dee2e6;vertical-align:middle;}
-.fixed-td,.fixed-tr{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 4px!important;}
+.table thead th{border:1px solid #dee2e6;vertical-align:middle;text-align:center;padding:2px 6px;white-space:nowrap;background:#f8f9fa;font-weight:600;}
+.table td{border:1px solid #dee2e6;vertical-align:middle;padding:2px 4px;}
+.fixed-td{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .data-row:hover{background-color:#fafafa;}
-.breadcrumb{padding:2px;margin:0;}
-.controls{display:flex;align-items:center;padding:4px 8px;flex-wrap:wrap;gap:4px;position:sticky;top:0;background:#fff;z-index:10;border-bottom:1px solid #dee2e6;}
-.controls a{cursor:pointer;padding:4px 6px;display:inline-flex;align-items:center;gap:2px;color:#333;text-decoration:none;border-radius:4px;}
-.controls a:hover{background-color:#f0f0f0;}
-.controls a small{font-size:11px;}
-.filter-row input{width:100%;border:1px solid #ccc;padding:1px 4px;font-size:12px;}
-.btn-xs{padding:1px 5px;line-height:1.5;border-radius:3px;}
-#warn{display:none;position:sticky;top:40px;z-index:100;}
-.edit-inline-td{padding:0!important;}
-.inline-edit{border:0!important;outline:none;width:100%;padding:2px 4px;}
-.saving{background-color:#fff5f5;}
-.pager{display:flex;align-items:center;gap:8px;padding:6px 8px;}
-#loading-row td{text-align:center;color:#999;padding:16px;}
+#topbar{background:#343a40;color:#fff;padding:4px 8px;display:flex;align-items:center;gap:8px;font-size:13px;}
+#topbar a{color:#adb5bd;text-decoration:none;}
+#topbar a:hover{color:#fff;}
+#topbar .dbname{color:#fff;font-weight:600;}
+#topbar .spacer{flex:1;}
+.controls{display:flex;align-items:center;padding:3px 8px;flex-wrap:wrap;gap:4px;background:#fff;border-bottom:1px solid #dee2e6;position:sticky;top:0;z-index:10;}
+.controls a{cursor:pointer;padding:3px 6px;display:inline-flex;align-items:center;gap:3px;color:#333;text-decoration:none;border-radius:3px;font-size:12px;}
+.controls a:hover{background:#f0f0f0;}
+.filter-row td input{width:100%;border:1px solid #ccc;padding:1px 3px;font-size:11px;}
+#warn{display:none;position:sticky;top:36px;z-index:9;margin:0;border-radius:0;}
+#loading-row td{text-align:center;color:#999;padding:12px;}
+.edit-icon{color:#aaa;text-decoration:none;}
+.edit-icon:hover{color:#333;}
 </style>
 </head>
-<body>
-<div class="alert alert-warning" id="warn" onclick="this.style.display='none'"></div>
+<body style="margin:0;padding:0">
 
-<nav aria-label="breadcrumb">
-  <ol class="breadcrumb pl-2 pt-1 pb-1">
-    <li class="breadcrumb-item"><a id="bc-db" href="dict.html?db="></a></li>
-    <li class="breadcrumb-item"><a id="bc-dict" href="dict.html?db="><t9n>[RU]Таблицы[EN]Tables</t9n></a></li>
-    <li class="breadcrumb-item active" id="bc-title" aria-current="page"></li>
-  </ol>
-</nav>
-
-<div class="controls t9n" id="controls">
-  <a id="btn-create" title="Create" onclick="addRec()">
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 2C8.27614 2 8.5 2.22386 8.5 2.5V7.5H13.5C13.7761 7.5 14 7.72386 14 8C14 8.27614 13.7761 8.5 13.5 8.5H8.5V13.5C8.5 13.7761 8.27614 14 8 14C7.72386 14 7.5 13.7761 7.5 13.5V8.5H2.5C2.22386 8.5 2 8.27614 2 8C2 7.72386 2.22386 7.5 2.5 7.5H7.5V2.5C7.5 2.22386 7.72386 2 8 2Z" fill="#212529"/></svg>
-    <small><t9n>[RU]Добавить[EN]Create</t9n></small>
-  </a>
-  <a title="Search" onclick="toggleFilter()">
-    <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M16.43 16.43L13.32 13.32M15 9.29C15 12.44 12.44 15 9.29 15C6.13 15 3.57 12.44 3.57 9.29C3.57 6.13 6.13 3.57 9.29 3.57C12.44 3.57 15 6.13 15 9.29Z" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <small><t9n>[RU]Поиск[EN]Search</t9n></small>
-  </a>
-  <a title="Clear filter" id="btn-clear-filter" onclick="clearFilter()" style="display:none">
-    <svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M16.43 16.43L13.32 13.32M15 9.29C15 12.44 12.44 15 9.29 15C6.13 15 3.57 12.44 3.57 9.29C3.57 6.13 6.13 3.57 9.29 3.57C12.44 3.57 15 6.13 15 9.29Z" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 7L12 12M12 7L7 12" stroke="#1A1A1A" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <small><t9n>[RU]Очистить[EN]Clear</t9n></small>
-  </a>
-  <a title="Refresh" onclick="loadData()">
-    <svg width="16" height="16" viewBox="0 0 18 18" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M9 3.38C6.9 3.38 5.02 4.49 3.94 6.17L5.48 6.17V7.17H2.5C2.22 7.17 2 6.95 2 6.67V3.69H3V5.16C4.27 3.21 6.49 1.88 9 1.88C12.87 1.88 16 5.01 16 8.88C16 12.75 12.87 15.88 9 15.88C5.13 15.88 2 12.75 2 8.88H3C3 12.2 5.68 14.88 9 14.88C12.32 14.88 15 12.2 15 8.88C15 5.56 12.32 2.88 9 2.88L9 3.38Z" fill="#212529"/></svg>
-    <small><t9n>[RU]Обновить[EN]Refresh</t9n></small>
-  </a>
-  <div style="flex:1"></div>
-  <span id="pager-info" style="font-size:12px;color:#999;"></span>
-  <a id="btn-prev" onclick="prevPage()" style="display:none" title="Prev">&laquo;</a>
-  <a id="btn-next" onclick="nextPage()" style="display:none" title="Next">&raquo;</a>
+<div id="topbar">
+  <span id="tb-dbname" class="dbname"></span>
+  <span>&rsaquo;</span>
+  <a id="tb-dict" href="#">Tables</a>
+  <span>&rsaquo;</span>
+  <span id="tb-typename" style="color:#ccc"></span>
+  <span class="spacer"></span>
+  <span id="tb-user" style="color:#adb5bd;font-size:11px"></span>
+  <a id="tb-app" href="#" style="font-size:11px">&larr; Menu</a>
 </div>
 
-<div style="overflow-x:auto;">
-  <table class="table table-sm table-hover" id="tb" style="font-size:13px;margin:0">
+<div class="alert alert-warning mb-0" id="warn" role="alert" onclick="this.style.display='none'">
+  <span id="warn-msg"></span>
+</div>
+
+<div class="controls" id="controls">
+  <a id="btn-create" title="Create" onclick="addRec()">
+    <svg width="14" height="14" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2z" fill="#333"/></svg>
+    <t9n>[RU]Добавить[EN]Create</t9n>
+  </a>
+  <a title="Search/Filter" onclick="toggleFilter()">
+    <svg width="14" height="14" viewBox="0 0 20 20"><path d="M13.32 13.32L16.43 16.43M9.29 15C12.44 15 15 12.44 15 9.29C15 6.13 12.44 3.57 9.29 3.57C6.13 3.57 3.57 6.13 3.57 9.29C3.57 12.44 6.13 15 9.29 15Z" stroke="#333" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+    <t9n>[RU]Поиск[EN]Search</t9n>
+  </a>
+  <a id="btn-clearfilter" onclick="clearFilter()" style="display:none" title="Clear filter">
+    <svg width="14" height="14" viewBox="0 0 20 20"><path d="M6 6l8 8M14 6l-8 8" stroke="#999" stroke-linecap="round" fill="none"/></svg>
+    <small><t9n>[RU]Сбросить[EN]Clear</t9n></small>
+  </a>
+  <a title="Refresh" onclick="loadPage(0)">
+    <svg width="14" height="14" viewBox="0 0 18 18"><path fill-rule="evenodd" d="M9 3.38C6.9 3.38 5.02 4.49 3.94 6.17L5.48 6.17V7.17H2.5C2.22 7.17 2 6.95 2 6.67V3.69H3V5.16C4.27 3.21 6.49 1.88 9 1.88C12.87 1.88 16 5.01 16 8.88C16 12.75 12.87 15.88 9 15.88C5.13 15.88 2 12.75 2 8.88H3C3 12.2 5.68 14.88 9 14.88C12.32 14.88 15 12.2 15 8.88C15 5.56 12.32 2.88 9 2.88L9 3.38Z" fill="#333"/></svg>
+    <t9n>[RU]Обновить[EN]Refresh</t9n>
+  </a>
+  <div style="flex:1"></div>
+  <span id="page-info" style="font-size:11px;color:#999"></span>
+  <a id="btn-prev" onclick="loadPage(curOffset-pageSize)" style="display:none">&laquo;</a>
+  <a id="btn-next" onclick="loadPage(curOffset+pageSize)" style="display:none">&raquo;</a>
+</div>
+
+<div style="overflow-x:auto">
+  <table class="table table-sm" id="tb" style="font-size:13px;margin:0;min-width:100%">
     <thead id="tb-head"><tr></tr></thead>
     <tbody id="tb-body">
-      <tr id="loading-row"><td colspan="99"><t9n>[RU]Загрузка...[EN]Loading...</t9n></td></tr>
+      <tr id="loading-row"><td colspan="99">Loading...</td></tr>
     </tbody>
   </table>
 </div>
 
-<script src="/js/popper.min.js"></script>
-<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
 <script>
 // ---- state ----
-var cols = [], allData = [], limit = 50, offset = 0, filterVals = {}, sortCol = null, sortDir = 1;
-var totalRows = 0, typeName = '', typeBase = '', upField = null, createGranted = true;
+var cols = [];          // [{id, name, base}]
+var curOffset = 0;
+var pageSize = 50;
+var hasNext = false;
+var filterVals = {};
 var filterVisible = false;
+var sortColId = null;
+var sortDir = 1;        // 1=ASC, -1=DESC
+var typeName = typeId;
+var createGranted = true;
+var xsrf = localStorage.getItem(db + '_xsrf') || '';
 
-// breadcrumb
-byId('bc-db').href = 'dict.html?db='+encodeURIComponent(db);
-byId('bc-db').textContent = db.charAt(0).toUpperCase()+db.slice(1);
-byId('bc-dict').href = 'dict.html?db='+encodeURIComponent(db);
-
-function setTitle(name) {
-  typeName = name || typeId;
-  byId('bc-title').textContent = typeName;
-  document.title = typeName;
-}
+// ---- top bar setup ----
+byId('tb-dbname').textContent = db;
+var dictUrl = inIframe ? '#' : ('dict.html?db=' + encodeURIComponent(db));
+var appUrl  = inIframe ? '#' : ('app.html?db='  + encodeURIComponent(db));
+byId('tb-dict').href = dictUrl;
+byId('tb-dict').textContent = t9n('[RU]Таблицы[EN]Tables');
+byId('tb-app').href  = appUrl;
+byId('tb-app').textContent  = t9n('[RU]\u2190 Меню[EN]\u2190 Menu');
+var uname = localStorage.getItem(db + '_user') || '';
+if (uname) byId('tb-user').textContent = uname;
 
 // ---- load ----
-function loadData() {
-  byId('tb-body').innerHTML = '<tr id="loading-row"><td colspan="99">'+t9n('[RU]Загрузка...[EN]Loading...')+'</td></tr>';
-  var url = '/'+db+'/object/'+typeId+'?JSON_DATA&LIMIT='+limit+'&OFFSET='+offset;
-  if (upId && upId !== '0') url += '&F_U='+encodeURIComponent(upId);
-  for (var k in filterVals) { if (filterVals[k]) url += '&F_'+k+'='+encodeURIComponent(filterVals[k]); }
-  if (sortCol !== null) url += '&SORT='+sortCol+'&DIR='+(sortDir===1?'ASC':'DESC');
-  fetch(url, {credentials:'include'})
-    .then(function(r){
-      if (r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
+function buildUrl(offset) {
+  var url = '/' + db + '/object/' + typeId + '?JSON&LIMIT=' + (offset ? offset + ',' + pageSize : pageSize);
+  if (upId && upId !== '0') url += '&F_U=' + encodeURIComponent(upId);
+  for (var k in filterVals) { if (filterVals[k]) url += '&F_' + k + '=' + encodeURIComponent(filterVals[k]); }
+  if (sortColId) url += '&order_val=' + encodeURIComponent(sortColId) + (sortDir === -1 ? '&desc=1' : '');
+  return url;
+}
+
+function loadPage(offset) {
+  if (offset < 0) offset = 0;
+  curOffset = offset;
+  byId('tb-body').innerHTML = '<tr id="loading-row"><td colspan="99">' + t9n('[RU]Загрузка...[EN]Loading...') + '</td></tr>';
+  fetch(buildUrl(offset), {credentials: 'include'})
+    .then(function(r) {
+      if (r.status === 401 || r.status === 403) {
+        if (!inIframe) location.href = 'login.html?db=' + encodeURIComponent(db);
+        return null;
+      }
       return r.json();
     })
-    .then(function(data){
+    .then(function(data) {
       if (!data) return;
+      if (data.error) { showWarn(data.error); return; }
       renderData(data);
     })
-    .catch(function(e){ console.error('object load',e); byId('tb-body').innerHTML='<tr><td colspan="99" class="text-danger">Error: '+escHtml(String(e))+'</td></tr>'; });
+    .catch(function(e) {
+      byId('tb-body').innerHTML = '<tr><td colspan="99" class="text-danger">Error: ' + escHtml(String(e)) + '</td></tr>';
+    });
 }
 
 function renderData(data) {
-  // data structure varies: may be array of rows, or object with .cols/.data/.title
-  var rows, newCols;
-  if (Array.isArray(data)) {
-    rows = data;
-    if (rows.length && typeof rows[0] === 'object') {
-      newCols = cols.length ? cols : Object.keys(rows[0]).map(function(k){ return {id:k,name:k,base:'3'}; });
-    }
+  // type info
+  if (data.type) {
+    typeName = data.type.val || typeId;
+    byId('tb-typename').textContent = typeName;
+    document.title = typeName;
+  }
+
+  // create permission
+  var uniObj = data['&main.a.&uni_obj'] || {};
+  var cg = (uniObj.create_granted || ['block'])[0];
+  createGranted = (cg === 'block' || cg === '');
+  byId('btn-create').style.display = createGranted ? '' : 'none';
+
+  // Column definitions from req_order + req_type + req_base
+  var reqOrder = data.req_order || [];
+  var reqType  = data.req_type  || {};
+  var reqBase  = data.req_base  || {};
+  if (reqOrder.length > 0) {
+    cols = reqOrder.map(function(id) {
+      return {id: String(id), name: reqType[id] || String(id), base: reqBase[id] || 'SHORT'};
+    });
   } else {
-    rows = data.data || data.rows || data.objects || [];
-    if (data.cols || data.columns) newCols = data.cols || data.columns;
-    if (data.title || data.name) setTitle(data.title || data.name);
-    if (data.create_granted !== undefined) createGranted = !!data.create_granted;
-    if (typeof data.total !== 'undefined') totalRows = data.total;
-    if (data.up_field) upField = data.up_field;
-    if (data.role) { role = data.role; localStorage.setItem(db+'_role', role); }
+    cols = [];
   }
-  if (newCols && newCols.length) cols = newCols;
-  if (!cols.length && rows.length && typeof rows[0]==='object') {
-    cols = Object.keys(rows[0]).filter(function(k){return k!='id';}).map(function(k){return {id:k,name:k,base:'3'};});
-  }
-  allData = rows;
-  if (typeof totalRows === 'undefined' || totalRows === 0) totalRows = rows.length;
+
+  // Row data from object[]
+  var rows = data.object || [];
+  // Cell data from reqs{rowId: {colId: val}}
+  var reqs = data.reqs || {};
+
   renderHead();
-  renderBody(rows);
-  renderPager();
+  renderBody(rows, reqs);
+
+  // Pagination via &no_page.lnx
+  var noPage = data['&main.a.&uni_obj.&no_page'] || {};
+  var lnx = (noPage.lnx || [''])[0];
+  hasNext = !!(lnx && lnx !== '');
+  renderPager(rows.length);
 }
 
 function renderHead() {
-  var $tr = $('#tb-head tr'); $tr.empty();
-  // edit column
-  $tr.append('<th style="width:28px">&nbsp;</th>');
-  cols.forEach(function(c, i) {
+  var tr = document.createElement('tr');
+  // edit button column
+  var thEdit = document.createElement('th');
+  thEdit.style.cssText = 'width:26px;padding:2px';
+  tr.appendChild(thEdit);
+  // val column (always first)
+  var thVal = document.createElement('th');
+  thVal.textContent = t9n('[RU]Название[EN]Name');
+  thVal.style.cursor = 'pointer';
+  if (sortColId === 'val') thVal.textContent += sortDir === 1 ? ' \u25b2' : ' \u25bc';
+  thVal.addEventListener('click', function(){ sortBy('val'); });
+  tr.appendChild(thVal);
+  // requisite columns
+  cols.forEach(function(c) {
     var th = document.createElement('th');
-    th.className = 'col-header';
+    th.textContent = c.name;
     th.style.cursor = 'pointer';
-    th.innerHTML = escHtml(c.name||c.id||String(c))+(sortCol===i?(sortDir===1?' &#9650;':' &#9660;'):'');
-    th.addEventListener('click', function(){ sortBy(i); });
-    $tr.append(th);
+    th.title = c.id;
+    if (sortColId === c.id) th.textContent += sortDir === 1 ? ' \u25b2' : ' \u25bc';
+    th.addEventListener('click', function() { sortBy(c.id); });
+    tr.appendChild(th);
   });
+  byId('tb-head').innerHTML = '';
+  byId('tb-head').appendChild(tr);
   if (filterVisible) appendFilterRow();
 }
 
 function appendFilterRow() {
-  var $tr = $('<tr class="filter-row"></tr>');
-  $tr.append('<td></td>');
+  var tr = document.createElement('tr');
+  tr.className = 'filter-row';
+  tr.appendChild(document.createElement('td'));
+  // val filter
+  var tdV = document.createElement('td');
+  tdV.innerHTML = '<input type="text" value="' + escHtml(filterVals['_val_'] || '') + '" placeholder="..." onchange="setFilter(\'_val_\',this.value)" onkeydown="if(event.key===\'Enter\')applyFilter()">';
+  tr.appendChild(tdV);
   cols.forEach(function(c) {
-    var fid = 'f_'+c.id;
-    var val = filterVals[c.id] || '';
     var td = document.createElement('td');
-    td.innerHTML = '<input type="text" value="'+escHtml(val)+'" data-col="'+escHtml(String(c.id))+'" onchange="filterChange(this)" style="width:100%;border:1px solid #ccc;font-size:11px;padding:1px 3px">';
-    $tr.append(td);
+    td.innerHTML = '<input type="text" value="' + escHtml(filterVals[c.id] || '') + '" placeholder="..." onchange="setFilter(\'' + escHtml(String(c.id)) + '\',this.value)" onkeydown="if(event.key===\'Enter\')applyFilter()">';
+    tr.appendChild(td);
   });
-  $('#tb-head').append($tr);
+  byId('tb-head').appendChild(tr);
 }
 
-function filterChange(inp) {
-  var col = inp.getAttribute('data-col');
-  filterVals[col] = inp.value;
-}
-
-function renderBody(rows) {
-  var $tb = $('#tb-body'); $tb.empty();
+function renderBody(rows, reqs) {
+  var tb = byId('tb-body');
   if (!rows.length) {
-    $tb.html('<tr><td colspan="99" class="text-muted text-center py-3">'+t9n('[RU]Нет данных[EN]No data')+'</td></tr>');
+    tb.innerHTML = '<tr><td colspan="99" class="text-muted text-center py-3">' + t9n('[RU]Нет данных[EN]No data') + '</td></tr>';
     return;
   }
+  var frag = document.createDocumentFragment();
   rows.forEach(function(row) {
     var id = row.id || row.ID || '';
-    var $tr = $('<tr class="data-row"></tr>').attr('id', 'row-'+id);
-    // edit link cell
-    var editHref = 'edit_obj.html?db='+encodeURIComponent(db)+'&id='+encodeURIComponent(id)+'&up='+encodeURIComponent(typeId);
-    $tr.append('<td style="width:28px;padding:2px 4px;text-align:center"><a href="'+editHref+'" title="Edit"><svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M14 1L19 6L6 19H1V14L14 1Z" stroke="#aaa" stroke-linecap="round" stroke-linejoin="round"/></svg></a></td>');
+    var tr = document.createElement('tr');
+    tr.className = 'data-row';
+    tr.id = 'row-' + id;
+
+    var editUrl = 'edit_obj.html?db=' + encodeURIComponent(db) + '&id=' + encodeURIComponent(id) + '&up=' + encodeURIComponent(typeId);
+
+    // Edit icon cell
+    var tdEdit = document.createElement('td');
+    tdEdit.style.cssText = 'width:26px;padding:2px 4px;text-align:center';
+    tdEdit.innerHTML = '<a href="' + editUrl + '" class="edit-icon" title="Edit"><svg width="13" height="13" viewBox="0 0 20 20" fill="none"><path d="M14 1L19 6L6 19H1V14L14 1Z" stroke="#aaa" stroke-linecap="round" stroke-linejoin="round"/></svg></a>';
+    tr.appendChild(tdEdit);
+
+    // Val column
+    var tdVal = document.createElement('td');
+    tdVal.className = 'fixed-td';
+    tdVal.style.cursor = 'pointer';
+    tdVal.innerHTML = '<div title="' + escHtml(row.val || '') + '">' + escHtml(row.val || '(' + id + ')') + '</div>';
+    tdVal.addEventListener('click', function() { location.href = editUrl; });
+    tr.appendChild(tdVal);
+
+    // Requisite columns
+    var rowReqs = reqs[String(id)] || {};
     cols.forEach(function(c) {
-      var cid = c.id || c;
-      var val = row[cid];
-      if (val === null || val === undefined) val = '';
+      var rawVal = rowReqs[c.id];
+      var display = (rawVal === null || rawVal === undefined) ? '' : String(rawVal);
+      var cleanDisplay = display.replace(/<[^>]+>/g, '');
       var td = document.createElement('td');
       td.className = 'fixed-td';
-      // determine alignment by base type
-      var base = c.base || c.type || '';
-      if (base==='13'||base==='14') td.style.textAlign='right';
-      else if (base==='11'||base==='9') td.style.textAlign='center';
-      // if value looks like an object (reference), try to show ref text
-      var display = '';
-      if (typeof val === 'object' && val !== null) {
-        display = val.val || val.name || val.text || JSON.stringify(val);
-      } else {
-        display = String(val);
-      }
-      if (display.length > 127) display = display.slice(0,127)+'…';
-      td.innerHTML = '<div title="'+escHtml(String(val))+'">'+escHtml(display)+'</div>';
       td.style.cursor = 'pointer';
-      td.addEventListener('click', function(){ location.href = editHref; });
-      $tr.append(td);
+      if (c.base === 'NUMBER' || c.base === 'SIGNED') td.style.textAlign = 'right';
+      else if (c.base === 'DATE' || c.base === 'PWD') td.style.textAlign = 'center';
+      if (display.indexOf('<A ') >= 0 || display.indexOf('<a ') >= 0) {
+        td.innerHTML = '<div title="' + escHtml(cleanDisplay) + '">' + display + '</div>';
+      } else {
+        td.innerHTML = '<div title="' + escHtml(display) + '">' + escHtml(cleanDisplay) + '</div>';
+      }
+      td.addEventListener('click', function(e) { if (e.target.tagName !== 'A') location.href = editUrl; });
+      tr.appendChild(td);
     });
-    $tb.append($tr);
+
+    frag.appendChild(tr);
   });
+  tb.innerHTML = '';
+  tb.appendChild(frag);
 }
 
-function renderPager() {
+function renderPager(rowCount) {
   var info = '';
-  if (totalRows > 0) {
-    var from = offset+1, to = Math.min(offset+limit, totalRows);
-    info = from+'-'+to+' / '+totalRows;
+  if (rowCount > 0) {
+    info = (curOffset + 1) + '\u2013' + (curOffset + rowCount);
   }
-  byId('pager-info').textContent = info;
-  byId('btn-prev').style.display = offset > 0 ? '' : 'none';
-  byId('btn-next').style.display = (offset+limit < totalRows) ? '' : 'none';
+  byId('page-info').textContent = info;
+  byId('btn-prev').style.display = curOffset > 0 ? '' : 'none';
+  byId('btn-next').style.display = hasNext ? '' : 'none';
 }
 
-function sortBy(i) {
-  if (sortCol === i) sortDir = -sortDir;
-  else { sortCol = i; sortDir = 1; }
-  offset = 0;
-  renderHead();
-  // client-side sort if all data loaded
-  if (allData.length <= limit) {
-    var cid = cols[i].id || cols[i];
-    var sorted = allData.slice().sort(function(a,b){
-      var av = a[cid]||'', bv = b[cid]||'';
-      if (typeof av === 'number' && typeof bv === 'number') return (av-bv)*sortDir;
-      return String(av).localeCompare(String(bv))*sortDir;
-    });
-    renderBody(sorted);
-  } else {
-    loadData();
-  }
+function sortBy(colId) {
+  if (sortColId === colId) sortDir = -sortDir;
+  else { sortColId = colId; sortDir = 1; }
+  loadPage(0);
 }
 
 function toggleFilter() {
   filterVisible = !filterVisible;
   renderHead();
-  if (filterVisible) byId('btn-clear-filter').style.display='';
+  byId('btn-clearfilter').style.display = filterVisible ? '' : 'none';
 }
+
+function setFilter(colId, val) {
+  if (val) filterVals[colId] = val;
+  else delete filterVals[colId];
+}
+
+function applyFilter() { loadPage(0); }
 
 function clearFilter() {
-  filterVals = {}; filterVisible = false; offset = 0;
-  byId('btn-clear-filter').style.display='none';
-  renderHead(); loadData();
+  filterVals = {}; filterVisible = false;
+  byId('btn-clearfilter').style.display = 'none';
+  renderHead(); loadPage(0);
 }
-
-function prevPage() { offset = Math.max(0, offset-limit); loadData(); }
-function nextPage() { offset += limit; loadData(); }
-
-function applyFilter() {
-  offset = 0;
-  // collect filter values from inputs
-  document.querySelectorAll('.filter-row input').forEach(function(inp){
-    var col = inp.getAttribute('data-col');
-    filterVals[col] = inp.value;
-  });
-  loadData();
-}
-
-// filter search on Enter
-$(document).on('keydown', '.filter-row input', function(e){
-  if(e.keyCode===13) applyFilter();
-});
 
 function addRec() {
-  location.href = 'edit_obj.html?db='+encodeURIComponent(db)+'&id=new&up='+encodeURIComponent(typeId);
-}
-
-function deleteRec(id) {
-  if (!confirm(t9n('[RU]Удалить запись #[EN]Delete record #')+id+'?')) return;
-  fetch('/'+db+'/_m_del/'+id+'?JSON', {method:'POST', credentials:'include',
-    headers:{'Content-Type':'application/x-www-form-urlencoded'},
-    body:'_xsrf='+encodeURIComponent(xsrf)})
-  .then(function(r){return r.json();})
-  .then(function(j){
-    if(j.id||j.ok||j.msg&&j.msg.indexOf('[err')===-1){
-      $('#row-'+id).remove();
-      totalRows = Math.max(0, totalRows-1);
-      renderPager();
-    } else {
-      showWarn(j.msg||'Error deleting');
-    }
-  }).catch(function(e){showWarn(String(e));});
+  location.href = 'edit_obj.html?db=' + encodeURIComponent(db) + '&id=new&up=' + encodeURIComponent(typeId);
 }
 
 function showWarn(msg) {
-  var w = byId('warn'); w.textContent = msg; w.style.display='';
-  setTimeout(function(){w.style.display='none';},5000);
+  byId('warn-msg').textContent = msg;
+  byId('warn').style.display = '';
+  setTimeout(function(){ byId('warn').style.display = 'none'; }, 5000);
 }
 
 // ---- init ----
-// load type metadata first, then data
-fetch('/'+db+'/object/'+typeId+'?JSON',{credentials:'include'})
-  .then(function(r){
-    if(r.status===401||r.status===403){location.href='login.html?db='+encodeURIComponent(db);return null;}
-    return r.json();
-  })
-  .then(function(data){
-    if(!data)return;
-    // set title from metadata
-    if(data.title||data.name||data.type_name)setTitle(data.title||data.name||data.type_name);
-    renderData(data);
-  })
-  .catch(function(e){
-    console.error('object init',e);
-    // fallback: try JSON_DATA endpoint directly
-    loadData();
-  });
+loadPage(0);
 </script>
 </body>
 </html>
