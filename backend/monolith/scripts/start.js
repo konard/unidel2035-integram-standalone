@@ -74,6 +74,88 @@ if (fs.existsSync(PUBLIC_PATH)) {
   console.log(`   App UI: http://localhost:${PORT}/app/templates/login.html`);
 }
 
+// ── API v2 auth endpoint (handles POST /api/v2/auth) ────────────────────────
+// Mounted BEFORE legacy router to prevent /:db/auth from intercepting v2 paths.
+// Proxies auth to legacy /:db/auth?JSON internally.
+
+app.post('/api/v2/auth', async (req, res) => {
+  try {
+    // Accept both JSON:API format and simple {login, password, database} format
+    let login, password, database;
+
+    if (req.body?.data?.type === 'auth') {
+      // JSON:API format
+      ({ login, password, database } = req.body.data.attributes || {});
+    } else {
+      // Simple format
+      ({ login, password, database } = req.body || {});
+    }
+
+    database = database || 'my';
+
+    if (!login || !password) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'login and password are required' }
+      });
+    }
+
+    // Use internal fetch to legacy auth endpoint
+    const legacyUrl = `http://127.0.0.1:${PORT}/${database}/auth?JSON`;
+    const formData = new URLSearchParams({ login, pwd: password });
+
+    const response = await fetch(legacyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formData.toString()
+    });
+
+    const data = await response.json();
+
+    // Legacy auth returns {token, id, _xsrf, msg} on success
+    // or [{error: "..."}] on failure
+    if (Array.isArray(data) && data[0]?.error) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'AUTH_FAILED', message: data[0].error }
+      });
+    }
+
+    if (data.token) {
+      return res.json({
+        success: true,
+        data: {
+          type: 'auth-session',
+          id: data.token,
+          attributes: {
+            token: data.token,
+            userId: data.id,
+            database,
+            xsrf: data._xsrf
+          }
+        },
+        meta: { timestamp: new Date().toISOString() }
+      });
+    }
+
+    // Unexpected response
+    return res.status(500).json({
+      success: false,
+      error: { code: 'UNEXPECTED', message: 'Unexpected auth response' },
+      meta: { legacy: data }
+    });
+
+  } catch (err) {
+    console.error('[V2 Auth] Error:', err.message);
+    return res.status(500).json({
+      success: false,
+      error: { code: 'AUTH_ERROR', message: err.message }
+    });
+  }
+});
+
+console.log('   API v2 auth: POST /api/v2/auth');
+
 // ── Legacy PHP-compatible API + page routing ──────────────────────────────────
 
 const { default: legacyRouter } = await import('../src/api/routes/legacy-compat.js');

@@ -22,6 +22,16 @@ const router = express.Router();
 // This middleware ensures all JSON responses have keys sorted alphabetically.
 router.use(phpJsonMiddleware());
 
+// Skip API v2 paths — let them fall through to the V2 router mounted in start.js.
+// Without this, the legacy /:db/auth and /:db POST handlers intercept
+// /api/v2/auth (where db="v2") and fail with "v2 does not exist".
+router.use((req, res, next) => {
+  if (req.path.startsWith('/v2/') || req.path === '/v2') {
+    return next('router');
+  }
+  next();
+});
+
 // Get the directory path for serving static files
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
