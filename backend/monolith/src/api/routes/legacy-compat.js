@@ -7075,35 +7075,67 @@ router.all('/my/_new_db', async (req, res) => {
 
     await pool.query(createTableQuery);
 
-    // Initialize with basic types (similar to PHP template)
-    const initQueries = [
-      // Base types
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (1, 0, 1, 1, 'Объект')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (8, 0, 2, 8, 'Строка')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (12, 0, 3, 12, 'Текст')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (13, 0, 4, 13, 'Число')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (9, 0, 5, 9, 'Дата')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (4, 0, 6, 4, 'Дата и время')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (11, 0, 7, 11, 'Да/Нет')`,
-      // User type
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (18, 0, 10, 8, 'Пользователь')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (20, 18, 1, 6, ':!NULL:Пароль')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (30, 18, 2, 8, 'Телефон')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (41, 18, 3, 8, 'Email')`,
-      // Role type
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (42, 0, 11, 8, 'Роль')`,
-      // Token/Session types
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (125, 0, 12, 8, 'Токен')`,
-      `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
-    ];
-
-    for (const initQuery of initQueries) {
+    // PHP parity: if template is specified and exists, copy structure from template DB
+    let copiedFromTemplate = false;
+    if (template && template !== 'empty' && isValidDbName(template)) {
       try {
-        await pool.query(initQuery);
-      } catch (e) {
-        // Ignore duplicate key errors
-        if (!e.message.includes('Duplicate')) {
-          logger.warn('[Legacy _new_db] Init query error', { error: e.message });
+        // Verify template table exists
+        const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
+        if (tmplExists.length > 0) {
+          // Copy all metadata rows (up=0 = type definitions) from template
+          // This copies type structure without instance data
+          await pool.query(`
+            INSERT INTO \`${newDbName}\` (id, up, ord, t, val)
+            SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0
+          `);
+          // Copy requisite definitions (children of type definitions, i.e. rows whose up
+          // is a metadata row). These define the schema/attributes for each type.
+          await pool.query(`
+            INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
+            SELECT child.id, child.up, child.ord, child.t, child.val
+            FROM \`${template}\` child
+            JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
+            WHERE child.up != 0
+          `);
+          copiedFromTemplate = true;
+          logger.info('[Legacy _new_db] Copied structure from template', { template, newDb: newDbName });
+        }
+      } catch (tmplErr) {
+        logger.warn('[Legacy _new_db] Template copy failed, falling back to defaults', { template, error: tmplErr.message });
+      }
+    }
+
+    if (!copiedFromTemplate) {
+      // Initialize with basic types (similar to PHP template)
+      const initQueries = [
+        // Base types
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (1, 0, 1, 1, 'Объект')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (8, 0, 2, 8, 'Строка')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (12, 0, 3, 12, 'Текст')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (13, 0, 4, 13, 'Число')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (9, 0, 5, 9, 'Дата')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (4, 0, 6, 4, 'Дата и время')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (11, 0, 7, 11, 'Да/Нет')`,
+        // User type
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (18, 0, 10, 8, 'Пользователь')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (20, 18, 1, 6, ':!NULL:Пароль')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (30, 18, 2, 8, 'Телефон')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (41, 18, 3, 8, 'Email')`,
+        // Role type
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (42, 0, 11, 8, 'Роль')`,
+        // Token/Session types
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (125, 0, 12, 8, 'Токен')`,
+        `INSERT INTO ${newDbName} (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
+      ];
+
+      for (const initQuery of initQueries) {
+        try {
+          await pool.query(initQuery);
+        } catch (e) {
+          // Ignore duplicate key errors
+          if (!e.message.includes('Duplicate')) {
+            logger.warn('[Legacy _new_db] Init query error', { error: e.message });
+          }
         }
       }
     }
@@ -7682,6 +7714,28 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       return res.status(404).json({ error: 'Report not found' });
     }
 
+    // PHP parity: load grants and add granted flag per column
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let username = '';
+    let grants = {};
+    if (token) {
+      const [userRows] = await pool.query(`
+        SELECT u.id, u.val AS username, role_def.id AS role_id
+        FROM ${db} tok
+        JOIN ${db} u ON tok.up = u.id
+        LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+        WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+        LIMIT 1
+      `, [token]);
+      if (userRows.length > 0) {
+        username = userRows[0].username;
+        grants = await getGrants(pool, db, userRows[0].role_id);
+      }
+    }
+    for (const col of report.columns) {
+      col.granted = await checkGrant(pool, db, grants, col.reqTypeId, 0, 'READ', username);
+    }
+
     // If execution is requested, run the report
     // PHP also executes for JSON_KV, JSON_CR, JSON_HR, JSON_DATA flags (they select output format, not trigger)
     const q = req.query;
@@ -7778,11 +7832,20 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       // PHP-compatible JSON output formats
+      // PHP parity: field_names param filters output to specific columns only
+      const fieldNamesParam = req.query.field_names || req.body?.field_names;
+      const fieldNamesSet = fieldNamesParam
+        ? new Set(fieldNamesParam.split(',').map(s => s.trim()))
+        : null;
+
       if (q.JSON_KV !== undefined) {
         // [{col_name: val, ...}, ...] — array of objects using column names as keys
+        const cols = fieldNamesSet
+          ? report.columns.filter(c => fieldNamesSet.has(c.name))
+          : report.columns;
         const rows = results.data.map(row => {
           const obj = {};
-          for (const col of report.columns) obj[col.name] = row[col.alias] ?? '';
+          for (const col of cols) obj[col.name] = row[col.alias] ?? '';
           return obj;
         });
         return res.json(rows);
@@ -7790,20 +7853,34 @@ router.all('/:db/report/:reportId?', async (req, res) => {
 
       if (q.JSON_DATA !== undefined) {
         // {col_name: [val0, val1, ...], ...} — object with column names → arrays of all row values
+        const cols = fieldNamesSet
+          ? report.columns.filter(c => fieldNamesSet.has(c.name))
+          : report.columns;
         const obj = {};
-        for (const col of report.columns) obj[col.name] = results.data.map(row => row[col.alias] ?? '');
+        for (const col of cols) obj[col.name] = results.data.map(row => row[col.alias] ?? '');
         return res.json(obj);
       }
 
       if (q.JSON_CR !== undefined) {
         // PHP JSON_CR: columns[i].id = string; type = "string" (PHP always emits literal "string")
         const cols = report.columns.map((col, i) => ({ id: String(col.id || i), name: col.name, type: 'string' }));
-        const rows = results.data.map(row => {
+        // PHP parity: rows as object keyed by row ID (not array)
+        // Also cast NUMBER/SIGNED columns to numeric values
+        const numericTypes = new Set([TYPE.NUMBER, TYPE.SIGNED]);
+        const rowsObj = {};
+        for (const row of results.data) {
           const r = {};
-          for (const col of report.columns) r[col.id] = row[col.alias] ?? '';
-          return r;
-        });
-        return res.json({ columns: cols, rows, totalCount: results.data.length });
+          for (const col of report.columns) {
+            let val = row[col.alias] ?? '';
+            if (numericTypes.has(col.baseType) && val !== '') {
+              val = Number(val);
+            }
+            r[col.id] = val;
+          }
+          const rowId = row.id || row.main_val;
+          rowsObj[rowId] = r;
+        }
+        return res.json({ columns: cols, rows: rowsObj, totalCount: results.data.length });
       }
 
       if (q.JSON_HR !== undefined) {
@@ -7843,6 +7920,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
               totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
               // ref = truthy for reference columns; smartq uses ref-id vs obj-id
               ref: col.isRef ? col.baseType : null,
+              // PHP parity: granted flag per column
+              granted: col.granted,
             },
             alias: col.alias,
           });
@@ -7872,7 +7951,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
 
       // Non-API (browser) fallback — report.html reads json.columns and row-major json.data
       const simpleCols = report.columns.map(col => ({
-        id: col.id, name: col.name, align: col.align || 'LEFT'
+        id: col.id, name: col.name, align: col.align || 'LEFT', granted: col.granted
       }));
       const rowData = results.data.map(row =>
         report.columns.map(col => row[col.alias] !== undefined ? row[col.alias] : '')
@@ -8275,16 +8354,35 @@ router.get('/:db/csv_all', async (req, res) => {
         // Get requisites for each object
         if (reqs[id] && reqs[id].length > 0) {
           for (const rq of reqs[id]) {
-            const [reqRows] = await pool.query(`
-              SELECT val FROM ${db}
-              WHERE up = ? AND t = ?
-              LIMIT 1
-            `, [obj.id, rq.reqId]);
+            if (rq.isRef) {
+              // PHP parity: reference values — child.t = referenced object's ID
+              // JOIN to resolve: find child whose t points to an instance of reqId type,
+              // then get the referenced object's display val
+              const [reqRows] = await pool.query(`
+                SELECT ref_obj.val AS display_val
+                FROM ${db} child
+                JOIN ${db} ref_obj ON ref_obj.id = child.t
+                WHERE child.up = ? AND ref_obj.t = ?
+                LIMIT 1
+              `, [obj.id, rq.reqId]);
 
-            if (reqRows.length > 0) {
-              line += ';' + maskCsvDelimiters(formatValView(rq.reqBase, reqRows[0].val));
+              if (reqRows.length > 0) {
+                line += ';' + maskCsvDelimiters(reqRows[0].display_val || '');
+              } else {
+                line += ';';
+              }
             } else {
-              line += ';';
+              const [reqRows] = await pool.query(`
+                SELECT val FROM ${db}
+                WHERE up = ? AND t = ?
+                LIMIT 1
+              `, [obj.id, rq.reqId]);
+
+              if (reqRows.length > 0) {
+                line += ';' + maskCsvDelimiters(formatValView(rq.reqBase, reqRows[0].val));
+              } else {
+                line += ';';
+              }
             }
           }
         }
@@ -8736,6 +8834,21 @@ router.post('/:db/restore', (req, res, next) => {
 
     if (rows.length === 0) {
       return res.status(400).json({ error: 'Empty or unrecognised dump file' });
+    }
+
+    // PHP parity: ?sql returns SQL statements as plain text instead of executing
+    if (req.query.sql !== undefined) {
+      const sqlLines = [];
+      const BATCH = 1000;
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH);
+        const values = batch.map(r =>
+          `(${r[0]}, ${r[1]}, ${r[2]}, ${r[3]}, ${pool.escape(r[4])})`
+        ).join(',\n');
+        sqlLines.push(`INSERT IGNORE INTO \`${db}\` (\`id\`, \`t\`, \`up\`, \`ord\`, \`val\`) VALUES\n${values};`);
+      }
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.send(sqlLines.join('\n\n'));
     }
 
     // Execute in batches of 1000
