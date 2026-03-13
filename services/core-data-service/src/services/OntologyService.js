@@ -1,166 +1,98 @@
 /**
  * @integram/core-data-service - OntologyService
- *
- * JSON-LD ontology export, knowledge graph construction,
- * relationship inference from reference columns,
- * and external class mapping.
+ * Онтологический слой (#185).
  */
 
-import { BASIC_TYPES } from '@integram/common';
+const BASE_URI = 'https://integram.rf/ontology';
+const NAMESPACES = { rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#', rdfs: 'http://www.w3.org/2000/01/rdf-schema#', owl: 'http://www.w3.org/2002/07/owl#', xsd: 'http://www.w3.org/2001/XMLSchema#', igr: `${BASE_URI}#` };
+const XSD_TYPE_MAP = { 1: 'xsd:string', 2: 'xsd:integer', 3: 'xsd:decimal', 4: 'xsd:date', 5: 'xsd:dateTime', 6: 'xsd:boolean', 7: 'xsd:string', 8: 'xsd:anyURI', 9: 'xsd:string', 10: 'xsd:string' };
 
 export class OntologyService {
   constructor(databaseService, deps = {}, options = {}) {
     this.db = databaseService;
-    this.typeService = deps.typeService || null;
-    this.queryService = deps.queryService || null;
+    this.typeService = deps.typeService;
+    this.objectService = deps.objectService;
     this.logger = options.logger || console;
   }
 
-  async exportOntology(database, options = {}) {
-    const includeRequisites = options.includeRequisites !== false;
-    const includeSystem = options.includeSystem === true;
-    if (!this.typeService) throw new Error('TypeService is required for ontology export');
-
-    const types = await this.typeService.getAllTypes(database, { includeSystem });
-    const classes = [];
-
+  async getOntology(db) {
+    const types = await this.typeService.getAllTypes(db, { includeSystem: false });
+    const classes = [], properties = [], relationships = [];
     for (const type of types) {
-      const classNode = {
-        '@id': `integram:${database}/${type.name}`,
-        '@type': 'rdfs:Class',
-        'rdfs:label': type.name,
-        'integram:typeId': type.id,
-        'integram:baseType': type.baseType,
-      };
-      if (includeRequisites) {
-        const requisites = await this.typeService.getRequisites(database, type.id);
-        classNode['integram:properties'] = requisites.map(req => ({
-          '@id': `integram:${database}/${type.name}/${req.alias || req.name}`,
-          '@type': 'rdf:Property',
-          'rdfs:label': req.name,
-          'integram:requisiteId': req.id,
-          'integram:dataType': req.basicType,
-          'integram:typeId': req.typeId,
-          'integram:required': req.required,
-          'integram:multi': req.multi,
-          'integram:isReference': !(req.typeId in BASIC_TYPES),
-          ...(req.alias ? { 'integram:alias': req.alias } : {}),
-        }));
-      }
-      classes.push(classNode);
-    }
-
-    const mappings = await this._loadMappings(database);
-    for (const cls of classes) {
-      const typeId = cls['integram:typeId'];
-      if (mappings[typeId]) cls['owl:equivalentClass'] = { '@id': mappings[typeId] };
-    }
-
-    return {
-      '@context': {
-        'rdfs': 'http://www.w3.org/2000/01/rdf-schema#',
-        'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
-        'owl': 'http://www.w3.org/2002/07/owl#',
-        'integram': `https://integram.app/ontology/${database}/`,
-      },
-      '@graph': classes,
-    };
-  }
-
-  async getKnowledgeGraph(database, options = {}) {
-    if (!this.typeService) throw new Error('TypeService is required for knowledge graph');
-    const types = await this.typeService.getAllTypes(database);
-    const nodes = [];
-    const edges = [];
-
-    for (const type of types) {
-      nodes.push({ id: `type:${type.id}`, label: type.name, kind: 'type', typeId: type.id });
-      const requisites = await this.typeService.getRequisites(database, type.id);
+      const classUri = `${BASE_URI}#${this._safeName(type.val)}`;
+      classes.push({ uri: classUri, label: type.val, typeId: type.id, comment: `Тип Integram #${type.id}` });
+      let requisites = [];
+      try { const schema = await this.typeService.getSchema(db, type.id); requisites = schema.requisites || []; } catch (e) {}
       for (const req of requisites) {
-        if (!(req.typeId in BASIC_TYPES)) {
-          edges.push({
-            source: `type:${type.id}`, target: `type:${req.typeId}`,
-            label: req.alias || req.name, kind: 'reference',
-            requisiteId: req.id, multi: req.multi,
-          });
+        const propUri = `${BASE_URI}#${this._safeName(type.val)}_${this._safeName(req.val)}`;
+        if (req.t && req.t >= 100) {
+          relationships.push({ uri: propUri, label: req.val, domain: classUri, range: `${BASE_URI}#type_${req.t}`, requisiteId: req.id });
+        } else {
+          properties.push({ uri: propUri, label: req.val, domain: classUri, range: XSD_TYPE_MAP[req.t] || 'xsd:string', requisiteId: req.id });
         }
       }
     }
+    return { baseUri: BASE_URI, namespaces: NAMESPACES, classes, properties, relationships, stats: { classCount: classes.length, propertyCount: properties.length, relationshipCount: relationships.length } };
+  }
 
-    if (options.includeData && this.queryService) {
-      const sampleLimit = options.sampleLimit || 10;
-      for (const type of types) {
-        try {
-          const objects = await this.queryService.queryObjects(database, { typeId: type.id, limit: sampleLimit });
-          for (const obj of objects) {
-            nodes.push({ id: `obj:${obj.id}`, label: obj.val || obj.value || `#${obj.id}`, kind: 'object', typeId: type.id });
-            edges.push({ source: `obj:${obj.id}`, target: `type:${type.id}`, label: 'instanceOf', kind: 'instanceOf' });
-          }
-        } catch (err) {
-          this.logger.warn('Failed to sample objects', { typeId: type.id, error: err.message });
-        }
-      }
+  async exportJsonLd(db) {
+    const ont = await this.getOntology(db);
+    const graph = [];
+    for (const c of ont.classes) graph.push({ '@id': c.uri, '@type': 'owl:Class', 'rdfs:label': c.label, 'rdfs:comment': c.comment });
+    for (const p of ont.properties) graph.push({ '@id': p.uri, '@type': 'owl:DatatypeProperty', 'rdfs:label': p.label, 'rdfs:domain': { '@id': p.domain }, 'rdfs:range': { '@id': p.range } });
+    for (const r of ont.relationships) graph.push({ '@id': r.uri, '@type': 'owl:ObjectProperty', 'rdfs:label': r.label, 'rdfs:domain': { '@id': r.domain }, 'rdfs:range': { '@id': r.range } });
+    return { '@context': { rdf: NAMESPACES.rdf, rdfs: NAMESPACES.rdfs, owl: NAMESPACES.owl, xsd: NAMESPACES.xsd, igr: NAMESPACES.igr }, '@graph': graph };
+  }
+
+  async exportOwl(db) {
+    const ont = await this.getOntology(db);
+    const l = ['<?xml version="1.0" encoding="UTF-8"?>', '<rdf:RDF'];
+    for (const [p, u] of Object.entries(NAMESPACES)) l.push(`  xmlns:${p}="${u}"`);
+    l.push('>', `  <owl:Ontology rdf:about="${BASE_URI}">`, `    <rdfs:label>Integram Ontology — ${db}</rdfs:label>`, '  </owl:Ontology>');
+    for (const c of ont.classes) { l.push(`  <owl:Class rdf:about="${c.uri}">`, `    <rdfs:label>${this._escapeXml(c.label)}</rdfs:label>`); if (c.comment) l.push(`    <rdfs:comment>${this._escapeXml(c.comment)}</rdfs:comment>`); l.push('  </owl:Class>'); }
+    for (const p of ont.properties) l.push(`  <owl:DatatypeProperty rdf:about="${p.uri}">`, `    <rdfs:label>${this._escapeXml(p.label)}</rdfs:label>`, `    <rdfs:domain rdf:resource="${p.domain}"/>`, `    <rdfs:range rdf:resource="${NAMESPACES.xsd}${p.range.replace('xsd:', '')}"/>`, '  </owl:DatatypeProperty>');
+    for (const r of ont.relationships) l.push(`  <owl:ObjectProperty rdf:about="${r.uri}">`, `    <rdfs:label>${this._escapeXml(r.label)}</rdfs:label>`, `    <rdfs:domain rdf:resource="${r.domain}"/>`, `    <rdfs:range rdf:resource="${r.range}"/>`, '  </owl:ObjectProperty>');
+    l.push('</rdf:RDF>');
+    return l.join('\n');
+  }
+
+  async importOntology(db, data) {
+    if (!data || !Array.isArray(data.classes)) throw new Error('ontologyData.classes должен быть массивом');
+    const created = [], errors = [];
+    for (const cls of data.classes) {
+      try {
+        const name = cls.name || cls.label;
+        if (!name) { errors.push({ class: cls, error: 'Отсутствует имя класса' }); continue; }
+        const type = await this.typeService.createType(db, { name, requisites: (cls.properties || []).map(p => ({ name: p.name || p.label, type: this._xsdToIntegram(p.range || p.type) })) });
+        created.push({ name, typeId: type.id });
+      } catch (e) { errors.push({ class: cls.name || cls.label, error: e.message }); }
     }
-
-    return { nodes, edges };
+    return { imported: created.length, created, errors };
   }
 
-  async inferRelationships(database) {
-    if (!this.typeService) throw new Error('TypeService is required for relationship inference');
-    const types = await this.typeService.getAllTypes(database);
-    const relationships = [];
-    const typeNameMap = {};
-    for (const t of types) typeNameMap[t.id] = t.name;
-
-    for (const type of types) {
-      const requisites = await this.typeService.getRequisites(database, type.id);
-      for (const req of requisites) {
-        if (!(req.typeId in BASIC_TYPES)) {
-          relationships.push({
-            sourceTypeId: type.id, sourceTypeName: type.name,
-            targetTypeId: req.typeId, targetTypeName: typeNameMap[req.typeId] || `Unknown(${req.typeId})`,
-            requisiteId: req.id, requisiteName: req.alias || req.name,
-            cardinality: req.multi ? 'many' : 'one', required: req.required,
-          });
-        }
-      }
-    }
-    this.logger.info('Relationships inferred', { database, count: relationships.length });
-    return relationships;
+  async mapToSchema(db, ontologyUri) {
+    const types = await this.typeService.getAllTypes(db);
+    const mappings = types.map(t => ({ localTypeId: t.id, localTypeName: t.val, ontologyUri: `${ontologyUri}#${this._safeName(t.val)}` }));
+    return { ontologyUri, database: db, mappings, count: mappings.length };
   }
 
-  async mapTypeToClass(database, typeId, externalUri) {
-    if (!typeId || !externalUri) throw new Error('typeId and externalUri are required');
-    await this._ensureMappingTable(database);
-    const sql = `INSERT INTO ${database}_ontology_mappings (type_id, external_uri) VALUES (?, ?) ON DUPLICATE KEY UPDATE external_uri = VALUES(external_uri)`;
-    await this.db.execSql(sql, [typeId, externalUri], 'OntologyService.mapTypeToClass');
-    this.logger.info('Type mapped to class', { database, typeId, externalUri });
+  async getSPARQL(db, query) {
+    if (!query || typeof query !== 'string') throw new Error('SPARQL-запрос обязателен');
+    const m = query.trim().match(/SELECT\s+([\s\S]*?)\s+WHERE\s*\{([\s\S]*?)\}/i);
+    if (!m) throw new Error('Поддерживается только SELECT ... WHERE { ... }');
+    const vars = m[1].trim().split(/\s+/), where = m[2].trim();
+    const tp = where.match(/\?\w+\s+(?:a|rdf:type)\s+(?:igr:)?(\w+)/i);
+    if (!tp) { const types = await this.typeService.getAllTypes(db); return { vars, bindings: types.map(t => ({ '?s': `${BASE_URI}#${this._safeName(t.val)}`, '?label': t.val, '?type': 'owl:Class' })), count: types.length }; }
+    const types = await this.typeService.getAllTypes(db);
+    const matched = types.find(t => this._safeName(t.val).toLowerCase() === tp[1].toLowerCase() || t.val.toLowerCase() === tp[1].toLowerCase());
+    if (!matched) return { vars, bindings: [], count: 0 };
+    let schema = null; try { schema = await this.typeService.getSchema(db, matched.id); } catch (e) {}
+    return { vars, bindings: [{ '?s': `${BASE_URI}#${this._safeName(matched.val)}`, '?label': matched.val, '?type': 'owl:Class', '?typeId': matched.id, '?requisites': (schema?.requisites || []).length }], count: 1 };
   }
 
-  async getMappings(database) {
-    await this._ensureMappingTable(database);
-    const sql = `SELECT type_id, external_uri, created_at FROM ${database}_ontology_mappings ORDER BY type_id`;
-    const result = await this.db.execSql(sql, [], 'OntologyService.getMappings');
-    return (result.rows || result).map(r => ({ typeId: r.type_id, externalUri: r.external_uri, createdAt: r.created_at }));
-  }
-
-  async _ensureMappingTable(database) {
-    const sql = `CREATE TABLE IF NOT EXISTS ${database}_ontology_mappings (type_id INT NOT NULL, external_uri VARCHAR(512) NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (type_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
-    await this.db.execSql(sql, [], 'OntologyService._ensureMappingTable');
-  }
-
-  async _loadMappings(database) {
-    try {
-      await this._ensureMappingTable(database);
-      const mappings = await this.getMappings(database);
-      const lookup = {};
-      for (const m of mappings) lookup[m.typeId] = m.externalUri;
-      return lookup;
-    } catch (err) {
-      this.logger.warn('Could not load ontology mappings', { error: err.message });
-      return {};
-    }
-  }
+  _safeName(n) { if (!n) return 'unknown'; return n.replace(/\s+/g, '_').replace(/[^a-zA-Zа-яА-Я0-9_-]/g, '').replace(/^(\d)/, '_$1'); }
+  _escapeXml(s) { if (!s) return ''; return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  _xsdToIntegram(t) { const m = { 'xsd:string': 1, 'xsd:integer': 2, 'xsd:decimal': 3, 'xsd:date': 4, 'xsd:dateTime': 5, 'xsd:boolean': 6, 'xsd:anyURI': 8, 'string': 1, 'integer': 2, 'number': 3, 'date': 4, 'boolean': 6 }; return m[t] || 1; }
 }
 
 export default OntologyService;

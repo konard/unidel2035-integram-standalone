@@ -7,6 +7,9 @@
 
 import { Router } from 'express';
 import { createSchemaRoutes } from './schema.js';
+import { createAuditRoutes } from './audit.js';
+import { createOntologyRoutes } from './ontology.js';
+import { createBatchRoutes } from './batch.js';
 import { createTransactionRoutes } from './transactions.js';
 
 /**
@@ -510,6 +513,30 @@ export function createV2Routes(services, options = {}) {
       res.status(500).json(wrapError(error));
     }
   });
+
+  // ==========================================================================
+  // Роуты аудита (#186)
+  // ==========================================================================
+
+  if (services.auditService) {
+    router.use('/', createAuditRoutes(services, options));
+  }
+
+  // ==========================================================================
+  // Роуты онтологии (#185)
+  // ==========================================================================
+
+  if (services.ontologyService) {
+    router.use('/', createOntologyRoutes(services, options));
+  }
+
+  // ==========================================================================
+  // Роуты пакетных операций (#184)
+  // ==========================================================================
+
+  if (services.batchService) {
+    router.use('/', createBatchRoutes(services, options));
+  }
 
   // ==========================================================================
   // Schema Introspection Routes — выделенный модуль (stats, export, types)
