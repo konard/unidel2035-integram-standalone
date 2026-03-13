@@ -5618,6 +5618,18 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
       return res.status(200).json([{ error: 'Type name (val) is required'  }]);
     }
 
+    // PHP parity: duplicate name check — cannot create type with existing name
+    if (parentId === 0) {
+      const pool = getPool();
+      const [dupeRows] = await pool.query(
+        `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? LIMIT 1`,
+        [name]
+      );
+      if (dupeRows.length > 0) {
+        return res.status(200).json([{ error: `Type with name "${name}" already exists` }]);
+      }
+    }
+
     // PHP line 7788: $unique = isset($_REQUEST["unique"]) ? 1 : 0
     // PHP line 8327: "Ord=1 means the Obj must be unique" — for root-level types (up=0) ord IS the unique flag
     // PHP _d_new: Insert(0, $unique, $t, $val) — always inserts at up=0, ord = unique flag (0 or 1)
@@ -5668,6 +5680,17 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
       return res.status(200).json([{ error: 'No fields to update'  }]);
     }
 
+    // PHP parity: duplicate name check — cannot rename type to an existing name
+    if (val !== undefined) {
+      const [dupeRows] = await pool.query(
+        `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? AND id != ? LIMIT 1`,
+        [val, id]
+      );
+      if (dupeRows.length > 0) {
+        return res.status(200).json([{ error: `Type with name "${val}" already exists` }]);
+      }
+    }
+
     const updates = [];
     const params = [];
     if (val !== undefined) { updates.push('val = ?'); params.push(val); }
@@ -5702,22 +5725,44 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
 
   try {
     const id = parseInt(typeId, 10);
-    const cascade = req.body.cascade === '1' || req.body.cascade === true;
+    const pool = getPool();
+    let warnings = '';
 
-    // Delete children first if cascade
-    if (cascade) {
-      await deleteChildren(db, id);
+    // PHP parity: instance count check — warn if type has existing instances
+    const [[instRow]] = await pool.query(
+      `SELECT COUNT(id) AS cnt FROM \`${db}\` WHERE t = ?`, [id]
+    );
+    if (instRow && instRow.cnt > 0) {
+      warnings = `Warning: ${instRow.cnt} instance(s) of this type exist. `;
     }
 
-    // Delete the type
-    await deleteRow(db, id);
+    // PHP parity: report usage check — check if type is referenced in reports
+    const [[repRow]] = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM \`${db}\` WHERE t = ${TYPE.REP_COLS} AND val = ?`,
+      [String(id)]
+    );
+    if (repRow && repRow.cnt > 0) {
+      warnings += `Warning: type is referenced in ${repRow.cnt} report column(s). `;
+    }
 
-    logger.info('[Legacy _d_del] Type deleted', { db, id, cascade });
+    // PHP parity: role/grant usage check
+    const [[grantRow]] = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM \`${db}\` WHERE t = ${TYPE.GRANT} AND val = ?`,
+      [String(id)]
+    );
+    if (grantRow && grantRow.cnt > 0) {
+      warnings += `Warning: type is referenced in ${grantRow.cnt} grant(s). `;
+    }
+
+    // Use recursiveDelete — type may have requisites/children
+    await recursiveDelete(pool, db, id);
+
+    logger.info('[Legacy _d_del] Type deleted', { db, id });
 
     // PHP api_dump(): {id:typeId, obj:null, next_act:"edit_types", args:"ext"}
     // PHP: $id stays as original typeId, $obj not set (null), next_act defaults to "edit_types"
     // args: PHP always appends "ext" for all _d_* actions
-    legacyRespond(req, res, db, { id, obj: null, next_act: 'edit_types', args: 'ext' });
+    legacyRespond(req, res, db, { id, obj: null, next_act: 'edit_types', args: 'ext', warnings });
   } catch (error) {
     logger.error('[Legacy _d_del] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5743,9 +5788,38 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     const alias = req.body.alias || null;
     const required = req.body.required === '1' || req.body.required === true;
     const multi = req.body.multi === '1' || req.body.multi === true;
+    const pool = getPool();
 
     if (!name) {
       return res.status(200).json([{ error: 'Requisite name (val) is required'  }]);
+    }
+
+    // PHP parity (Add_Req): validate before adding requisite
+    // 1. Target type exists
+    const [targetRows] = await pool.query(
+      `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId]
+    );
+    if (targetRows.length === 0) {
+      return res.status(200).json([{ error: `Type ${parentId} does not exist` }]);
+    }
+
+    // 2. Target is metadata row (up = 0) — cannot add requisite to instance
+    if (targetRows[0].up !== 0) {
+      return res.status(200).json([{ error: 'Cannot add requisite to an instance, only to type definitions' }]);
+    }
+
+    // 3. Not self-referencing (type cannot reference itself)
+    if (reqType === parentId) {
+      return res.status(200).json([{ error: 'Type cannot reference itself' }]);
+    }
+
+    // 4. Not duplicate — check if requisite of this type already exists
+    const [dupeRows] = await pool.query(
+      `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? LIMIT 1`,
+      [parentId, reqType]
+    );
+    if (dupeRows.length > 0) {
+      return res.status(200).json([{ error: `Requisite of type ${reqType} already exists on type ${parentId}` }]);
     }
 
     // Build value with modifiers
@@ -5781,8 +5855,13 @@ router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
 
   try {
     const id = parseInt(reqId, 10);
-    const newAlias = req.body.alias || '';
+    const newAlias = req.body.alias || req.body.val || '';
     const pool = getPool();
+
+    // PHP parity: reject colons in alias — reserved for internal markers like :MULTI:
+    if (newAlias.includes(':')) {
+      return res.status(200).json([{ error: 'Alias cannot contain colon character' }]);
+    }
 
     // Get current value
     const obj = await getObjectById(db, id);
@@ -5831,6 +5910,14 @@ router.post('/:db/_d_null/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacy
       return res.status(404).json({ error: 'Requisite not found' });
     }
 
+    // Metadata verification: only allow toggling nullable on metadata-level requisites (parent.up === 0)
+    const [parentRows] = await pool.query(
+      `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up]
+    );
+    if (parentRows.length === 0 || parentRows[0].up !== 0) {
+      return res.status(200).json([{ error: 'Can only toggle NULL on type definitions, not instances' }]);
+    }
+
     // Parse existing modifiers
     const modifiers = parseModifiers(obj.val);
 
@@ -5875,6 +5962,14 @@ router.post('/:db/_d_multi/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     const obj = await getObjectById(db, id);
     if (!obj) {
       return res.status(404).json({ error: 'Requisite not found' });
+    }
+
+    // Metadata verification: only allow toggling multi on metadata-level requisites (parent.up === 0)
+    const [parentRows] = await pool.query(
+      `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up]
+    );
+    if (parentRows.length === 0 || parentRows[0].up !== 0) {
+      return res.status(200).json([{ error: 'Can only toggle MULTI on type definitions, not instances' }]);
     }
 
     // Parse existing modifiers
@@ -5945,9 +6040,10 @@ router.post('/:db/_d_attrs/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
 
     logger.info('[Legacy _d_attrs] Modifiers updated', { db, id, alias: newAlias, required: newRequired, multi: newMulti });
 
-    // PHP api_dump(): {id:reqId, obj:0, next_act:"edit_types", args:"ext"}
-    // PHP: $id = reqId (URL param), $obj is never set in this handler (stays at default 0)
-    legacyRespond(req, res, db, { id, obj: 0, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:reqId, obj:parentTypeId, next_act:"edit_types", args:"ext"}
+    // PHP returns parent type ID (from req.body.up or obj.up) for frontend refresh
+    const parentTypeId = parseInt(req.body.up || obj.up, 10);
+    legacyRespond(req, res, db, { id, obj: String(parentTypeId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_attrs] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -5989,9 +6085,11 @@ router.post('/:db/_d_up/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDd
 
     const prevSibling = siblings[0];
 
-    // Swap orders
-    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [obj.ord, prevSibling.id]);
-    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [prevSibling.ord, id]);
+    // Atomic swap using single CASE WHEN UPDATE (PHP parity — prevents intermediate inconsistent state)
+    await pool.query(
+      `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`,
+      [id, prevSibling.ord, prevSibling.id, obj.ord, id, prevSibling.id]
+    );
 
     logger.info('[Legacy _d_up] Requisite moved up', { db, id, newOrd: prevSibling.ord });
 
@@ -6055,9 +6153,9 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
 
     logger.info('[Legacy _d_ord] Order set', { db, id, ord: newOrd });
 
-    // PHP api_dump(): {id:reqId, obj:reqId, next_act:"edit_types", args:"ext"}
-    // PHP: $id stays as the reqId URL param (integer), $obj = $id (same)
-    legacyRespond(req, res, db, { id, obj: id, next_act: 'edit_types', args: 'ext' });
+    // PHP api_dump(): {id:parentId, obj:parentId, next_act:"edit_types", args:"ext"}
+    // PHP returns the parent type ID so frontend refreshes the type editor
+    legacyRespond(req, res, db, { id: String(parentId), obj: String(parentId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
@@ -6077,21 +6175,45 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
 
   try {
     const id = parseInt(reqId, 10);
-    const cascade = req.body.cascade === '1' || req.body.cascade === true;
+    const pool = getPool();
+    const forced = req.body.forced !== undefined || req.query.forced !== undefined;
 
-    // Fetch parent (type_id) BEFORE deleting
+    // Fetch requisite info BEFORE deleting
     const obj = await getObjectById(db, id);
-    const typeId = obj ? obj.up : 0;
+    if (!obj) {
+      return res.status(200).json([{ error: 'Requisite not found' }]);
+    }
+    const typeId = obj.up;
 
-    // Delete children first if cascade
-    if (cascade) {
-      await deleteChildren(db, id);
+    // Usage check: cannot delete requisite type if instances exist (unless forced)
+    if (!forced) {
+      const [[usageRow]] = await pool.query(
+        `SELECT COUNT(*) AS cnt FROM \`${db}\` WHERE t = ? AND up != 0`,
+        [id]
+      );
+      if (usageRow && usageRow.cnt > 0) {
+        return res.status(200).json([{ error: `Cannot delete: ${usageRow.cnt} instance(s) of this requisite exist` }]);
+      }
     }
 
-    // Delete the requisite
-    await deleteRow(db, id);
+    // If forced, clean up grants referencing this type
+    if (forced) {
+      await pool.query(
+        `DELETE FROM \`${db}\` WHERE t = ${TYPE.GRANT} AND val = ?`,
+        [String(id)]
+      );
+    }
 
-    logger.info('[Legacy _d_del_req] Requisite deleted', { db, id, cascade });
+    // Renumber remaining siblings after deletion
+    await pool.query(
+      `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND ord > ?`,
+      [typeId, obj.ord]
+    );
+
+    // Use recursiveDelete instead of flat delete — requisite may have children
+    await recursiveDelete(pool, db, id);
+
+    logger.info('[Legacy _d_del_req] Requisite deleted', { db, id, forced });
 
     // PHP api_dump(): {id:type_id, obj:type_id, next_act:"edit_types", args:"ext"}
     // PHP: $id = $obj = $row["up"] (parent type string from DB row), so both are strings
