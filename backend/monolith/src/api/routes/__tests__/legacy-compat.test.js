@@ -67,7 +67,19 @@ vi.mock('../../../utils/logger.js', () => ({
 
 // ─── import router AFTER mocks ────────────────────────────────────────────────
 
-const { default: legacyRouter } = await import('../legacy-compat.js');
+const {
+  default: legacyRouter,
+  legacyAuthMiddleware,
+  legacyXsrfCheck,
+  legacyDdlGrantCheck,
+  resolveBuiltIn,
+  recursiveDelete,
+  checkDuplicatedReqs,
+  isBlacklisted,
+  getSubdir,
+  getFilename,
+  checkNewRef,
+} = await import('../legacy-compat.js');
 
 // ─── app factory ─────────────────────────────────────────────────────────────
 
@@ -488,5 +500,320 @@ describe('GET /:db/backup', () => {
     // so the backup handler never runs to produce a 403.
     const res = await request(app).get(`/${DB}/backup`);
     expect([302, 403]).toContain(res.status);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1 — Helper Function Unit Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('legacyAuthMiddleware', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns 401 for missing token', async () => {
+    const req = { params: { db: DB }, headers: {}, cookies: {} };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const next = vi.fn();
+
+    await legacyAuthMiddleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Authentication required' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 for invalid database name', async () => {
+    const req = { params: { db: '!!invalid!!' }, headers: {}, cookies: {} };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const next = vi.fn();
+
+    await legacyAuthMiddleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid database' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 for invalid token (no matching user)', async () => {
+    const token = 'bad-token';
+    const req = { params: { db: DB }, headers: {}, cookies: { [DB]: token } };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const next = vi.fn();
+
+    // Token lookup returns no rows
+    mockQuery([[]]);
+
+    await legacyAuthMiddleware(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid or expired token' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('populates req.legacyUser correctly for valid token', async () => {
+    const token = 'valid-token';
+    const xsrfVal = generateXsrf(token, DB, DB);
+    const req = { params: { db: DB }, headers: {}, cookies: { [DB]: token } };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const next = vi.fn();
+
+    // Token lookup returns user
+    mockQuery(
+      [[{ uid: 42, uname: 'alice', xsrf_val: xsrfVal, role_val: 'Manager', roleId: 7 }]],
+      [[]], // grants query
+    );
+
+    await legacyAuthMiddleware(req, res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(req.legacyUser).toBeDefined();
+    expect(req.legacyUser.uid).toBe(42);
+    expect(req.legacyUser.username).toBe('alice');
+    expect(req.legacyUser.xsrf).toBe(xsrfVal);
+    expect(req.legacyUser.role).toBe('manager');
+    expect(req.legacyUser.roleId).toBe(7);
+    expect(req.legacyUser.grants).toBeDefined();
+  });
+});
+
+describe('legacyXsrfCheck', () => {
+  it('passes through for non-POST requests', () => {
+    const req = { method: 'GET' };
+    const res = {};
+    const next = vi.fn();
+
+    legacyXsrfCheck(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('returns error (HTTP 200) for XSRF mismatch', () => {
+    const req = {
+      method: 'POST',
+      legacyUser: { xsrf: 'correct-xsrf' },
+      body: { _xsrf: 'wrong-xsrf' },
+    };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const next = vi.fn();
+
+    legacyXsrfCheck(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith([{ error: 'Invalid or expired CSRF token' }]);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('passes through for valid XSRF', () => {
+    const req = {
+      method: 'POST',
+      legacyUser: { xsrf: 'valid-xsrf-token' },
+      body: { _xsrf: 'valid-xsrf-token' },
+    };
+    const res = {};
+    const next = vi.fn();
+
+    legacyXsrfCheck(req, res, next);
+    expect(next).toHaveBeenCalled();
+  });
+
+  it('returns error when legacyUser is missing', () => {
+    const req = { method: 'POST', body: { _xsrf: 'any' } };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const next = vi.fn();
+
+    legacyXsrfCheck(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(next).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveBuiltIn', () => {
+  const user = { uid: 42, username: 'alice', role: 'manager', roleId: 7 };
+
+  it('replaces %USER% with username', () => {
+    expect(resolveBuiltIn('Created by %USER%', user, DB)).toBe('Created by alice');
+  });
+
+  it('replaces %USERID% with user ID', () => {
+    expect(resolveBuiltIn('Owner: %USERID%', user, DB)).toBe('Owner: 42');
+  });
+
+  it('replaces %DB% with database name', () => {
+    expect(resolveBuiltIn('DB: %DB%', user, DB)).toBe(`DB: ${DB}`);
+  });
+
+  it('replaces %IP% with client IP', () => {
+    expect(resolveBuiltIn('IP: %IP%', user, DB, 0, '192.168.1.1')).toBe('IP: 192.168.1.1');
+  });
+
+  it('replaces %DATE%, %TIME%, %DATETIME%', () => {
+    const result = resolveBuiltIn('%DATE% %TIME% %DATETIME%', user, DB, 0);
+    // Should contain date-like patterns (dd.mm.yyyy)
+    expect(result).toMatch(/\d{2}\.\d{2}\.\d{4}/);
+    // Should contain time-like patterns (hh:mm:ss)
+    expect(result).toMatch(/\d{2}:\d{2}:\d{2}/);
+  });
+
+  it('returns non-string values unchanged', () => {
+    expect(resolveBuiltIn(null, user, DB)).toBeNull();
+    expect(resolveBuiltIn(undefined, user, DB)).toBeUndefined();
+    expect(resolveBuiltIn('', user, DB)).toBe('');
+  });
+
+  it('replaces multiple placeholders in one string', () => {
+    const result = resolveBuiltIn('%USER% (%USERID%) on %DB%', user, DB);
+    expect(result).toBe(`alice (42) on ${DB}`);
+  });
+});
+
+describe('recursiveDelete', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('deletes a leaf node (no children)', async () => {
+    const queries = [];
+    const pool = {
+      query: vi.fn(async (sql, params) => {
+        queries.push({ sql, params });
+        if (sql.includes('SELECT')) return [[]]; // no children
+        return [{ affectedRows: 1 }]; // DELETE
+      }),
+    };
+
+    await recursiveDelete(pool, DB, 100);
+
+    // Should query for children, then delete self
+    expect(queries).toHaveLength(2);
+    expect(queries[0].sql).toContain('SELECT');
+    expect(queries[0].params).toEqual([100]);
+    expect(queries[1].sql).toContain('DELETE');
+    expect(queries[1].params).toEqual([100]);
+  });
+
+  it('recursively deletes children before parent', async () => {
+    const deletedIds = [];
+    const pool = {
+      query: vi.fn(async (sql, params) => {
+        if (sql.includes('SELECT') && params[0] === 1) return [[{ id: 2 }, { id: 3 }]];
+        if (sql.includes('SELECT')) return [[]]; // leaves
+        if (sql.includes('DELETE')) { deletedIds.push(params[0]); return [{ affectedRows: 1 }]; }
+        return [[]];
+      }),
+    };
+
+    await recursiveDelete(pool, DB, 1);
+
+    // Children deleted before parent
+    expect(deletedIds).toEqual([2, 3, 1]);
+  });
+});
+
+describe('checkDuplicatedReqs', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns false when no duplicates exist', async () => {
+    const pool = {
+      query: vi.fn(async () => [[{ id: 10 }]]), // single row = no dup
+    };
+    const result = await checkDuplicatedReqs(pool, DB, 1, 5);
+    expect(result).toBe(false);
+  });
+
+  it('returns true and deletes older duplicates', async () => {
+    const deletedIds = [];
+    const pool = {
+      query: vi.fn(async (sql, params) => {
+        if (sql.includes('ORDER BY')) return [[{ id: 10 }, { id: 8 }, { id: 5 }]];
+        if (sql.includes('SELECT')) return [[]]; // no children for recursive delete
+        if (sql.includes('DELETE')) { deletedIds.push(params[0]); return [{ affectedRows: 1 }]; }
+        return [[]];
+      }),
+    };
+    const result = await checkDuplicatedReqs(pool, DB, 1, 5);
+    expect(result).toBe(true);
+    // Should delete older IDs (8, 5) but keep newest (10)
+    expect(deletedIds).toContain(8);
+    expect(deletedIds).toContain(5);
+    expect(deletedIds).not.toContain(10);
+  });
+});
+
+describe('isBlacklisted', () => {
+  it('blocks PHP files', () => {
+    expect(isBlacklisted('shell.php')).toBe(true);
+    expect(isBlacklisted('backdoor.phtml')).toBe(true);
+    expect(isBlacklisted('test.php3')).toBe(true);
+    expect(isBlacklisted('test.php4')).toBe(true);
+    expect(isBlacklisted('test.php5')).toBe(true);
+  });
+
+  it('blocks server-side scripts', () => {
+    expect(isBlacklisted('evil.cgi')).toBe(true);
+    expect(isBlacklisted('hack.pl')).toBe(true);
+    expect(isBlacklisted('run.asp')).toBe(true);
+    expect(isBlacklisted('run.jsp')).toBe(true);
+  });
+
+  it('allows safe extensions', () => {
+    expect(isBlacklisted('image.png')).toBe(false);
+    expect(isBlacklisted('doc.pdf')).toBe(false);
+    expect(isBlacklisted('data.csv')).toBe(false);
+    expect(isBlacklisted('page.html')).toBe(false);
+  });
+
+  it('handles edge cases', () => {
+    expect(isBlacklisted('')).toBe(false);
+    expect(isBlacklisted(null)).toBe(false);
+    expect(isBlacklisted(undefined)).toBe(false);
+  });
+
+  it('is case-insensitive', () => {
+    expect(isBlacklisted('FILE.PHP')).toBe(true);
+    expect(isBlacklisted('test.Phtml')).toBe(true);
+  });
+});
+
+describe('getSubdir / getFilename', () => {
+  it('returns consistent subdirectory for same id', () => {
+    const dir1 = getSubdir(DB, 1500);
+    const dir2 = getSubdir(DB, 1500);
+    expect(dir1).toBe(dir2);
+  });
+
+  it('subdirectory starts with floor(id/1000)', () => {
+    const dir = getSubdir(DB, 2500);
+    expect(dir).toMatch(/^2/); // floor(2500/1000) = 2
+  });
+
+  it('returns consistent filename for same id', () => {
+    const fn1 = getFilename(DB, 42);
+    const fn2 = getFilename(DB, 42);
+    expect(fn1).toBe(fn2);
+  });
+
+  it('filename starts with zero-padded id suffix', () => {
+    const fn = getFilename(DB, 42);
+    expect(fn).toMatch(/^042/); // ('00' + 42).slice(-3) = '042'
+  });
+
+  it('different dbs produce different paths', () => {
+    const dir1 = getSubdir('db1', 100);
+    const dir2 = getSubdir('db2', 100);
+    expect(dir1).not.toBe(dir2);
+  });
+});
+
+describe('checkNewRef', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('returns true when reference exists', async () => {
+    const pool = { query: vi.fn(async () => [[{ 1: 1 }]]) };
+    const result = await checkNewRef(pool, DB, 5, 42);
+    expect(result).toBe(true);
+  });
+
+  it('returns false when reference does not exist', async () => {
+    const pool = { query: vi.fn(async () => [[]]) };
+    const result = await checkNewRef(pool, DB, 5, 999);
+    expect(result).toBe(false);
   });
 });
