@@ -27,6 +27,7 @@ import { TransactionService } from './services/TransactionService.js';
 import { AuditService } from './services/AuditService.js';
 import { OntologyService } from './services/OntologyService.js';
 import { BatchService } from './services/BatchService.js';
+import { EventService } from './services/EventService.js';
 import { LegacyFormatTransformer } from './middleware/LegacyFormatTransformer.js';
 import { createV1Routes } from './routes/v1/index.js';
 import { createV2Routes } from './routes/v2/index.js';
@@ -103,6 +104,9 @@ export class CoreDataService {
       queryService: this.queryService,
     }, options);
 
+    // Event Streaming (#187)
+    this.eventService = new EventService(databaseService, options);
+
     this.validationService = validationService;
     this.transformer = new LegacyFormatTransformer(options);
   }
@@ -122,6 +126,7 @@ export class CoreDataService {
       auditService: this.auditService,
       ontologyService: this.ontologyService,
       batchService: this.batchService,
+      eventService: this.eventService,
     };
   }
 
@@ -218,6 +223,7 @@ export default {
   AuditService,
   OntologyService,
   BatchService,
+  EventService,
   LegacyFormatTransformer,
   createCoreDataService,
   createApp,

@@ -12,6 +12,7 @@ import { TransactionService } from './TransactionService.js';
 import { AuditService } from './AuditService.js';
 import { OntologyService } from './OntologyService.js';
 import { BatchService } from './BatchService.js';
+import { EventService } from './EventService.js';
 
 export { ObjectService } from './ObjectService.js';
 export { QueryService } from './QueryService.js';
@@ -22,8 +23,9 @@ export { TransactionService, TRANSACTION_ACTIONS, TX_STATUS } from './Transactio
 export { AuditService, AUDIT_ACTIONS } from './AuditService.js';
 export { OntologyService } from './OntologyService.js';
 export { BatchService } from './BatchService.js';
+export { EventService, EVENT_ACTIONS } from './EventService.js';
 
 export default {
   ObjectService, QueryService, SchemaService, TypeService, ValidationService,
-  TransactionService, AuditService, OntologyService, BatchService,
+  TransactionService, AuditService, OntologyService, BatchService, EventService,
 };
