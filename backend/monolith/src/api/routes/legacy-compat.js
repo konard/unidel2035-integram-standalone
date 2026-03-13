@@ -3649,7 +3649,7 @@ async function getRequisiteByType(db, parentId, typeId) {
  * Parameters: up (parent ID), t (type ID), val, t{id}=value (attributes)
  * Supports file uploads for FILE-type requisites (multer memoryStorage).
  */
-router.post('/:db/_m_new/:up?', (req, res, next) => {
+router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res, next) => {
   // Use upload.any() so FILE-type requisites can be uploaded alongside text fields
   upload.any()(req, res, (err) => {
     if (err) logger.warn('[Legacy _m_new] Multer error', { error: err.message });
@@ -3756,7 +3756,7 @@ router.post('/:db/_m_new/:up?', (req, res, next) => {
  * PHP: index.php lines 7991-8163
  * When copybtn is set, copies the object and all its requisites.
  */
-router.post('/:db/_m_save/:id', async (req, res) => {
+router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -4004,7 +4004,7 @@ router.post('/:db/_m_save/:id', async (req, res) => {
  * _m_del - Delete object
  * POST /:db/_m_del/:id
  */
-router.post('/:db/_m_del/:id', async (req, res) => {
+router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -4098,7 +4098,7 @@ router.post('/:db/_m_del/:id', async (req, res) => {
  * Parameters: t{id}=value (attributes to set), or t{id}=<file> for inline file upload
  * saveInlineFile in smartq.js uploads file as t{reqId} and reads json.args as download path
  */
-router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
+router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any(), async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -4180,7 +4180,7 @@ router.post('/:db/_m_set/:id', upload.any(), async (req, res) => {
  * POST /:db/_m_move/:id
  * Parameters: up (new parent ID)
  */
-router.post('/:db/_m_move/:id', async (req, res) => {
+router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -4641,7 +4641,7 @@ router.all('/:db/_d_main/:typeId', async (req, res) => {
  * PHP filters types through Grant_1level($id) — shows only those the user has access to.
  * Node.js now replicates this behavior using the grant1Level function.
  */
-router.get('/:db/terms', async (req, res) => {
+router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
   const { db } = req.params;
 
   if (!isValidDbName(db)) {
@@ -4809,7 +4809,7 @@ router.get('/:db/xsrf', async (req, res) => {
  *   ?r=<id> - Restrict to specific ID
  *   ?r=<id1>,<id2> - Restrict to multiple IDs
  */
-router.get('/:db/_ref_reqs/:refId', async (req, res) => {
+router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
   const { db, refId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5045,7 +5045,7 @@ router.get('/:db/_ref_reqs/:refId', async (req, res) => {
  * _connect - Check database connection (or proxy to CONNECT requisite URL if id given)
  * GET/POST /:db/_connect[/:id]
  */
-router.all('/:db/_connect/:id?', async (req, res) => {
+router.all('/:db/_connect/:id?', legacyAuthMiddleware, async (req, res) => {
   const { db, id: idParam } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5146,7 +5146,7 @@ function buildModifiers(name, alias, required, multi) {
  * POST /:db/_d_new/:parentTypeId?
  * Parameters: val (type name), t (base type), parentTypeId (optional parent)
  */
-router.post('/:db/_d_new/:parentTypeId?', async (req, res) => {
+router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, parentTypeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5189,7 +5189,7 @@ router.post('/:db/_d_new/:parentTypeId?', async (req, res) => {
  * POST /:db/_d_save/:typeId
  * Parameters: val (new name), t (new base type)
  */
-router.post('/:db/_d_save/:typeId', async (req, res) => {
+router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5237,7 +5237,7 @@ router.post('/:db/_d_save/:typeId', async (req, res) => {
  * _d_del - Delete type
  * POST /:db/_d_del/:typeId
  */
-router.post('/:db/_d_del/:typeId', async (req, res) => {
+router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5273,7 +5273,7 @@ router.post('/:db/_d_del/:typeId', async (req, res) => {
  * POST /:db/_d_req/:typeId
  * Parameters: val (requisite name), t (requisite type), alias, required, multi
  */
-router.post('/:db/_d_req/:typeId', async (req, res) => {
+router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5316,7 +5316,7 @@ router.post('/:db/_d_req/:typeId', async (req, res) => {
  * POST /:db/_d_alias/:reqId
  * Parameters: alias (new alias value)
  */
-router.post('/:db/_d_alias/:reqId', async (req, res) => {
+router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5358,7 +5358,7 @@ router.post('/:db/_d_alias/:reqId', async (req, res) => {
  * POST /:db/_d_null/:reqId
  * Parameters: required (1/0 or true/false)
  */
-router.post('/:db/_d_null/:reqId', async (req, res) => {
+router.post('/:db/_d_null/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5404,7 +5404,7 @@ router.post('/:db/_d_null/:reqId', async (req, res) => {
  * POST /:db/_d_multi/:reqId
  * Parameters: multi (1/0 or true/false)
  */
-router.post('/:db/_d_multi/:reqId', async (req, res) => {
+router.post('/:db/_d_multi/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5450,7 +5450,7 @@ router.post('/:db/_d_multi/:reqId', async (req, res) => {
  * POST /:db/_d_attrs/:reqId
  * Parameters: alias, required, multi (sets all modifiers at once)
  */
-router.post('/:db/_d_attrs/:reqId', async (req, res) => {
+router.post('/:db/_d_attrs/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5502,7 +5502,7 @@ router.post('/:db/_d_attrs/:reqId', async (req, res) => {
  * _d_up - Move requisite up (decrease order)
  * POST /:db/_d_up/:reqId
  */
-router.post('/:db/_d_up/:reqId', async (req, res) => {
+router.post('/:db/_d_up/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5553,7 +5553,7 @@ router.post('/:db/_d_up/:reqId', async (req, res) => {
  * POST /:db/_d_ord/:reqId
  * Parameters: order (new order value) — PHP uses $_REQUEST["order"] not "ord"
  */
-router.post('/:db/_d_ord/:reqId', async (req, res) => {
+router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5612,7 +5612,7 @@ router.post('/:db/_d_ord/:reqId', async (req, res) => {
  * _d_del_req - Delete requisite
  * POST /:db/_d_del_req/:reqId
  */
-router.post('/:db/_d_del_req/:reqId', async (req, res) => {
+router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5654,7 +5654,7 @@ router.post('/:db/_d_del_req/:reqId', async (req, res) => {
  * PHP line 8649: SELECT ref.id FROM obj LEFT JOIN ref ON ref.up=0 AND ref.t=$id AND ref.val=''
  * PHP line 8661: Insert(0, 0, $id, "", "Create Ref") — up=0, ord=0, t=$id, val=""
  */
-router.post('/:db/_d_ref/:typeId', async (req, res) => {
+router.post('/:db/_d_ref/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacyDdlGrantCheck, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5712,7 +5712,7 @@ router.post('/:db/_d_ref/:typeId', async (req, res) => {
  * _m_up - Move object up (decrease order)
  * POST /:db/_m_up/:id
  */
-router.post('/:db/_m_up/:id', async (req, res) => {
+router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5763,7 +5763,7 @@ router.post('/:db/_m_up/:id', async (req, res) => {
  * POST /:db/_m_ord/:id
  * Parameters: order (new order value, in query string: ?JSON&order=N)
  */
-router.post('/:db/_m_ord/:id', async (req, res) => {
+router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5832,7 +5832,7 @@ router.post('/:db/_m_ord/:id', async (req, res) => {
  * _m_id - Change object ID (reserved operation)
  * POST /:db/_m_id/:id
  */
-router.post('/:db/_m_id/:id', async (req, res) => {
+router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5892,7 +5892,7 @@ router.post('/:db/_m_id/:id', async (req, res) => {
  * obj_meta - Get object metadata with requisites
  * GET/POST /:db/obj_meta/:id
  */
-router.all('/:db/obj_meta/:id', async (req, res) => {
+router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -5974,7 +5974,7 @@ router.all('/:db/obj_meta/:id', async (req, res) => {
  * metadata - Get type/term metadata for all or specific type
  * GET/POST /:db/metadata/:typeId?
  */
-router.all('/:db/metadata/:typeId?', async (req, res) => {
+router.all('/:db/metadata/:typeId?', legacyAuthMiddleware, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {

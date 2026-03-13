@@ -817,3 +817,104 @@ describe('checkNewRef', () => {
     expect(result).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 — Middleware Wiring Integration Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Phase 2: middleware wiring', () => {
+  const app = makeApp();
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  describe('DML routes reject unauthenticated requests', () => {
+    const dmlRoutes = [
+      ['_m_new/1', 'POST'],
+      ['_m_save/1', 'POST'],
+      ['_m_del/1', 'POST'],
+      ['_m_set/1', 'POST'],
+      ['_m_move/1', 'POST'],
+      ['_m_up/1', 'POST'],
+      ['_m_ord/1', 'POST'],
+      ['_m_id/1', 'POST'],
+    ];
+
+    for (const [route, method] of dmlRoutes) {
+      it(`POST /${DB}/${route} → 401 without token`, async () => {
+        const res = await request(app)
+          .post(`/${DB}/${route}`)
+          .send({ _xsrf: 'fake' });
+        expect(res.status).toBe(401);
+        expect(res.body.error).toBeDefined();
+      });
+    }
+  });
+
+  describe('DML routes reject invalid XSRF', () => {
+    const token = 'dml-token';
+    const xsrf = generateXsrf(token, DB, DB);
+
+    it('POST _m_save with wrong XSRF → error (HTTP 200)', async () => {
+      // Auth middleware: token lookup returns user
+      mockQuery(
+        [[{ uid: 1, uname: 'alice', xsrf_val: xsrf, role_val: 'Manager', roleId: 7 }]],
+        [[]], // grants
+      );
+
+      const res = await request(app)
+        .post(`/${DB}/_m_save/1`)
+        .set('Cookie', `${DB}=${token}`)
+        .send({ _xsrf: 'wrong-xsrf', val: 'test' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([{ error: 'Invalid or expired CSRF token' }]);
+    });
+  });
+
+  describe('DDL routes reject unauthenticated requests', () => {
+    const ddlRoutes = [
+      '_d_new', '_d_save/1', '_d_del/1', '_d_req/1',
+      '_d_alias/1', '_d_null/1', '_d_multi/1', '_d_attrs/1',
+      '_d_up/1', '_d_ord/1', '_d_del_req/1', '_d_ref/1',
+    ];
+
+    for (const route of ddlRoutes) {
+      it(`POST /${DB}/${route} → 401 without token`, async () => {
+        const res = await request(app)
+          .post(`/${DB}/${route}`)
+          .send({ _xsrf: 'fake' });
+        expect(res.status).toBe(401);
+        expect(res.body.error).toBeDefined();
+      });
+    }
+  });
+
+  describe('Query routes reject unauthenticated requests', () => {
+    const queryRoutes = [
+      ['terms', 'GET'],
+      ['_ref_reqs/1', 'GET'],
+      ['_connect', 'GET'],
+      ['obj_meta/1', 'GET'],
+      ['metadata', 'GET'],
+    ];
+
+    for (const [route, method] of queryRoutes) {
+      it(`GET /${DB}/${route} → 401 without token`, async () => {
+        const res = await request(app)
+          .get(`/${DB}/${route}`);
+        expect(res.status).toBe(401);
+        expect(res.body.error).toBeDefined();
+      });
+    }
+  });
+
+  describe('xsrf route still works without middleware', () => {
+    it('GET /:db/xsrf → 200 with empty session (no token)', async () => {
+      const res = await request(app)
+        .get(`/${DB}/xsrf`);
+      // xsrf route should return 200 with empty session (no 401)
+      expect(res.status).toBe(200);
+      expect(res.body._xsrf).toBe('');
+    });
+  });
+});
