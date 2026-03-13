@@ -262,6 +262,7 @@ router.use((req, res, next) => {
   // Skip global form parser for file-upload routes; they have their own multer
   if (/\/upload\b/.test(req.path)) return next();
   if (/\/_m_new(\/|$)/.test(req.path)) return next();
+  if (/\/_m_save(\/|$)/.test(req.path)) return next();
   if (/\/_m_set(\/|$)/.test(req.path)) return next();
   upload.none()(req, res, next);
 });
@@ -1202,6 +1203,51 @@ async function checkNewRef(pool, db, refTypeId, value) {
     [value, refTypeId]
   );
   return rows.length > 0;
+}
+
+/**
+ * Recursively copy all requisites from source to destination object.
+ * PHP parity: PHP Populate_Reqs() — deep copy including nested children.
+ *
+ * @param {Object} pool - MySQL pool
+ * @param {string} db   - database name
+ * @param {number} srcId - source object ID
+ * @param {number} dstId - destination object ID
+ */
+async function populateReqs(pool, db, srcId, dstId) {
+  const [children] = await pool.query(
+    `SELECT r.id, r.t, r.val, r.ord, typ.t AS base_t FROM \`${db}\` r
+     LEFT JOIN \`${db}\` typ ON typ.id = r.t
+     WHERE r.up = ? ORDER BY r.ord`,
+    [srcId]
+  );
+
+  const uploadDir = path.join(legacyPath, 'download', db);
+  for (const child of children) {
+    let copiedVal = child.val;
+    // For FILE-type requisites, physically copy the file to avoid shared reference
+    if (child.base_t === TYPE.FILE && child.val && child.val.length > 0) {
+      const srcFile = path.join(uploadDir, path.basename(child.val));
+      if (fs.existsSync(srcFile)) {
+        const ext = path.extname(child.val);
+        const newName = `copy_${Date.now()}_${path.basename(child.val, ext)}${ext}`;
+        const dstFile = path.join(uploadDir, newName);
+        try {
+          fs.mkdirSync(uploadDir, { recursive: true });
+          fs.copyFileSync(srcFile, dstFile);
+          copiedVal = newName;
+        } catch (copyErr) {
+          logger.warn('[Legacy populateReqs] File copy failed', { srcFile, error: copyErr.message });
+        }
+      }
+    }
+    const [insertResult] = await pool.query(
+      `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
+      [dstId, child.ord, child.t, copiedVal]
+    );
+    // Recurse into children of this child
+    await populateReqs(pool, db, child.id, insertResult.insertId);
+  }
 }
 
 /**
@@ -3663,6 +3709,12 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
   }
 
   try {
+    const pool = getPool();
+    const { grants, username } = req.legacyUser || {};
+    const tzone = parseInt(req.body.tzone || req.query.tzone || '0', 10);
+    const clientIp = req.ip || '';
+    let warning = '';
+
     // Support two calling conventions:
     // 1. Node.js: URL=_m_new/:parentId?type=<typeId>  val=<name>
     // 2. Legacy:  URL=_m_new/:typeId   body.up=<parentId>  t<typeId>=<name>
@@ -3674,14 +3726,102 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       typeId = parseInt(up, 10);
       parentId = parseInt(req.body.up || req.query.up || '0', 10);
     }
-    const value = req.body.val || req.body['t' + typeId] || '';
+    let value = req.body.val || req.body['t' + typeId] || '';
 
-    if (!typeId) {
+    // Reject invalid parentId and typeId
+    if (parentId === 0) {
+      return res.status(200).json([{ error: 'Parent ID cannot be 0' }]);
+    }
+    if (!typeId || typeId === 0) {
       return res.status(200).json([{ error: 'Type ID (t or type) is required'  }]);
     }
 
+    // Verify type and parent exist
+    const [typeCheck] = await pool.query(
+      `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId]
+    );
+    if (typeCheck.length === 0) {
+      return res.status(200).json([{ error: `Type ${typeId} does not exist` }]);
+    }
+    const [parentCheck] = await pool.query(
+      `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId]
+    );
+    if (parentCheck.length === 0) {
+      return res.status(200).json([{ error: `Parent ${parentId} does not exist` }]);
+    }
+
+    // Grant check + grant1Level when parentId === 1
+    if (parentId === 1) {
+      const level = await grant1Level(pool, db, grants || {}, typeId, username || '');
+      if (!level || level === false) {
+        return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      }
+    } else {
+      if (!await checkGrant(pool, db, grants || {}, parentId, typeId, 'WRITE', username || '')) {
+        return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      }
+    }
+
+    // Apply resolveBuiltIn + formatVal to the main value
+    value = resolveBuiltIn(value, req.legacyUser || {}, db, tzone, clientIp);
+
+    // Fetch type's base type for formatVal
+    const [typeMeta] = await pool.query(
+      `SELECT t AS base_type FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId]
+    );
+    const baseType = typeMeta.length > 0 ? typeMeta[0].base_type : 0;
+
+    // Default values: DATE→today, DATETIME→timestamp, SIGNED→1, NUMBER+unique→MAX+1
+    if (!value) {
+      if (baseType === TYPE.DATE) {
+        const now = new Date();
+        value = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+      } else if (baseType === TYPE.DATETIME) {
+        value = String(Math.floor(Date.now() / 1000));
+      } else if (baseType === TYPE.SIGNED) {
+        value = '1';
+      } else if (baseType === TYPE.NUMBER) {
+        // Check if type has unique constraint (ord=1)
+        const [typeAttrs] = await pool.query(
+          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId]
+        );
+        const attrs = typeAttrs.length > 0 ? String(typeAttrs[0].val) : '';
+        if (attrs.includes(':UNIQ:') || attrs.includes(':ORD:')) {
+          const [maxRows] = await pool.query(
+            `SELECT MAX(CAST(val AS UNSIGNED)) AS maxVal FROM \`${db}\` WHERE t = ?`, [typeId]
+          );
+          value = String((maxRows[0]?.maxVal || 0) + 1);
+        }
+      }
+    }
+
+    value = String(formatVal(baseType, value, tzone));
+
     // Get next order
     const order = await getNextOrder(db, parentId, typeId);
+
+    // Uniqueness check: if ord=1 (unique), check if same val+type already exists
+    if (parseInt(order, 10) === 1 || order === 1) {
+      // Check for uniqueness via type attrs
+      const [typeAttrs] = await pool.query(
+        `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId]
+      );
+      const attrs = typeAttrs.length > 0 ? String(typeAttrs[0].val) : '';
+      if (attrs.includes(':UNIQ:')) {
+        const [existingObj] = await pool.query(
+          `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND up = ? LIMIT 1`,
+          [value, typeId, parentId]
+        );
+        if (existingObj.length > 0) {
+          const existId = existingObj[0].id;
+          warning = 'Object already exists';
+          if (isApiRequest(req)) {
+            return res.json({ id: existId, obj: existId, ord: 0, next_act: 'edit_obj', args: '', val: htmlEsc(formatValView(baseType, value, tzone)), warning });
+          }
+          return res.redirect(`/${db}/edit_obj/${existId}`);
+        }
+      }
+    }
 
     // Insert the object
     const id = await insertRow(db, parentId, order, typeId, value);
@@ -3698,24 +3838,96 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     const attributes = extractAttributes(req.body);
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
       const attrTypeIdNum = parseInt(attrTypeId, 10);
+      // Skip the main type's attribute (already used as value)
+      if (attrTypeIdNum === typeId) continue;
+
       let finalValue = String(attrValue);
+
+      // Fetch attribute metadata for processing
+      const [attrMeta] = await pool.query(
+        `SELECT t AS base_type FROM \`${db}\` WHERE id = ? LIMIT 1`, [attrTypeIdNum]
+      );
+      const attrBaseType = attrMeta.length > 0 ? attrMeta[0].base_type : 0;
 
       // If a file was uploaded for this requisite, persist it and use the filename
       const uploadedFile = fileByField[`t${attrTypeId}`];
       if (uploadedFile) {
-        const uploadDir = path.join(legacyPath, 'download', db);
+        // File blacklist check
+        if (isBlacklisted(uploadedFile.originalname)) {
+          logger.warn('[Legacy _m_new] Blacklisted file rejected', { db, filename: uploadedFile.originalname });
+          continue;
+        }
+        const subdir = getSubdir(db, id);
+        const uploadDir = path.join(legacyPath, 'download', db, subdir);
         fs.mkdirSync(uploadDir, { recursive: true });
-        const safeName = path.basename(uploadedFile.originalname).replace(/[/\\]/g, '_');
+        const ext = path.extname(uploadedFile.originalname);
+        const baseName = getFilename(db, id);
+        const safeName = `${baseName}${ext}`;
         fs.writeFileSync(path.join(uploadDir, safeName), uploadedFile.buffer);
         finalValue = safeName;
         logger.info('[Legacy _m_new] File saved for requisite', { db, attrTypeId, safeName });
+      } else {
+        // Apply resolveBuiltIn + formatVal
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+        finalValue = String(formatVal(attrBaseType, finalValue, tzone));
+      }
+
+      // Multiselect: split comma values for multi fields
+      const [attrAttrs] = await pool.query(
+        `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [attrTypeIdNum]
+      );
+      const attrAttrsStr = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
+      if (attrAttrsStr.includes(':MULTI:') && finalValue.includes(',')) {
+        const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
+        for (const mv of values) {
+          const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+          await insertRow(db, id, attrOrder, attrTypeIdNum, mv);
+        }
+        continue;
+      }
+
+      // Reference storage: if not a base type, store as reference (in t column)
+      if (!REV_BASE_TYPE[attrBaseType]) {
+        const refVal = parseInt(finalValue, 10);
+        if (refVal > 0) {
+          const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+          await insertRow(db, id, attrOrder, refVal, '');
+          continue;
+        }
       }
 
       const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
       await insertRow(db, id, attrOrder, attrTypeIdNum, finalValue);
     }
 
-    const pool = getPool();
+    // Handle NEW_{typeId} parameters — create or find reference objects
+    for (const [key, val] of Object.entries(req.body)) {
+      const match = key.match(/^NEW_(\d+)$/);
+      if (match && val && String(val).trim()) {
+        const refTypeId = parseInt(match[1], 10);
+        const newVal = String(val).trim();
+
+        const [existingRows] = await pool.query(
+          `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? LIMIT 1`,
+          [newVal, refTypeId]
+        );
+
+        let refId;
+        if (existingRows.length > 0) {
+          refId = existingRows[0].id;
+        } else {
+          const [insertResult] = await pool.query(
+            `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (1, 1, ?, ?)`,
+            [refTypeId, newVal]
+          );
+          refId = insertResult.insertId;
+        }
+
+        // Store the reference as a child of the new object
+        const attrOrder = await getNextOrder(db, id, refTypeId);
+        await insertRow(db, id, attrOrder, refId, '');
+      }
+    }
 
     // Check if type has requisites (determines next_act per PHP logic)
     const [reqRows] = await pool.query(
@@ -3731,8 +3943,11 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     const next_act = hasReqs ? 'edit_obj' : 'object';
     const args = hasReqs ? 'new1=1&' : (parentId !== 1 ? `F_U=${parentId}` : '');
 
+    // Response escaping: htmlEsc(formatValView(...))
+    const displayVal = htmlEsc(String(formatValView(baseType, value, tzone)));
+
     if (isApiRequest(req)) {
-      return res.json({ id, obj: id, ord: parseInt(order, 10) || 0, next_act, args, val: value });
+      return res.json({ id, obj: id, ord: parseInt(order, 10) || 0, next_act, args, val: displayVal });
     }
     // Non-JSON: redirect like legacyRespond
     const idPart  = id  ? `/${id}`   : '';
@@ -3756,7 +3971,13 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
  * PHP: index.php lines 7991-8163
  * When copybtn is set, copies the object and all its requisites.
  */
-router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req, res) => {
+router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res, next) => {
+  // Use upload.any() so FILE-type requisites can be uploaded alongside text fields
+  upload.any()(req, res, (err) => {
+    if (err) logger.warn('[Legacy _m_save] Multer error', { error: err.message });
+    next();
+  });
+}, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
@@ -3766,11 +3987,37 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
   try {
     const pool = getPool();
     const originalId = parseInt(id, 10);
+    const { grants, username, uid } = req.legacyUser || {};
+    const tzone = parseInt(req.body.tzone || req.query.tzone || '0', 10);
+    const clientIp = req.ip || '';
+    let warnings = '';
+
+    // Existence check + metadata protection
+    const [existCheck] = await pool.query(
+      `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [originalId]
+    );
+    if (existCheck.length === 0) {
+      return res.status(200).json([{ error: 'Object not found' }]);
+    }
+    if (existCheck[0].up === 0) {
+      return res.status(200).json([{ error: 'Cannot modify metadata object' }]);
+    }
+
+    // Grant check — PHP checks WRITE grant before saving
+    if (!await checkGrant(pool, db, grants || {}, originalId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+    }
 
     // Check if this is a copy operation (PHP: isset($_REQUEST["copybtn"]))
     const isCopy = req.query.copybtn !== undefined || req.body.copybtn !== undefined;
 
     let objectId = originalId;
+
+    // Build a map of uploaded files by field name (t{id} format)
+    const fileByField = {};
+    if (req.files && req.files.length > 0) {
+      for (const f of req.files) fileByField[f.fieldname] = f;
+    }
 
     if (isCopy) {
       // PHP lines 8018-8037: Copy the object
@@ -3814,39 +4061,8 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
 
       objectId = insertResult.insertId;
 
-      // Copy all requisites (PHP: Populate_Reqs)
-      // JOIN the type definition to detect FILE-type requisites (base type t = TYPE.FILE)
-      const [reqRows] = await pool.query(`
-        SELECT r.t, r.val, r.ord, typ.t AS base_t FROM \`${db}\` r
-        LEFT JOIN \`${db}\` typ ON typ.id = r.t
-        WHERE r.up = ?
-        ORDER BY r.ord
-      `, [originalId]);
-
-      const uploadDir = path.join(legacyPath, 'download', db);
-      for (const reqRow of reqRows) {
-        let copiedVal = reqRow.val;
-        // For FILE-type requisites, physically copy the file to avoid shared reference
-        if (reqRow.base_t === TYPE.FILE && reqRow.val && reqRow.val.length > 0) {
-          const srcFile = path.join(uploadDir, path.basename(reqRow.val));
-          if (fs.existsSync(srcFile)) {
-            const ext = path.extname(reqRow.val);
-            const newName = `copy_${Date.now()}_${path.basename(reqRow.val, ext)}${ext}`;
-            const dstFile = path.join(uploadDir, newName);
-            try {
-              fs.mkdirSync(uploadDir, { recursive: true });
-              fs.copyFileSync(srcFile, dstFile);
-              copiedVal = newName;
-            } catch (copyErr) {
-              logger.warn('[Legacy _m_save] File copy failed, sharing reference', { srcFile, error: copyErr.message });
-            }
-          }
-        }
-        await pool.query(`
-          INSERT INTO \`${db}\` (up, ord, t, val)
-          VALUES (?, ?, ?, ?)
-        `, [objectId, reqRow.ord, reqRow.t, copiedVal]);
-      }
+      // Recursive copy: use populateReqs helper to deeply copy all requisites
+      await populateReqs(pool, db, originalId, objectId);
 
       logger.info('[Legacy _m_save] Object copied', { db, originalId, newId: objectId });
 
@@ -3914,11 +4130,16 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     );
     const objTypeEarly = objInfoEarly.length > 0 ? objInfoEarly[0].t : 0;
 
+    // Track boolean type IDs to handle unchecked booleans later
+    const booleanTypeIds = new Set();
+    const processedTypeIds = new Set();
+
     // Update requisites (t{id}=value format); merge query+body so t{id}=val works in URL too
     // (smartq.js sends &t{tid}=(timestamp) in URL query for DATETIME unique value on copy)
     const attributes = extractAttributes({ ...req.query, ...req.body });
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
       const typeIdNum = parseInt(attrTypeId, 10);
+      processedTypeIds.add(typeIdNum);
 
       // When smartq inline-edits the main column, it sends t{objType}=newName.
       // This means "update a.val", not a child requisite row.
@@ -3927,24 +4148,123 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
         continue;
       }
 
-      const existing = await getRequisiteByType(db, objectId, typeIdNum);
-
       let finalValue = String(attrValue);
+
+      // Fetch attribute metadata (base_type, attrs) for processing
+      const [attrMeta] = await pool.query(
+        `SELECT t AS base_type, val FROM \`${db}\` WHERE id = ? LIMIT 1`,
+        [typeIdNum]
+      );
+      const meta = attrMeta.length > 0 ? attrMeta[0] : null;
+      const baseType = meta ? meta.base_type : 0;
+
+      // PASSWORDSTARS skip: don't update PASSWORD/TOKEN/XSRF fields with masked value
+      if (finalValue === '******' && (baseType === TYPE.PWD || typeIdNum === TYPE.PASSWORD ||
+          typeIdNum === TYPE.TOKEN || typeIdNum === TYPE.XSRF)) {
+        continue;
+      }
 
       // PHP PASSWORD hash edge case: when saving a PASSWORD-type requisite,
       // use t{USER} from POST body as username if present, else read from DB.
       if (typeIdNum === TYPE.PASSWORD) {
-        let username = req.body[`t${TYPE.USER}`];
-        if (!username) {
+        let pwdUsername = req.body[`t${TYPE.USER}`];
+        if (!pwdUsername) {
           // Fall back to current object's val (it IS the user object)
           const [uRows] = await pool.query(
             `SELECT val FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
           );
-          username = uRows.length > 0 ? uRows[0].val : '';
+          pwdUsername = uRows.length > 0 ? uRows[0].val : '';
         }
-        finalValue = phpCompatibleHash(username, attrValue, db);
+        finalValue = phpCompatibleHash(pwdUsername, attrValue, db);
+      } else {
+        // Handle file uploads for this attribute
+        const uploadedFile = fileByField[`t${attrTypeId}`];
+        if (uploadedFile) {
+          if (isBlacklisted(uploadedFile.originalname)) {
+            logger.warn('[Legacy _m_save] Blacklisted file rejected', { db, filename: uploadedFile.originalname });
+            continue;
+          }
+          const subdir = getSubdir(db, objectId);
+          const uploadDir = path.join(legacyPath, 'download', db, subdir);
+          fs.mkdirSync(uploadDir, { recursive: true });
+          const ext = path.extname(uploadedFile.originalname);
+          const baseName = getFilename(db, objectId);
+          const safeName = `${baseName}${ext}`;
+          fs.writeFileSync(path.join(uploadDir, safeName), uploadedFile.buffer);
+          finalValue = safeName;
+        }
+
+        // Apply resolveBuiltIn then formatVal before storage
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+        if (meta) {
+          finalValue = String(formatVal(baseType, finalValue, tzone));
+        }
       }
 
+      // NOT_NULL enforcement: check attrs for :!NULL:
+      if (meta) {
+        const [attrAttrs] = await pool.query(
+          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`,
+          [typeIdNum]
+        );
+        const attrs = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
+
+        if (attrs.includes(':!NULL:') && (finalValue === '' || finalValue === 'NULL')) {
+          warnings += `Field ${typeIdNum} cannot be empty. `;
+          continue;
+        }
+
+        // Multiselect: if :MULTI:, split comma values
+        if (attrs.includes(':MULTI:') && finalValue.includes(',')) {
+          const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
+          for (const mv of values) {
+            const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+            await insertRow(db, objectId, attrOrder, typeIdNum, mv);
+          }
+          await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
+          continue;
+        }
+      }
+
+      // Track boolean types for unchecked boolean cleanup
+      if (baseType === TYPE.BOOLEAN) {
+        booleanTypeIds.add(typeIdNum);
+      }
+
+      // Reference storage fix: if type is a reference (NOT in REV_BASE_TYPE), store in t column
+      if (meta && !REV_BASE_TYPE[baseType]) {
+        const refVal = parseInt(finalValue, 10);
+        if (refVal > 0) {
+          await checkNewRef(pool, db, typeIdNum, refVal);
+        }
+        const existing = await getRequisiteByType(db, objectId, typeIdNum);
+        if (existing) {
+          await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
+        } else {
+          const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+          await insertRow(db, objectId, attrOrder, refVal, '');
+        }
+        await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
+        continue;
+      }
+
+      // Empty→DELETE: if value empty and field allows null → delete the requisite
+      if ((finalValue === '' || finalValue === 'NULL') && meta) {
+        const [attrAttrs2] = await pool.query(
+          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`,
+          [typeIdNum]
+        );
+        const attrs2 = attrAttrs2.length > 0 ? String(attrAttrs2[0].val) : '';
+        if (!attrs2.includes(':!NULL:')) {
+          const existing = await getRequisiteByType(db, objectId, typeIdNum);
+          if (existing) {
+            await deleteRow(db, existing.id);
+          }
+          continue;
+        }
+      }
+
+      const existing = await getRequisiteByType(db, objectId, typeIdNum);
       if (existing) {
         // Update existing requisite
         await updateRowValue(db, existing.id, finalValue);
@@ -3952,6 +4272,24 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
         // Create new requisite
         const attrOrder = await getNextOrder(db, objectId, typeIdNum);
         await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
+      }
+
+      // Check for duplicates after each attribute update
+      await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
+    }
+
+    // Boolean cleanup: process b{typeId} markers — delete unchecked booleans
+    for (const [key, value] of Object.entries(req.body)) {
+      const bMatch = key.match(/^b(\d+)$/);
+      if (bMatch) {
+        const bTypeId = parseInt(bMatch[1], 10);
+        // If the corresponding t{id} was NOT submitted, the checkbox was unchecked
+        if (!processedTypeIds.has(bTypeId)) {
+          const existing = await getRequisiteByType(db, objectId, bTypeId);
+          if (existing) {
+            await deleteRow(db, existing.id);
+          }
+        }
       }
     }
 
@@ -3985,7 +4323,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
       obj: objectId,
       next_act: 'object',
       args: `${argsPrefix}F_U=${objUp}&F_I=${objectId}`,
-      warnings: '',
+      warnings,
     };
 
     // If SEARCH_* params are present, include them so the client can filter dropdown lists
@@ -4014,9 +4352,20 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
   try {
     const pool = getPool();
     const objectId = parseInt(id, 10);
+    const { grants, username, uid } = req.legacyUser || {};
 
     if (!objectId) {
       return res.status(200).json([{ error: `Wrong id: ${id}` }]);
+    }
+
+    // Grant check — PHP checks WRITE grant before deletion
+    if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+    }
+
+    // Self-deletion prevention: user cannot delete themselves
+    if (objectId === uid) {
+      return res.status(200).json([{ error: 'You cannot delete yourself' }]);
     }
 
     // PHP: SELECT count(r.id), obj.up, obj.ord, obj.t, obj.val, par.up pup, type.up tup
@@ -4069,9 +4418,8 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
       }
     }
 
-    // Delete recursively (PHP BatchDelete)
-    await deleteChildren(db, objectId);
-    await deleteRow(db, objectId);
+    // Delete recursively (PHP Delete) — replaces flat deleteChildren + deleteRow
+    await recursiveDelete(pool, db, objectId);
 
     logger.info('[Legacy _m_del] Object deleted', { db, id: objectId });
 
@@ -4108,6 +4456,13 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
   try {
     const pool = getPool();
     const objectId = parseInt(id, 10);
+    const { grants, username, uid } = req.legacyUser || {};
+
+    // Grant check — PHP checks WRITE grant before setting attributes
+    if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+    }
+
     // Merge query+body: smartq.js line 959 sends &t{ref}=value in URL query string for select2 inline edit
     const attributes = extractAttributes({ ...req.query, ...req.body });
 
@@ -4129,21 +4484,94 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
 
     let uploadedFilePath = null;
     let lastReqId = '';
+    const tzone = parseInt(req.body.tzone || req.query.tzone || '0', 10);
+    const clientIp = req.ip || '';
 
     for (const [attrTypeId, attrValue] of Object.entries(attributes)) {
       const typeIdNum = parseInt(attrTypeId, 10);
       let finalValue = String(attrValue);
 
+      // Fetch attribute metadata (base_type, attrs) to detect references and :MULTI:
+      const [attrMeta] = await pool.query(
+        `SELECT t AS base_type, val, up FROM \`${db}\` WHERE id = ? LIMIT 1`,
+        [typeIdNum]
+      );
+      const meta = attrMeta.length > 0 ? attrMeta[0] : null;
+
       // Handle inline file upload (saveInlineFile in smartq.js)
       const uploadedFile = fileByField[`t${attrTypeId}`];
       if (uploadedFile) {
-        const uploadDir = path.join(legacyPath, 'download', db);
+        // File blacklist check
+        if (isBlacklisted(uploadedFile.originalname)) {
+          logger.warn('[Legacy _m_set] Blacklisted file rejected', { db, filename: uploadedFile.originalname });
+          continue;
+        }
+
+        const subdir = getSubdir(db, objectId);
+        const uploadDir = path.join(legacyPath, 'download', db, subdir);
         fs.mkdirSync(uploadDir, { recursive: true });
-        const safeName = path.basename(uploadedFile.originalname).replace(/[/\\]/g, '_');
+        const ext = path.extname(uploadedFile.originalname);
+        const baseName = getFilename(db, objectId);
+        const safeName = `${baseName}${ext}`;
         fs.writeFileSync(path.join(uploadDir, safeName), uploadedFile.buffer);
         finalValue = safeName;
-        uploadedFilePath = `${db}/download/${safeName}`;
+        uploadedFilePath = `${db}/download/${subdir}/${safeName}`;
         logger.info('[Legacy _m_set] File saved', { db, attrTypeId, safeName });
+      }
+
+      // File deletion: when value cleared and type is FILE, delete old file
+      if (meta && meta.base_type === TYPE.FILE && !finalValue && !uploadedFile) {
+        const existing = await getRequisiteByType(db, objectId, typeIdNum);
+        if (existing && existing.val) {
+          const subdir = getSubdir(db, objectId);
+          const oldPath = path.join(legacyPath, 'download', db, subdir, path.basename(existing.val));
+          try { fs.unlinkSync(oldPath); } catch (_e) { /* ignore missing */ }
+        }
+      }
+
+      // Apply resolveBuiltIn then formatVal before storage
+      finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+      if (meta) {
+        finalValue = String(formatVal(meta.base_type, finalValue, tzone));
+      }
+
+      // Reference storage fix: if type is a reference (NOT in REV_BASE_TYPE), store in t column
+      if (meta && !REV_BASE_TYPE[meta.base_type]) {
+        const refVal = parseInt(finalValue, 10);
+        // Validate reference if value is a positive integer
+        if (refVal > 0) {
+          await checkNewRef(pool, db, typeIdNum, refVal);
+        }
+        const existing = await getRequisiteByType(db, objectId, typeIdNum);
+        if (existing) {
+          // Reference: update t column, not val
+          await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
+          lastReqId = String(existing.id);
+        } else {
+          const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+          const newId = await insertRow(db, objectId, attrOrder, refVal, '');
+          lastReqId = String(newId);
+        }
+        continue;
+      }
+
+      // Multiselect: if type has :MULTI: in attrs, split comma values and insert multiple rows
+      if (meta) {
+        const [attrAttrs] = await pool.query(
+          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`,
+          [typeIdNum]
+        );
+        const attrs = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
+        if (attrs.includes(':MULTI:') && finalValue.includes(',')) {
+          const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
+          for (const mv of values) {
+            const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+            await insertRow(db, objectId, attrOrder, typeIdNum, mv);
+          }
+          await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
+          lastReqId = '';
+          continue;
+        }
       }
 
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
@@ -4155,6 +4583,9 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
         const newId = await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
         lastReqId = String(newId);
       }
+
+      // Check for duplicates after each attribute update
+      await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
     }
 
     logger.info('[Legacy _m_set] Attributes set', { db, id: objectId });
@@ -4190,16 +4621,41 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
   try {
     const objectId = parseInt(id, 10);
     const newParentId = parseInt(req.body.up, 10);
-    const newOrder = await getNextOrder(db, newParentId);
 
     const pool = getPool();
+    const { grants, username } = req.legacyUser || {};
 
-    // Fetch type BEFORE moving
+    // Grant check on source object and target parent
+    if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+    }
+    if (!await checkGrant(pool, db, grants || {}, newParentId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges for target parent' }]);
+    }
+
+    // Fetch full object info (t, up, ord) before moving
     const [objInfo] = await pool.query(
-      `SELECT t FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
+      `SELECT t, up, ord FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
     );
-    const objType = objInfo.length > 0 ? objInfo[0].t : 0;
+    if (objInfo.length === 0) {
+      return res.status(200).json([{ error: 'Object not found' }]);
+    }
+    const objType = objInfo[0].t;
+    const oldParentId = objInfo[0].up;
+    const oldOrd = objInfo[0].ord;
 
+    // Metadata protection: can't move root-level types
+    if (oldParentId === 0) {
+      return res.status(200).json([{ error: 'Cannot move metadata object' }]);
+    }
+
+    // Order adjustment in old parent: shift down peers after removed object
+    await pool.query(
+      `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`,
+      [oldParentId, objType, oldOrd]
+    );
+
+    const newOrder = await getNextOrder(db, newParentId, objType);
     await pool.query(`UPDATE ${db} SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
@@ -5722,6 +6178,12 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
   try {
     const objectId = parseInt(id, 10);
     const pool = getPool();
+    const { grants, username } = req.legacyUser || {};
+
+    // Grant check — PHP checks WRITE grant before move-up
+    if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+    }
 
     // Get current object
     const obj = await getObjectById(db, objectId);
@@ -5743,9 +6205,11 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
 
     const prevSibling = siblings[0];
 
-    // Swap orders
-    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [obj.ord, prevSibling.id]);
-    await pool.query(`UPDATE ${db} SET ord = ? WHERE id = ?`, [prevSibling.ord, objectId]);
+    // Atomic swap using single CASE WHEN UPDATE (replaces 2 separate UPDATEs)
+    await pool.query(
+      `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`,
+      [objectId, prevSibling.ord, prevSibling.id, obj.ord, objectId, prevSibling.id]
+    );
 
     logger.info('[Legacy _m_up] Object moved up', { db, id: objectId, newOrd: prevSibling.ord });
 
@@ -5781,6 +6245,12 @@ router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     }
 
     const pool = getPool();
+    const { grants, username } = req.legacyUser || {};
+
+    // Grant check — PHP checks WRITE grant before reordering
+    if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+    }
 
     // PHP: SELECT obj.ord, obj.up FROM $z obj, $z par
     //      WHERE obj.id=$id AND par.id=obj.up AND par.up!=0
@@ -5843,12 +6313,18 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     const pool = getPool();
     const oldId = parseInt(id, 10);
     const newId = parseInt(req.body.new_id || req.query.new_id, 10);
+    const { grants, username } = req.legacyUser || {};
 
     if (!newId || newId <= 0) {
       return res.status(200).json([{ error: 'new_id must be a positive integer' }]);
     }
     if (oldId === newId) {
       return res.status(200).json([{ error: 'new_id must differ from current id' }]);
+    }
+
+    // Grant check — PHP checks WRITE grant before ID change
+    if (!await checkGrant(pool, db, grants || {}, oldId, 0, 'WRITE', username || '')) {
+      return res.status(200).json([{ error: 'Insufficient privileges' }]);
     }
 
     // Check that the old object exists and get its parent
@@ -5860,6 +6336,11 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     }
     const up = objRows[0].up;
 
+    // Metadata guard: can't change ID of metadata (root-level types)
+    if (objRows[0].up === 0) {
+      return res.status(200).json([{ error: 'Cannot change ID of metadata object' }]);
+    }
+
     // Check that new_id is not already in use
     const [existRows] = await pool.query(
       `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [newId]
@@ -5868,10 +6349,20 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
       return res.status(200).json([{ error: `ID ${newId} is already in use` }]);
     }
 
-    // PHP: 3 UPDATEs to rename the id everywhere it appears
-    await pool.query(`UPDATE \`${db}\` SET id = ? WHERE id = ?`, [newId, oldId]);
-    await pool.query(`UPDATE \`${db}\` SET up = ? WHERE up = ?`, [newId, oldId]);
-    await pool.query(`UPDATE \`${db}\` SET t  = ? WHERE t  = ?`, [newId, oldId]);
+    // PHP: 3 UPDATEs to rename the id everywhere it appears — wrap in transaction
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.query(`UPDATE \`${db}\` SET id = ? WHERE id = ?`, [newId, oldId]);
+      await conn.query(`UPDATE \`${db}\` SET up = ? WHERE up = ?`, [newId, oldId]);
+      await conn.query(`UPDATE \`${db}\` SET t  = ? WHERE t  = ?`, [newId, oldId]);
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
 
     logger.info('[Legacy _m_id] ID changed', { db, oldId, newId, up });
 
