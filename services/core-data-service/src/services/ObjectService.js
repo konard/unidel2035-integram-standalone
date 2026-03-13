@@ -10,6 +10,7 @@ import {
 } from '@integram/common';
 
 import { ValidationService } from './ValidationService.js';
+import { TransactionService, TRANSACTION_ACTIONS } from './TransactionService.js';
 
 // Local NotFoundError class
 class NotFoundError extends Error {
@@ -42,6 +43,8 @@ export class ObjectService {
     this.db = databaseService;
     this.logger = options.logger || console;
     this.validation = options.validationService || new ValidationService(options);
+    // Сервис транзакций для автоматической записи версий
+    this.transactions = options.transactionService || new TransactionService(databaseService, options);
   }
 
   // ============================================================================
@@ -87,13 +90,9 @@ export class ObjectService {
       await this.saveRequisites(database, id, data.requisites);
     }
 
-    return {
-      id,
-      value,
-      typeId,
-      parentId,
-      order,
-    };
+    const created = { id, value, typeId, parentId, order };
+    await this.transactions.record(database, { agentId: data.agentId||null, action: TRANSACTION_ACTIONS.CREATE, targetId: id, targetType: typeId, oldValue: null, newValue: created, sessionId: data.sessionId||null, txGroupId: data.txGroupId||null }).catch(e => this.logger.warn('Транзакция create не записана', { error: e.message }));
+    return created;
   }
 
   /**
@@ -412,8 +411,9 @@ export class ObjectService {
       await this.saveRequisites(database, id, data.requisites);
     }
 
-    // Return updated object
-    return this.getById(database, id, { includeRequisites: !!data.requisites });
+    const updated = await this.getById(database, id, { includeRequisites: !!data.requisites });
+    await this.transactions.record(database, { agentId: data.agentId||null, action: TRANSACTION_ACTIONS.UPDATE, targetId: objId, targetType: current.typeId, oldValue: current, newValue: updated, sessionId: data.sessionId||null, txGroupId: data.txGroupId||null }).catch(e => this.logger.warn('Транзакция update не записана', { error: e.message }));
+    return updated;
   }
 
   /**
@@ -525,6 +525,8 @@ export class ObjectService {
   async delete(database, id, options = {}) {
     const db = this.validation.validateDatabase(database);
     const objId = this.validation.validateId(id);
+    // Снимок перед удалением
+    const current = await this.getById(database, id);
 
     // Cascade delete children first if requested
     if (options.cascade) {
@@ -534,7 +536,7 @@ export class ObjectService {
     const success = await this.db.delete(db, objId, 'ObjectService.delete');
 
     this.logger.info('Object deleted', { database: db, id: objId, cascade: options.cascade });
-
+    if (current) { await this.transactions.record(database, { agentId: options.agentId||null, action: TRANSACTION_ACTIONS.DELETE, targetId: objId, targetType: current.typeId, oldValue: current, newValue: null, sessionId: options.sessionId||null, txGroupId: options.txGroupId||null }).catch(e => this.logger.warn('Транзакция delete не записана', { error: e.message })); }
     return success;
   }
 
