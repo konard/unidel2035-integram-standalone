@@ -11,6 +11,7 @@ import { createAuditRoutes } from './audit.js';
 import { createOntologyRoutes } from './ontology.js';
 import { createBatchRoutes } from './batch.js';
 import { createTransactionRoutes } from './transactions.js';
+import { createEventRoutes } from './events.js';
 import { createBatchRoutes } from './batch.js';
 
 /**
@@ -558,6 +559,12 @@ export function createV2Routes(services, options = {}) {
   if (services.batchService) {
     const batchRoutes = createBatchRoutes(services, options);
     router.use('/', batchRoutes);
+  }
+
+  // Роуты событий — Event Streaming (SSE + webhooks) (#187)
+  if (services.eventService) {
+    const eventRoutes = createEventRoutes({ eventService: services.eventService }, options);
+    router.use('/', eventRoutes);
   }
 
   return router;

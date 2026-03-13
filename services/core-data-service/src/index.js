@@ -27,8 +27,8 @@ import { TransactionService } from './services/TransactionService.js';
 import { AuditService } from './services/AuditService.js';
 import { OntologyService } from './services/OntologyService.js';
 import { BatchService } from './services/BatchService.js';
-import { SearchService } from './services/SearchService.js';
-import { LegacyFormatTransformer } from './middleware/LegacyFormatTransformer.js';
+import { EventService } from './services/EventService.js';
+import { SearchService } from './services/SearchService.js';import { LegacyFormatTransformer } from './middleware/LegacyFormatTransformer.js';
 import { createV1Routes } from './routes/v1/index.js';
 import { createV2Routes } from './routes/v2/index.js';
 import { createLegacyActionRoutes } from './routes/legacy/index.js';
@@ -97,7 +97,9 @@ export class CoreDataService {
       queryService: this.queryService,
     }, options);
 
-    // Agent Search API (#188) — полнотекстовый, NL-поиск, фильтрация, агрегация
+// Event Streaming (#187)
+    this.eventService = new EventService(databaseService, options);
+// Agent Search API (#188) — полнотекстовый, NL-поиск, фильтрация, агрегация
     this.searchService = new SearchService(databaseService, {
       queryService: this.queryService,
       typeService: this.typeService,
@@ -106,7 +108,6 @@ export class CoreDataService {
       ...options,
       validationService,
     });
-
     this.validationService = validationService;
     this.transformer = new LegacyFormatTransformer(options);
   }
@@ -122,8 +123,8 @@ export class CoreDataService {
       auditService: this.auditService,
       ontologyService: this.ontologyService,
       batchService: this.batchService,
-      searchService: this.searchService,
-    };
+eventService: this.eventService,
+searchService: this.searchService,    };
   }
 
   createRouter(options = {}) {
@@ -194,9 +195,27 @@ export function createApp(databaseService, options = {}) {
 }
 
 export default {
-  CoreDataService, ObjectService, QueryService, SchemaService, TypeService,
+CoreDataService,
+  ObjectService,
+  QueryService,
+  SchemaService,
+  TypeService,
+  ValidationService,
+  TransactionService,
+  AuditService,
+  OntologyService,
+  BatchService,
+  EventService,
+  LegacyFormatTransformer,
+  createCoreDataService,
+  createApp,
+  createV1Routes,
+  createV2Routes,
+  createLegacyActionRoutes,
+  PACKAGE_NAME,
+  PACKAGE_VERSION,
+CoreDataService, ObjectService, QueryService, SchemaService, TypeService,
   ValidationService, TransactionService, AuditService, OntologyService,
   BatchService, SearchService, LegacyFormatTransformer,
   createCoreDataService, createApp, createV1Routes, createV2Routes,
-  createLegacyActionRoutes, PACKAGE_NAME, PACKAGE_VERSION,
-};
+  createLegacyActionRoutes, PACKAGE_NAME, PACKAGE_VERSION,};
