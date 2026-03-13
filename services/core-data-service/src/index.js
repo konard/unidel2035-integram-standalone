@@ -24,7 +24,6 @@ import { SchemaService } from './services/SchemaService.js';
 import { TypeService } from './services/TypeService.js';
 import { ValidationService } from './services/ValidationService.js';
 import { TransactionService } from './services/TransactionService.js';
-import { TransactionService } from './services/TransactionService.js';
 import { AuditService } from './services/AuditService.js';
 import { OntologyService } from './services/OntologyService.js';
 import { BatchService } from './services/BatchService.js';
@@ -103,9 +102,6 @@ export class CoreDataService {
       typeService: this.typeService,
       queryService: this.queryService,
     }, options);
-
-    // Transaction versioning (Palantir Foundry-style)
-    this.transactionService = new TransactionService(databaseService, options);
 
     this.validationService = validationService;
     this.transformer = new LegacyFormatTransformer(options);
