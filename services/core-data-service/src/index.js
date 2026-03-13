@@ -20,6 +20,7 @@ export * from './middleware/LegacyFormatTransformer.js';
 
 import { ObjectService } from './services/ObjectService.js';
 import { QueryService } from './services/QueryService.js';
+import { SchemaService } from './services/SchemaService.js';
 import { TypeService } from './services/TypeService.js';
 import { ValidationService } from './services/ValidationService.js';
 import { LegacyFormatTransformer } from './middleware/LegacyFormatTransformer.js';
@@ -71,6 +72,15 @@ export class CoreDataService {
       validationService,
     });
 
+    this.schemaService = new SchemaService(databaseService, {
+      typeService: this.typeService,
+      queryService: this.queryService,
+      objectService: this.objectService,
+    }, {
+      ...options,
+      validationService,
+    });
+
     this.validationService = validationService;
     this.transformer = new LegacyFormatTransformer(options);
   }
@@ -84,6 +94,7 @@ export class CoreDataService {
     return {
       objectService: this.objectService,
       queryService: this.queryService,
+      schemaService: this.schemaService,
       typeService: this.typeService,
       validationService: this.validationService,
     };
@@ -244,6 +255,7 @@ export default {
   CoreDataService,
   ObjectService,
   QueryService,
+  SchemaService,
   TypeService,
   ValidationService,
   LegacyFormatTransformer,

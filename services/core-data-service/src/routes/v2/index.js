@@ -14,12 +14,13 @@ import { Router } from 'express';
  * @param {ObjectService} services.objectService - Object service
  * @param {QueryService} services.queryService - Query service
  * @param {TypeService} services.typeService - Type service
+ * @param {SchemaService} services.schemaService - Schema introspection service
  * @param {Object} [options] - Route options
  * @returns {Router} Express router
  */
 export function createV2Routes(services, options = {}) {
   const router = Router();
-  const { objectService, queryService, typeService } = services;
+  const { objectService, queryService, typeService, schemaService, transactionService } = services;
   const logger = options.logger || console;
 
   // ============================================================================
@@ -114,15 +115,22 @@ export function createV2Routes(services, options = {}) {
     }
   });
 
-  // Get type schema (with requisites)
+  // Get type schema (with requisites) — delegated to SchemaService for richer output
+  // Includes requisites, relationships, and sample data.
+  // Original route used typeService.getSchema(); now uses schemaService.getTypeSchema().
   router.get('/databases/:database/types/:typeId/schema', async (req, res) => {
     try {
       const { database, typeId } = req.params;
 
-      const schema = await typeService.getSchema(database, parseInt(typeId, 10));
+      const schema = await schemaService.getTypeSchema(database, parseInt(typeId, 10));
+
+      if (!schema) {
+        return res.status(404).json(wrapError({ message: 'Type not found' }, 'NOT_FOUND'));
+      }
+
       res.json(wrapResponse(schema));
     } catch (error) {
-      logger.error('GET schema failed', { error: error.message });
+      logger.error('GET type schema failed', { error: error.message });
       if (error.name === 'NotFoundError') {
         return res.status(404).json(wrapError(error, 'NOT_FOUND'));
       }
@@ -464,6 +472,39 @@ export function createV2Routes(services, options = {}) {
       }));
     } catch (error) {
       logger.error('GET stats failed', { error: error.message });
+      res.status(500).json(wrapError(error));
+    }
+  });
+
+  // ============================================================================
+  // Schema Introspection Routes
+  // ============================================================================
+
+  // Get full database schema
+  router.get('/databases/:database/schema', async (req, res) => {
+    try {
+      const { database } = req.params;
+
+      const schema = await schemaService.getFullSchema(database);
+      res.json(wrapResponse(schema, {
+        totalTypes: schema.stats.totalTypes,
+        totalObjects: schema.stats.totalObjects,
+      }));
+    } catch (error) {
+      logger.error('GET schema failed', { error: error.message });
+      res.status(500).json(wrapError(error));
+    }
+  });
+
+  // Get relationship graph
+  router.get('/databases/:database/schema/relationships', async (req, res) => {
+    try {
+      const { database } = req.params;
+
+      const relationships = await schemaService.getRelationships(database);
+      res.json(wrapResponse(relationships, { count: relationships.length }));
+    } catch (error) {
+      logger.error('GET relationships failed', { error: error.message });
       res.status(500).json(wrapError(error));
     }
   });
