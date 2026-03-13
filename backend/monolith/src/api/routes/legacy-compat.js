@@ -1314,7 +1314,7 @@ router.get('/:db/auth', async (req, res, next) => {
     if (rows.length === 0) return res.status(200).json([{ error: 'not logged' }]);
     const u = rows[0];
     const xsrf = u.xsrf_val || generateXsrf(token, u.uname || '', db);
-    return res.status(200).json({ _xsrf: xsrf, token, id: u.uid, msg: '' });
+    return res.status(200).json({ _xsrf: xsrf, token, id: Number(u.uid), msg: '' });
   } catch (err) {
     logger.error('[GET /:db/auth] DB error', { error: err.message, db });
     return res.status(200).json([{ error: 'server error' }]);
@@ -1507,6 +1507,34 @@ router.post('/:db/auth', async (req, res, next) => {
     const [rows] = await pool.query(query, [login]);
 
     if (rows.length === 0) {
+      // PHP cabinet fallback: when user not found in target DB, query 'my' database
+      if (db !== 'my') {
+        try {
+          const [myRows] = await pool.query(
+            `SELECT user.id AS uid, user.val AS username, pwd.val AS password_hash
+             FROM my user
+             LEFT JOIN my pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
+             WHERE user.val = ? AND user.t = ${TYPE.USER}
+             LIMIT 1`,
+            [login]
+          );
+          if (myRows.length > 0) {
+            const myUser = myRows[0];
+            const myExpectedHash = phpCompatibleHash(login, password, 'my');
+            if (myUser.password_hash === myExpectedHash) {
+              logger.info('[Legacy Auth] Cabinet fallback to my DB', { db, login });
+              if (isJSON) {
+                return res.status(200).json({ message: 'CABINET', db: 'my', login: myUser.username, details: '' });
+              }
+              return res.redirect('/my');
+            }
+          }
+        } catch (myErr) {
+          // 'my' table may not exist in standalone mode — ignore
+          logger.debug('[Legacy Auth] Cabinet fallback failed (my table may not exist)', { error: myErr.message });
+        }
+      }
+
       logger.warn('[Legacy Auth] User not found', { db, login });
       if (isJSON) {
         // PHP: my_die("Wrong credentials...") → HTTP 200 [{"error":"..."}]
@@ -1602,20 +1630,18 @@ router.post('/:db/auth', async (req, res, next) => {
       }
     }
 
-    // Generate or use existing token (PHP: md5(microtime(TRUE)))
-    let token = user.token;
-    // Always recompute xsrf from current token to stay in sync
-    // PHP: xsrf($token, $z) where $z=db → generateXsrf(token, db, db)
-    let xsrf = generateXsrf(token || '', db, db);
+    // PHP: always generates fresh token on every login (prevents session fixation)
+    // Delete old token if exists, then insert new one
+    const token = generateToken();
+    const xsrf = generateXsrf(token, db, db);
 
-    if (!token) {
-      token = generateToken();
-      xsrf = generateXsrf(token, db, db);
-      await pool.query(
-        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
-        [user.uid, token]
-      );
+    if (user.token_id) {
+      await pool.query(`DELETE FROM ${db} WHERE id = ?`, [user.token_id]);
     }
+    await pool.query(
+      `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
+      [user.uid, token]
+    );
 
     if (!user.xsrf) {
       await pool.query(
@@ -1742,6 +1768,20 @@ router.post('/:db/getcode', async (req, res) => {
 
   logger.info({ db, u }, '[Legacy GetCode] Request');
 
+  // PHP parity: set tzone cookie when req.body.tzone is provided
+  const tzoneParam = req.body.tzone;
+  if (tzoneParam !== undefined) {
+    const clientTime = parseInt(tzoneParam, 10);
+    const serverTime = Math.floor(Date.now() / 1000);
+    const serverOffset = new Date().getTimezoneOffset() * -60;
+    const tzone = Math.round((clientTime - serverTime - serverOffset) / 1800) * 1800;
+    res.cookie('tzone', String(tzone), {
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+      path: '/',
+      httpOnly: false,
+    });
+  }
+
   // PHP validates email format
   if (!u || !/^.+@.+\..+$/.test(u)) {
     return res.status(200).json({ error: 'invalid user' });
@@ -1813,6 +1853,21 @@ router.post('/:db/checkcode', async (req, res) => {
         await pool.query(`UPDATE ${db} SET val=? WHERE id=?`, [newXsrf, row.xsrf_id]);
       } else {
         await pool.query(`INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [row.uid, newXsrf]);
+      }
+
+      // PHP parity: upsert ACTIVITY record for last-login tracking
+      const [actRows] = await pool.query(
+        `SELECT id FROM ${db} WHERE up = ? AND t = ${TYPE.ACTIVITY} LIMIT 1`,
+        [row.uid]
+      );
+      const nowTimestamp = String(Math.floor(Date.now() / 1000));
+      if (actRows.length > 0) {
+        await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [nowTimestamp, actRows[0].id]);
+      } else {
+        await pool.query(
+          `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.ACTIVITY}, ?)`,
+          [row.uid, nowTimestamp]
+        );
       }
 
       // Set cookie like PHP
@@ -1972,6 +2027,39 @@ router.post('/my/register', async (req, res) => {
       const confirmToken = crypto.createHash('md5').update(`xz${email.toLowerCase()}`).digest('hex');
       await insertRow('my', userId, 1, TYPE.TOKEN, confirmToken);
 
+      // Send confirmation email (PHP parity: mail() with confirmation link)
+      const host = req.get('host') || 'localhost';
+      const confirmUrl = `https://${host}/my/register?confirm=${confirmToken}`;
+      const smtpHostRaw = process.env.SMTP_HOST || 'ssl://smtp.yandex.ru';
+      const smtpPort    = parseInt(process.env.SMTP_PORT || '465', 10);
+      const smtpUser    = process.env.SMTP_USER    || 'abc@tryjob.ru';
+      const smtpPass    = process.env.SMTP_PASSWORD || 'CoffeeClick';
+      const fromEmail   = process.env.FROM_EMAIL    || smtpUser;
+      const fromName    = process.env.FROM_NAME     || 'Integram';
+      const smtpHost    = smtpHostRaw.replace(/^(ssl|tls):\/\//, '');
+      const smtpSecure  = smtpHostRaw.startsWith('ssl://') || smtpPort === 465;
+
+      if (!process.env.SMTP_HOST) {
+        logger.info('[Legacy Register] Confirmation (no SMTP — dev mode)', { email, confirmToken, confirmUrl });
+      } else {
+        try {
+          const transporter = nodemailer.createTransport({
+            host: smtpHost, port: smtpPort, secure: smtpSecure,
+            auth: { user: smtpUser, pass: smtpPass },
+            tls: { rejectUnauthorized: false },
+          });
+          await transporter.sendMail({
+            from: `"${fromName}" <${fromEmail}>`,
+            to: email,
+            subject: `Подтверждение регистрации ${email}`,
+            text: `Для подтверждения регистрации перейдите по ссылке:\r\n${confirmUrl}`,
+          });
+          logger.info('[Legacy Register] Confirmation email sent', { email });
+        } catch (mailErr) {
+          logger.error('[Legacy Register] SMTP error', { email, confirmToken, err: mailErr.message });
+        }
+      }
+
       logger.info('[Legacy Register] User created in my table', { email, userId, confirmToken });
     } else {
       logger.info('[Legacy Register] my table not found, skipping DB insert', { email });
@@ -2000,15 +2088,24 @@ router.post('/my/register', async (req, res) => {
 router.all('/:db/exit', async (req, res) => {
   const { db } = req.params;
 
-  // Delete token from DB (PHP: DELETE FROM $z WHERE up=user_id AND t=TOKEN)
+  // Delete ALL user tokens (PHP: DELETE FROM $z WHERE up=user_id AND t=TOKEN)
   const token = extractToken(req, db);
   if (token && isValidDbName(db)) {
     try {
       const pool = getPool();
-      await pool.query(
-        `DELETE FROM \`${db}\` WHERE t = ${TYPE.TOKEN} AND val = ?`,
+      // Look up userId from the current token
+      const [tokenRows] = await pool.query(
+        `SELECT up FROM \`${db}\` WHERE t = ${TYPE.TOKEN} AND val = ? LIMIT 1`,
         [token]
       );
+      if (tokenRows.length > 0) {
+        const userId = tokenRows[0].up;
+        // Delete ALL tokens for this user (logs out all sessions)
+        await pool.query(
+          `DELETE FROM \`${db}\` WHERE up = ? AND t = ${TYPE.TOKEN}`,
+          [userId]
+        );
+      }
     } catch (err) {
       logger.error({ error: err.message, db }, '[Legacy Exit] DB error on token delete');
     }
