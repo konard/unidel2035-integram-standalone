@@ -5178,7 +5178,7 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
         types.push({
           id,
           type: base.get(id),
-          name: val,
+          name: htmlEsc(val),
         });
       }
     }
@@ -5241,8 +5241,8 @@ router.get('/:db/xsrf', async (req, res) => {
       user: user.uname,
       // PHP: strtolower($row["role"]) where role = role_def.val
       role: (user.role_val || '').toLowerCase(),
-      // PHP: $row["id"] from mysqli_fetch_array returns strings
-      id: String(user.uid),
+      // PHP: "id":123 (integer, no quotes)
+      id: Number(user.uid),
       msg: '',
     });
   } catch (error) {
@@ -5427,12 +5427,25 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     let whereClause = `vals.t = ${dic}`;
 
     // Handle restrict parameter (?r=<id> or ?r=<id1>,<id2>)
+    // PHP: if(isset($_GET["r"])) $where .= " AND t1.t=".$_GET["r"]
+    // Apply restriction to first requisite join column when requisites exist
     if (restrictParam) {
       const restrictIds = restrictParam.split(',').filter(v => /^\d+$/.test(v)).map(v => parseInt(v, 10));
-      if (restrictIds.length === 1) {
-        whereClause += ` AND vals.id = ${restrictIds[0]}`;
-      } else if (restrictIds.length > 1) {
-        whereClause += ` AND vals.id IN (${restrictIds.join(',')})`;
+      if (restrictIds.length > 0 && refReqs.length > 0) {
+        // PHP applies restrict to the first requisite's type column
+        const firstReqAlias = `a${refReqs[0].reqId}`;
+        if (restrictIds.length === 1) {
+          whereClause += ` AND ${firstReqAlias}.t = ${restrictIds[0]}`;
+        } else {
+          whereClause += ` AND ${firstReqAlias}.t IN (${restrictIds.join(',')})`;
+        }
+      } else if (restrictIds.length > 0) {
+        // No requisites — fall back to filtering by vals.id
+        if (restrictIds.length === 1) {
+          whereClause += ` AND vals.id = ${restrictIds[0]}`;
+        } else {
+          whereClause += ` AND vals.id IN (${restrictIds.join(',')})`;
+        }
       }
     }
 
@@ -5486,6 +5499,21 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       }
 
       result[row.id] = displayValue;
+    }
+
+    // Grant mask filtering: filter out requisites that the user's role masks as hidden
+    const { grants } = req.legacyUser || {};
+    if (grants && grants.mask) {
+      // Get the parent type ID for mask lookup
+      const typeId = refRows[0].dic;
+      if (grants.mask[typeId]) {
+        const mask = grants.mask[typeId];
+        for (const objId of Object.keys(result)) {
+          if (mask[objId] === 'HIDE') {
+            delete result[objId];
+          }
+        }
+      }
     }
 
     logger.info('[Legacy _ref_reqs] Retrieved', { db, id, count: Object.keys(result).length, hasReqs: refReqs.length > 0 });
@@ -6544,7 +6572,8 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
     const [rows] = await pool.query(query, [objectId, objectId]);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'Object not found' });
+      // PHP returns HTTP 200 with error JSON, not 404
+      return res.status(200).json({ error: 'not found' });
     }
 
     // Build response matching PHP format (line 8838-8857)
@@ -6554,10 +6583,11 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
       up: String(rows[0].up),
       type: String(rows[0].t),
       val: rows[0].val || '',
-      reqs: {}
     };
 
     // reqs keyed by req.ord (PHP line 8846: "\"" . $row["ord"] . "\":{...")
+    // PHP: only include reqs key if requisites exist
+    const reqs = {};
     for (const row of rows) {
       if (row.req_t == null) continue;  // no requisite row joined
       const reqEntry = {
@@ -6571,7 +6601,12 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
         reqEntry.ref_id = String(row.ref_id);
       }
       if (row.attrs) reqEntry.attrs = row.attrs;
-      meta.reqs[String(row.ord)] = reqEntry;
+      reqs[String(row.ord)] = reqEntry;
+    }
+
+    // PHP: omit reqs key when no requisites exist
+    if (Object.keys(reqs).length > 0) {
+      meta.reqs = reqs;
     }
 
     logger.info('[Legacy obj_meta] Metadata retrieved', { db, id: objectId });
@@ -6693,9 +6728,8 @@ router.all('/:db/metadata/:typeId?', legacyAuthMiddleware, async (req, res) => {
         const reqData = {
           num: row.req_ord,
           id: row.req_id.toString(),
-          // PHP: req_val goes through addcslashes() which doubles backslashes,
-          // so \uXXXX stays as \uXXXX (not decoded) — use raw value here
-          val: row.req_val || '',
+          // PHP: addcslashes($val, "\\'") — escape backslash and single-quote
+          val: (row.req_val || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"),
           orig: (row.ref_id || row.req_type || '').toString(),
           // PHP: "$row["base_typ"]" — 0 should give "0", only NULL gives ""
           type: row.base_typ != null ? String(row.base_typ) : '',
