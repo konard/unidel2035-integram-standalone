@@ -7,6 +7,7 @@
 
 import { Router } from 'express';
 import { createSchemaRoutes } from './schema.js';
+import { createTransactionRoutes } from './transactions.js';
 
 /**
  * Create V2 modern routes.
@@ -517,6 +518,12 @@ export function createV2Routes(services, options = {}) {
   if (schemaService) {
     const schemaRoutes = createSchemaRoutes({ schemaService }, options);
     router.use('/databases/:database/schema', schemaRoutes);
+  }
+
+  // Роуты транзакций (Palantir-style)
+  if (transactionService) {
+    const transactionRoutes = createTransactionRoutes({ transactionService }, options);
+    router.use('/', transactionRoutes);
   }
 
   return router;
