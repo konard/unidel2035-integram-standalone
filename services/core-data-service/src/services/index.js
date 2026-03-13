@@ -14,6 +14,7 @@ import { OntologyService } from './OntologyService.js';
 import { BatchService } from './BatchService.js';
 import { EventService } from './EventService.js';
 
+import { SearchService } from './SearchService.js';
 export { ObjectService } from './ObjectService.js';
 export { QueryService } from './QueryService.js';
 export { SchemaService } from './SchemaService.js';
@@ -25,7 +26,9 @@ export { OntologyService } from './OntologyService.js';
 export { BatchService } from './BatchService.js';
 export { EventService, EVENT_ACTIONS } from './EventService.js';
 
+export { SearchService } from './SearchService.js';
 export default {
   ObjectService, QueryService, SchemaService, TypeService, ValidationService,
   TransactionService, AuditService, OntologyService, BatchService, EventService,
-};
+
+SearchService,};

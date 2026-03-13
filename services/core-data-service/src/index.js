@@ -28,7 +28,7 @@ import { AuditService } from './services/AuditService.js';
 import { OntologyService } from './services/OntologyService.js';
 import { BatchService } from './services/BatchService.js';
 import { EventService } from './services/EventService.js';
-import { LegacyFormatTransformer } from './middleware/LegacyFormatTransformer.js';
+import { SearchService } from './services/SearchService.js';import { LegacyFormatTransformer } from './middleware/LegacyFormatTransformer.js';
 import { createV1Routes } from './routes/v1/index.js';
 import { createV2Routes } from './routes/v2/index.js';
 import { createLegacyActionRoutes } from './routes/legacy/index.js';
@@ -56,10 +56,8 @@ export class CoreDataService {
   constructor(databaseService, options = {}) {
     this.logger = options.logger || console;
 
-    // Общий сервис валидации
     const validationService = new ValidationService(options);
 
-    // Базовые сервисы
     this.objectService = new ObjectService(databaseService, {
       ...options,
       validationService,
@@ -75,7 +73,6 @@ export class CoreDataService {
       validationService,
     });
 
-    // Schema introspection
     this.schemaService = new SchemaService(databaseService, {
       typeService: this.typeService,
       queryService: this.queryService,
@@ -85,36 +82,36 @@ export class CoreDataService {
       validationService,
     });
 
-    // Transaction versioning — Palantir Foundry-style (#182)
     this.transactionService = new TransactionService(databaseService, options);
 
-    // Audit & Governance (#186)
     this.auditService = new AuditService(databaseService, options);
 
-    // Ontology Layer (#185)
     this.ontologyService = new OntologyService(databaseService, {
       typeService: this.typeService,
       objectService: this.objectService,
     }, options);
 
-    // Batch API (#184)
     this.batchService = new BatchService(databaseService, {
       objectService: this.objectService,
       typeService: this.typeService,
       queryService: this.queryService,
     }, options);
 
-    // Event Streaming (#187)
+// Event Streaming (#187)
     this.eventService = new EventService(databaseService, options);
-
+// Agent Search API (#188) — полнотекстовый, NL-поиск, фильтрация, агрегация
+    this.searchService = new SearchService(databaseService, {
+      queryService: this.queryService,
+      typeService: this.typeService,
+      objectService: this.objectService,
+    }, {
+      ...options,
+      validationService,
+    });
     this.validationService = validationService;
     this.transformer = new LegacyFormatTransformer(options);
   }
 
-  /**
-   * Get all services.
-   * @returns {Object} Service instances
-   */
   getServices() {
     return {
       objectService: this.objectService,
@@ -126,13 +123,10 @@ export class CoreDataService {
       auditService: this.auditService,
       ontologyService: this.ontologyService,
       batchService: this.batchService,
-      eventService: this.eventService,
-    };
+eventService: this.eventService,
+searchService: this.searchService,    };
   }
 
-  /**
-   * Create Express router with all routes.
-   */
   createRouter(options = {}) {
     const router = express.Router();
     const services = this.getServices();
@@ -151,10 +145,6 @@ export class CoreDataService {
     return router;
   }
 
-  // ============================================================================
-  // Convenience Methods (delegates to services)
-  // ============================================================================
-
   async create(database, data) { return this.objectService.create(database, data); }
   async getById(database, id, options) { return this.objectService.getById(database, id, options); }
   async update(database, id, data) { return this.objectService.update(database, id, data); }
@@ -166,10 +156,6 @@ export class CoreDataService {
   async getSchema(database, typeId) { return this.typeService.getSchema(database, typeId); }
   async createType(database, data) { return this.typeService.createType(database, data); }
 }
-
-// ============================================================================
-// Factory Functions
-// ============================================================================
 
 export function createCoreDataService(databaseService, options = {}) {
   return new CoreDataService(databaseService, options);
@@ -208,12 +194,8 @@ export function createApp(databaseService, options = {}) {
   return app;
 }
 
-// ============================================================================
-// Export Default
-// ============================================================================
-
 export default {
-  CoreDataService,
+CoreDataService,
   ObjectService,
   QueryService,
   SchemaService,
@@ -232,4 +214,8 @@ export default {
   createLegacyActionRoutes,
   PACKAGE_NAME,
   PACKAGE_VERSION,
-};
+CoreDataService, ObjectService, QueryService, SchemaService, TypeService,
+  ValidationService, TransactionService, AuditService, OntologyService,
+  BatchService, SearchService, LegacyFormatTransformer,
+  createCoreDataService, createApp, createV1Routes, createV2Routes,
+  createLegacyActionRoutes, PACKAGE_NAME, PACKAGE_VERSION,};
