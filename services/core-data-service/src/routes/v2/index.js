@@ -526,6 +526,12 @@ export function createV2Routes(services, options = {}) {
     router.use('/', transactionRoutes);
   }
 
+  // Transaction Versioning Routes (Palantir Foundry-style)
+  if (transactionService) {
+    const transactionRoutes = createTransactionRoutes({ transactionService }, options);
+    router.use('/', transactionRoutes);
+  }
+
   return router;
 }
 
