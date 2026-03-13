@@ -8,6 +8,7 @@
 import { Router } from 'express';
 import { createSchemaRoutes } from './schema.js';
 import { createTransactionRoutes } from './transactions.js';
+import { createBatchRoutes } from './batch.js';
 
 /**
  * Create V2 modern routes.
@@ -526,10 +527,10 @@ export function createV2Routes(services, options = {}) {
     router.use('/', transactionRoutes);
   }
 
-  // Transaction Versioning Routes (Palantir Foundry-style)
-  if (transactionService) {
-    const transactionRoutes = createTransactionRoutes({ transactionService }, options);
-    router.use('/', transactionRoutes);
+  // Роуты пакетных операций — Batch API (#184)
+  if (services.batchService) {
+    const batchRoutes = createBatchRoutes(services, options);
+    router.use('/', batchRoutes);
   }
 
   return router;
