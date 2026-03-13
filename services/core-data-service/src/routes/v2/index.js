@@ -6,6 +6,7 @@
  */
 
 import { Router } from 'express';
+import { createSchemaRoutes } from './schema.js';
 
 /**
  * Create V2 modern routes.
@@ -508,6 +509,15 @@ export function createV2Routes(services, options = {}) {
       res.status(500).json(wrapError(error));
     }
   });
+
+  // ==========================================================================
+  // Schema Introspection Routes — выделенный модуль (stats, export, types)
+  // ==========================================================================
+
+  if (schemaService) {
+    const schemaRoutes = createSchemaRoutes({ schemaService }, options);
+    router.use('/databases/:database/schema', schemaRoutes);
+  }
 
   return router;
 }
