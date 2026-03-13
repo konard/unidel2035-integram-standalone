@@ -955,6 +955,255 @@ function getAlign(typeId) {
   }
 }
 
+// ============================================================================
+// Phase 1 — New Helper Functions (PHP parity)
+// ============================================================================
+
+/**
+ * Legacy auth middleware — centralizes token-based authentication.
+ * PHP checks auth inline in every handler; this middleware does it once.
+ *
+ * Populates req.legacyUser = {uid, username, xsrf, role, roleId, grants}
+ * Returns 401 on failure.
+ */
+async function legacyAuthMiddleware(req, res, next) {
+  const db = req.params.db;
+  if (!db || !isValidDbName(db)) {
+    return res.status(401).json({ error: 'Invalid database' });
+  }
+
+  const token = extractToken(req, db);
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  try {
+    const pool = getPool();
+    // Reuse the token validation pattern from the xsrf handler (~line 4510)
+    const [rows] = await pool.query(
+      `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
+              role_def.val role_val, role_def.id roleId
+       FROM ${db} u
+       JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
+       LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
+       LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
+         ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
+       WHERE u.t=${TYPE.USER}
+       LIMIT 1`,
+      [token]
+    );
+
+    if (rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+
+    const user = rows[0];
+    const xsrf = user.xsrf_val || generateXsrf(token, db, db);
+    const roleId = user.roleId || 0;
+    const grants = roleId ? await getGrants(pool, db, roleId) : {};
+
+    req.legacyUser = {
+      uid: user.uid,
+      username: user.uname,
+      xsrf,
+      role: (user.role_val || '').toLowerCase(),
+      roleId,
+      grants,
+    };
+
+    next();
+  } catch (error) {
+    logger.error({ error: error.message, db }, '[legacyAuthMiddleware] Error');
+    return res.status(401).json({ error: 'Authentication failed' });
+  }
+}
+
+/**
+ * Legacy XSRF check middleware.
+ * For POST requests: check req.body._xsrf === req.legacyUser.xsrf
+ * Returns error with HTTP 200 matching PHP my_die() behavior.
+ *
+ * PHP parity: PHP checks $_POST["_xsrf"] === $_SESSION["xsrf"] in every write handler.
+ */
+function legacyXsrfCheck(req, res, next) {
+  if (req.method !== 'POST') {
+    return next();
+  }
+
+  const xsrf = req.legacyUser && req.legacyUser.xsrf;
+  const bodyXsrf = req.body && req.body._xsrf;
+
+  if (!xsrf || bodyXsrf !== xsrf) {
+    // HTTP 200 matching PHP my_die() behavior
+    return res.status(200).json([{ error: 'Invalid or expired CSRF token' }]);
+  }
+
+  next();
+}
+
+/**
+ * Legacy DDL grant check middleware.
+ * Checks WRITE grant on types (root level, id=0, t=0) before any type modification.
+ *
+ * PHP parity: PHP checks DDL grant before any type modification.
+ */
+async function legacyDdlGrantCheck(req, res, next) {
+  const db = req.params.db;
+  const { grants, username } = req.legacyUser || {};
+
+  try {
+    const pool = getPool();
+    const hasGrant = await checkGrant(pool, db, grants || {}, 0, 0, 'WRITE', username || '');
+    if (!hasGrant) {
+      return res.status(200).json([{ error: 'Insufficient privileges for type modification' }]);
+    }
+    next();
+  } catch (error) {
+    logger.error({ error: error.message, db }, '[legacyDdlGrantCheck] Error');
+    return res.status(200).json([{ error: 'Grant check failed' }]);
+  }
+}
+
+/**
+ * Replace magic placeholders in values before storage.
+ * PHP parity: PHP BuiltIn() function — replaces [TODAY], [USER], etc.
+ * This wrapper accepts a full string and replaces all known placeholders.
+ *
+ * @param {string} val    - value with placeholders
+ * @param {object} user   - {uid, username, role, roleId}
+ * @param {string} db     - database name
+ * @param {number} tzone  - timezone offset in seconds
+ * @param {string} ip     - client IP address
+ * @returns {string} resolved value
+ */
+function resolveBuiltIn(val, user, db, tzone = 0, ip = '') {
+  if (!val || typeof val !== 'string') return val;
+
+  const now = new Date(Date.now() + tzone * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  const dateStr = `${pad(now.getUTCDate())}.${pad(now.getUTCMonth() + 1)}.${now.getUTCFullYear()}`;
+  const timeStr = `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())}`;
+  const datetimeStr = `${dateStr} ${timeStr}`;
+
+  return val
+    .replace(/%USER%/g, user.username || '')
+    .replace(/%USERID%/g, String(user.uid || ''))
+    .replace(/%DB%/g, db || '')
+    .replace(/%IP%/g, ip)
+    .replace(/%DATE%/g, dateStr)
+    .replace(/%DATETIME%/g, datetimeStr)
+    .replace(/%TIME%/g, timeStr);
+}
+
+/**
+ * Recursively delete object and all descendants.
+ * PHP parity: PHP Delete() — current Node uses flat deleteChildren which misses nested levels.
+ *
+ * @param {Object} pool - MySQL pool
+ * @param {string} db   - database name
+ * @param {number} id   - object ID to delete
+ */
+async function recursiveDelete(pool, db, id) {
+  // Get all children first
+  const [children] = await pool.query(
+    `SELECT id FROM ${db} WHERE up = ?`,
+    [id]
+  );
+
+  // Recurse for each child
+  for (const child of children) {
+    await recursiveDelete(pool, db, child.id);
+  }
+
+  // Delete self
+  await pool.query(`DELETE FROM ${db} WHERE id = ?`, [id]);
+}
+
+/**
+ * Check if parent already has a child with the same type and deduplicate.
+ * PHP parity: PHP checkDuplicatedReqs() — keeps the newest, deletes older duplicates.
+ *
+ * @param {Object} pool     - MySQL pool
+ * @param {string} db       - database name
+ * @param {number} parentId - parent object ID
+ * @param {number} typeId   - type ID to check
+ * @returns {boolean} true if duplicate existed (and was cleaned up)
+ */
+async function checkDuplicatedReqs(pool, db, parentId, typeId) {
+  const [rows] = await pool.query(
+    `SELECT id FROM ${db} WHERE up = ? AND t = ? ORDER BY id DESC`,
+    [parentId, typeId]
+  );
+
+  if (rows.length <= 1) return false;
+
+  // Skip the first (newest), delete the rest
+  for (let i = 1; i < rows.length; i++) {
+    await recursiveDelete(pool, db, rows[i].id);
+  }
+
+  return true;
+}
+
+/**
+ * Check filename extension against upload blacklist.
+ * PHP parity: PHP BlackList() — prevents uploading executable files.
+ *
+ * @param {string} filename - filename to check
+ * @returns {boolean} true if blacklisted
+ */
+function isBlacklisted(filename) {
+  if (!filename) return false;
+  const ext = filename.split('.').pop().toLowerCase();
+  const blacklist = ['php', 'cgi', 'pl', 'fcgi', 'fpl', 'phtml', 'shtml',
+    'php2', 'php3', 'php4', 'php5', 'asp', 'jsp'];
+  return blacklist.includes(ext);
+}
+
+/**
+ * Get subdirectory path for file storage.
+ * PHP parity: PHP GetSubdir() = UPLOAD_DIR . floor(id/1000) . substr(GetSha(floor(id/1000)), 0, 8)
+ *
+ * @param {string} db - database name
+ * @param {number} id - object ID
+ * @returns {string} subdirectory name
+ */
+function getSubdir(db, id) {
+  const folderNum = Math.floor(id / 1000);
+  return `${folderNum}${fileGetSha(db, folderNum).slice(0, 8)}`;
+}
+
+/**
+ * Get filename (without extension) for file storage.
+ * PHP parity: PHP GetFilename() = substr("00$id", -3) . substr(GetSha(id), 0, 8)
+ *
+ * @param {string} db - database name
+ * @param {number} id - object ID
+ * @returns {string} filename without extension
+ */
+function getFilename(db, id) {
+  const fileNum = ('00' + id).slice(-3);
+  return `${fileNum}${fileGetSha(db, id).slice(0, 8)}`;
+}
+
+/**
+ * Validate that a reference value exists in the target type.
+ * PHP parity: PHP checkNewRef($val, $t) — SELECT 1 FROM db WHERE id=val AND t=t
+ *
+ * @param {Object} pool      - MySQL pool
+ * @param {string} db        - database name
+ * @param {number} refTypeId - expected type ID
+ * @param {number} value     - object ID to check
+ * @returns {boolean} true if reference is valid
+ */
+async function checkNewRef(pool, db, refTypeId, value) {
+  const [rows] = await pool.query(
+    `SELECT 1 FROM ${db} WHERE id = ? AND t = ? LIMIT 1`,
+    [value, refTypeId]
+  );
+  return rows.length > 0;
+}
+
 /**
  * Validate database name (matches PHP DB_MASK)
  */
@@ -8038,5 +8287,19 @@ router.post('/:db/:action', async (req, res) => {
 
   res.json({ success: false, error: `Unknown action: ${action}` });
 });
+
+// Named exports for testing (Phase 1 helpers)
+export {
+  legacyAuthMiddleware,
+  legacyXsrfCheck,
+  legacyDdlGrantCheck,
+  resolveBuiltIn,
+  recursiveDelete,
+  checkDuplicatedReqs,
+  isBlacklisted,
+  getSubdir,
+  getFilename,
+  checkNewRef,
+};
 
 export default router;
