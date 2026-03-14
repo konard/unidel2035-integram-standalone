@@ -2968,6 +2968,331 @@ router.post('/:db/auth', async (req, res, next) => {
   }
 });
 
+// ============================================================================
+// Google OAuth — PHP parity (index.php lines 35–36, 161–240)
+// ============================================================================
+
+/**
+ * Google OAuth redirect — initiates the OAuth flow.
+ * The frontend links here; we redirect to Google's consent screen.
+ * Optional ?state=<db> is forwarded so the callback can redirect to the right DB.
+ *
+ * GET /my/google-auth
+ */
+router.get('/my/google-auth', (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  if (!clientId) {
+    logger.error('[Google OAuth] GOOGLE_CLIENT_ID not configured');
+    return res.status(500).json({ error: 'Google OAuth is not configured on this server' });
+  }
+
+  const host = req.get('host') || 'localhost';
+  const redirectUri = `https://${host}/auth.asp`;
+  const state = req.query.state || '';
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'offline',
+    state,
+  });
+
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
+  logger.info('[Google OAuth] Redirecting to Google', { redirectUri, state });
+  return res.redirect(googleAuthUrl);
+});
+
+/**
+ * Google OAuth callback — exchanges code for tokens, creates/links user.
+ * PHP: /auth.asp?code=xxx  (index.php line 35 rewrites $z to "my", then line 161 handles)
+ *
+ * GET /auth.asp?code=xxx&state=<db>
+ */
+router.get('/auth.asp', async (req, res) => {
+  const code = req.query.code;
+  if (!code) {
+    return res.status(400).json({ error: 'Missing authorization code' });
+  }
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    logger.error('[Google OAuth] GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not configured');
+    return res.status(500).json({ error: 'Google OAuth is not configured on this server' });
+  }
+
+  const host = req.get('host') || 'localhost';
+  const redirectUri = `https://${host}/auth.asp`;
+  const stateParam = req.query.state || '';
+  const z = 'my'; // PHP: $z = "my" when auth.asp
+
+  try {
+    // ── Step 1: Exchange authorization code for tokens ──
+    // PHP: curl_init('https://accounts.google.com/o/oauth2/token')
+    const tokenParams = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+      code,
+    });
+
+    const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenParams.toString(),
+    });
+    const tokenData = await tokenResp.json();
+
+    if (!tokenData.access_token) {
+      logger.error('[Google OAuth] Token exchange failed', { error: tokenData.error, description: tokenData.error_description });
+      return res.status(401).json({ error: 'Google authentication failed', details: tokenData.error_description || tokenData.error });
+    }
+
+    // ── Step 2: Retrieve user info ──
+    // PHP: file_get_contents('https://www.googleapis.com/oauth2/v1/userinfo?...')
+    const userInfoParams = new URLSearchParams({
+      access_token: tokenData.access_token,
+    });
+    const userInfoResp = await fetch(`https://www.googleapis.com/oauth2/v1/userinfo?${userInfoParams.toString()}`);
+    const info = await userInfoResp.json();
+
+    if (!info.id) {
+      logger.error('[Google OAuth] Failed to get user info', { info });
+      return res.status(401).json({ error: 'Authentication error' });
+    }
+
+    logger.info('[Google OAuth] Got user info', { googleId: info.id, email: info.email, name: info.name });
+
+    const pool = getPool();
+
+    // Check if 'my' table exists
+    const [tables] = await pool.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'my' LIMIT 1`
+    );
+    if (tables.length === 0) {
+      logger.error('[Google OAuth] my table does not exist');
+      return res.status(500).json({ error: 'User registry not available' });
+    }
+
+    // ── Step 3: Look up existing user by Google ID (PHP: WHERE user.val=info.id AND user.t=USER) ──
+    const USER_DB_MASK = /^[a-z][a-z0-9]{2,14}$/i;
+    const targetDb = (stateParam && USER_DB_MASK.test(stateParam)) ? stateParam : '';
+
+    const dbJoinClause = targetDb
+      ? `LEFT JOIN ${z} db ON db.up = u.id AND db.t = ${TYPE.DATABASE} AND db.val = '${targetDb}'`
+      : `LEFT JOIN ${z} db ON db.up = u.id AND db.t = ${TYPE.DATABASE}`;
+
+    const [existingRows] = await pool.query(
+      `SELECT u.id AS uid, tok.id AS tok_id, tok.val AS token, xsrf.id AS xsrf_id,
+              act.id AS act_id, db.val AS db_name
+       FROM ${z} u
+       LEFT JOIN ${z} tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN}
+       LEFT JOIN ${z} xsrf ON xsrf.up = u.id AND xsrf.t = ${TYPE.XSRF}
+       LEFT JOIN ${z} act ON act.up = u.id AND act.t = ${TYPE.ACTIVITY}
+       ${dbJoinClause}
+       WHERE u.val = ? AND u.t = ${TYPE.USER}
+       LIMIT 1`,
+      [String(info.id)]
+    );
+
+    let token;
+    let finalDb = z;
+
+    if (existingRows.length > 0) {
+      // ── Existing user — update tokens (PHP: updateTokens) ──
+      const row = existingRows[0];
+
+      if (row.tok_id && row.token) {
+        token = row.token;
+      } else {
+        token = generateToken();
+        await insertRow(z, row.uid, 1, TYPE.TOKEN, token);
+      }
+
+      const xsrf = generateXsrf(token, z, z);
+      if (row.xsrf_id) {
+        await updateRowValue(z, row.xsrf_id, xsrf);
+      } else {
+        await insertRow(z, row.uid, 1, TYPE.XSRF, xsrf);
+      }
+
+      // Update activity timestamp
+      if (row.act_id) {
+        await updateRowValue(z, row.act_id, String(Date.now() / 1000));
+      } else {
+        await insertRow(z, row.uid, 1, TYPE.ACTIVITY, String(Date.now() / 1000));
+      }
+
+      if (row.db_name) {
+        finalDb = row.db_name;
+        // PHP: get the token of the target DB for the google user
+        const [dbUserRows] = await pool.query(
+          `SELECT u.id, tok.val AS tok, xsrf.val AS xsrf
+           FROM \`${finalDb}\` u
+           LEFT JOIN \`${finalDb}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN}
+           LEFT JOIN \`${finalDb}\` xsrf ON xsrf.up = u.id AND xsrf.t = ${TYPE.XSRF}
+           WHERE u.val = ? AND u.t = ${TYPE.USER}
+           LIMIT 1`,
+          [finalDb]
+        );
+        if (dbUserRows.length > 0) {
+          const dbUser = dbUserRows[0];
+          if (dbUser.tok) {
+            token = dbUser.tok;
+          } else {
+            token = generateToken();
+            await insertRow(finalDb, dbUser.id, 1, TYPE.TOKEN, token);
+          }
+          if (!dbUser.xsrf) {
+            await insertRow(finalDb, dbUser.id, 1, TYPE.XSRF, generateXsrf(token, finalDb, finalDb));
+          }
+        } else {
+          logger.warn('[Google OAuth] Admin user not found in target DB', { finalDb });
+        }
+      }
+
+      // PHP: setcookie($z, $token, time() + 2592000*12, "/")  — 30*12 days
+      res.cookie(finalDb, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
+      logger.info('[Google OAuth] Existing user logged in', { uid: row.uid, db: finalDb });
+    } else {
+      // ── New user — create (PHP: newUser + Insert social + createDb) ──
+      // PHP: newUser($info["id"], $info["email"], "115", $info["name"], $info["picture"])
+      const userId = await insertRow(z, 1, 0, TYPE.USER, String(info.id));
+      await insertRow(z, userId, 1, TYPE.EMAIL, info.email || '');
+      await insertRow(z, userId, 1, 164, '115'); // role link
+      const today = new Date();
+      const dateYmd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+      await insertRow(z, userId, 1, 156, dateYmd); // date
+      if (info.name) {
+        await insertRow(z, userId, 1, 33, info.name); // name
+      }
+      if (info.picture) {
+        await insertRow(z, userId, 1, 280, info.picture); // picture
+      }
+
+      // PHP: Insert($id, 1, 274, "Google", "Set social for new G user")
+      await insertRow(z, userId, 1, 274, 'Google');
+
+      // Generate token + xsrf
+      token = generateToken();
+      const xsrf = generateXsrf(token, z, z);
+      await insertRow(z, userId, 1, TYPE.TOKEN, token);
+      await insertRow(z, userId, 1, TYPE.XSRF, xsrf);
+
+      // Affiliate cookie (PHP: $_COOKIE["_aff"])
+      if (req.cookies._aff) {
+        await insertRow(z, userId, 1, 1012, String(parseInt(req.cookies._aff, 10) || 0));
+      }
+
+      res.cookie(z, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
+
+      // Create user's database (PHP: createDb -> mail2DB -> newDb)
+      // mail2DB: derive DB name from email, fall back to "g" + userId
+      let newDbName = '';
+      if (info.email) {
+        const emailPrefix = info.email.split('@')[0].replace(/[^A-Za-z0-9]/g, '').toLowerCase().substring(0, 15);
+        if (USER_DB_MASK.test(emailPrefix)) {
+          // Check vacancy
+          const [existsCheck] = await pool.query(`SHOW TABLES LIKE ?`, [emailPrefix]);
+          if (existsCheck.length === 0) {
+            newDbName = emailPrefix;
+          }
+        }
+        if (!newDbName) {
+          newDbName = `g${userId}`;
+        }
+      } else {
+        newDbName = `g${userId}`;
+      }
+
+      // Create the DB table (similar to /my/_new_db logic)
+      const locale = req.cookies[z + '_locale'] || req.cookies.my_locale || 'RU';
+      const template = locale === 'EN' ? 'en' : 'ru';
+
+      try {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS \`${newDbName}\` (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            up BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            ord INT UNSIGNED NOT NULL DEFAULT 1,
+            t BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            val TEXT,
+            INDEX idx_up (up),
+            INDEX idx_t (t),
+            INDEX idx_up_t (up, t)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        `);
+
+        // Try to copy from template
+        let copiedFromTemplate = false;
+        if (isValidDbName(template)) {
+          const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
+          if (tmplExists.length > 0) {
+            await pool.query(`INSERT INTO \`${newDbName}\` (id, up, ord, t, val) SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0`);
+            await pool.query(`
+              INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
+              SELECT child.id, child.up, child.ord, child.t, child.val
+              FROM \`${template}\` child
+              JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
+              WHERE child.up != 0
+            `);
+            copiedFromTemplate = true;
+          }
+        }
+
+        if (!copiedFromTemplate) {
+          // Initialize with basic types
+          const initQueries = [
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (1, 0, 1, 1, 'Объект')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (8, 0, 2, 8, 'Строка')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (12, 0, 3, 12, 'Текст')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (13, 0, 4, 13, 'Число')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (9, 0, 5, 9, 'Дата')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (4, 0, 6, 4, 'Дата и время')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (11, 0, 7, 11, 'Да/Нет')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (18, 0, 10, 8, 'Пользователь')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (20, 18, 1, 6, ':!NULL:Пароль')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (30, 18, 2, 8, 'Телефон')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (41, 18, 3, 8, 'Email')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (42, 0, 11, 8, 'Роль')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (125, 0, 12, 8, 'Токен')`,
+            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
+          ];
+          for (const q of initQueries) {
+            try { await pool.query(q); } catch (e) { /* ignore duplicates */ }
+          }
+        }
+
+        // Register the DB in the my table (PHP: createDb)
+        const dbRecordId = await insertRow(z, userId, 1, TYPE.DATABASE, newDbName);
+        await insertRow(z, dbRecordId, 1, 275, dateYmd);
+        await insertRow(z, dbRecordId, 1, 283, template);
+        await insertRow(z, dbRecordId, 1, 276, locale === 'EN'
+          ? 'Test one, created upon registration'
+          : 'Тестовая база, создана при регистрации');
+
+        finalDb = newDbName;
+        res.cookie(finalDb, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
+        logger.info('[Google OAuth] New user + DB created', { userId, email: info.email, db: finalDb });
+      } catch (dbErr) {
+        logger.error('[Google OAuth] Failed to create user DB', { error: dbErr.message, newDbName });
+        // Still let them in to /my even if DB creation failed
+        finalDb = z;
+      }
+    }
+
+    // PHP: header("Location: ".(isset($_GET['state'])?$_GET['state']:"/$z"))
+    const redirectTo = stateParam || `/${finalDb}`;
+    return res.redirect(redirectTo);
+  } catch (err) {
+    logger.error('[Google OAuth] Error', { error: err.message, stack: err.stack });
+    return res.status(500).json({ error: 'Google authentication failed', details: err.message });
+  }
+});
+
 /**
  * Registration endpoint (my/register)
  * POST /my/register
