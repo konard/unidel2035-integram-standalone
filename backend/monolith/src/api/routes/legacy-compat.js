@@ -11506,6 +11506,46 @@ async function exportTerms(pool, db, id, ctx) {
 }
 
 /**
+ * CheckSubst — look up a structural ID substitution.
+ * PHP parity: index.php lines 3991–3997
+ *
+ * During CSV/BKI import, when an imported type ID does not match an existing
+ * local type, ResolveType() records a mapping in ctx.localStruct.subst.
+ * CheckSubst returns the substituted (local) ID when one exists, or the
+ * original ID unchanged.
+ *
+ * @param {number|string} i   - the structural / type ID to check
+ * @param {object}        ctx - shared import context (must have localStruct)
+ * @returns {number|string} substituted ID or original
+ */
+function checkSubst(i, ctx) {
+  if (ctx.localStruct && ctx.localStruct.subst && ctx.localStruct.subst[i] !== undefined) {
+    return ctx.localStruct.subst[i];
+  }
+  return i;
+}
+
+/**
+ * CheckObjSubst — look up an object ID substitution.
+ * PHP parity: index.php lines 3998–4004
+ *
+ * During CSV/BKI import, when an imported object row ID collides with an
+ * existing row of a different type, the importer creates a new row and records
+ * the old→new mapping in ctx.objSubst.  CheckObjSubst returns the substituted
+ * (new) object ID when one exists, or the original ID unchanged.
+ *
+ * @param {number|string} i   - the object ID to check
+ * @param {object}        ctx - shared import context (must have objSubst)
+ * @returns {number|string} substituted ID or original
+ */
+function checkObjSubst(i, ctx) {
+  if (ctx.objSubst && ctx.objSubst[i] !== undefined) {
+    return ctx.objSubst[i];
+  }
+  return i;
+}
+
+/**
  * Export_reqs — recursively exports the data rows for a single object in BKI
  * format.  Mirrors PHP Export_reqs($id, $obj, $val, $ref).
  *
