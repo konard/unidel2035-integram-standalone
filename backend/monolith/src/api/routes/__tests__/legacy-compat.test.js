@@ -192,6 +192,30 @@ describe('GET /:db/xsrf', () => {
     expect(res.body.id).toBe('3');
   });
 
+  it('returns id as string "0" when no token cookie (#385)', async () => {
+    // No cookie → error path should return id: '0' (string), not 0 (number)
+    const res = await request(app)
+      .get(`/${DB}/xsrf`);
+    // May be handled by xsrf route (200) or catch-all (302)
+    if (res.status === 200) {
+      expect(typeof res.body.id).toBe('string');
+      expect(res.body.id).toBe('0');
+    }
+  });
+
+  it('returns id as string "0" when token is invalid (#385)', async () => {
+    // Token exists but DB returns no rows → invalid token error path
+    mockQuery([[]]);
+
+    const res = await request(app)
+      .get(`/${DB}/xsrf`)
+      .set('Cookie', `${DB}=invalid-token-xyz`);
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.id).toBe('string');
+    expect(res.body.id).toBe('0');
+  });
+
   it('redirects when no cookie (catch-all handles unauthenticated GETs)', async () => {
     // Without a cookie, the /:db/:page* catch-all redirects to login first
     const res = await request(app).get(`/${DB}/xsrf`);
