@@ -468,6 +468,77 @@ function generateXsrf(a, b, db) {
 }
 
 /**
+ * Refresh auth token and activity timestamp after authentication.
+ * Port of PHP updateTokens() (index.php:363).
+ *
+ * Generates cryptographically random token and XSRF (32 bytes hex each),
+ * updates or inserts the token row, creates or updates the XSRF row, and
+ * updates the activity timestamp to current epoch seconds.
+ *
+ * @param {import('mysql2/promise').Pool} pool - MySQL connection pool
+ * @param {string} db   - database (table) name
+ * @param {object} row  - auth query result with at least:
+ *   {number}      row.uid  - id of the user row (required)
+ *   {number|null} row.tok  - id of the token row (null → insert)
+ *   {number|null} row.xsrf - id of the XSRF row (null → insert)
+ *   {number|null} row.act  - id of the activity row (null → insert)
+ * @returns {Promise<{token: string, xsrf: string}>} the newly generated token and xsrf values
+ */
+async function updateTokens(pool, db, row) {
+  const safeDb = sanitizeIdentifier(db);
+  const token = crypto.randomBytes(32).toString('hex');
+  const xsrf  = crypto.randomBytes(32).toString('hex');
+
+  // Update or insert token row
+  if (row.tok) {
+    await execSql(pool,
+      `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
+      [token, row.tok],
+      { label: 'Update Token' }
+    );
+  } else {
+    await execSql(pool,
+      `INSERT INTO ${safeDb} (up, ord, t, val) VALUES (?, 1, ?, ?)`,
+      [row.uid, TYPE.TOKEN, token],
+      { label: 'Insert Token' }
+    );
+  }
+
+  // Create or update XSRF row
+  if (row.xsrf) {
+    await execSql(pool,
+      `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
+      [xsrf, row.xsrf],
+      { label: 'Update XSRF' }
+    );
+  } else {
+    await execSql(pool,
+      `INSERT INTO ${safeDb} (up, ord, t, val) VALUES (?, 1, ?, ?)`,
+      [row.uid, TYPE.XSRF, xsrf],
+      { label: 'Insert XSRF' }
+    );
+  }
+
+  // Update activity timestamp to current epoch seconds
+  const nowSec = String(Math.floor(Date.now() / 1000));
+  if (row.act) {
+    await execSql(pool,
+      `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
+      [nowSec, row.act],
+      { label: 'Update Activity Timestamp' }
+    );
+  } else {
+    await execSql(pool,
+      `INSERT INTO ${safeDb} (up, ord, t, val) VALUES (?, 1, ?, ?)`,
+      [row.uid, TYPE.ACTIVITY, nowSec],
+      { label: 'Insert Activity Timestamp' }
+    );
+  }
+
+  return { token, xsrf };
+}
+
+/**
  * Safe path resolution — prevents directory traversal including URL-encoded variants.
  * Resolves userInput relative to base and verifies result stays within base.
  */
@@ -632,6 +703,32 @@ const REV_BASE_TYPE = {
   [TYPE.REPORT_COLUMN]: 'REPORT_COLUMN', // 16
   [TYPE.PATH]: 'PATH',                   // 17
 };
+
+// ── isDbVacant — database name uniqueness check (Issue #303) ────────────
+// PHP: isDbVacant($db) — index.php:7493
+// Returns true if `dbName` is not yet registered in the master table, false if taken.
+
+/**
+ * Check whether a database name is available (not already registered).
+ *
+ * Port of PHP isDbVacant($db) — queries the master management table
+ * for an existing row with val=dbName AND t=DATABASE.
+ *
+ * @param {import('mysql2/promise').Pool} pool   - MySQL connection pool
+ * @param {string} masterDb - Master/management table name (e.g. 'my')
+ * @param {string} dbName   - Database name to check
+ * @returns {Promise<boolean>} true if the name is available, false if taken
+ */
+async function isDbVacant(pool, masterDb, dbName) {
+  const z = sanitizeIdentifier(masterDb);
+  const { rows } = await execSql(
+    pool,
+    `SELECT 1 FROM ${z} WHERE val = ? AND t = ${TYPE.DATABASE} LIMIT 1`,
+    [dbName],
+    { label: 'Check DB name uniquity' }
+  );
+  return rows.length === 0;
+}
 
 // ── Mask constants & removeMasks (PHP index.php:7553-7557) ──────────────
 const NOT_NULL_MASK = /:!NULL:/g;
@@ -2182,24 +2279,65 @@ function legacyXsrfCheck(req, res, next) {
 }
 
 /**
+ * Check Types Grant — authorization gate for type/metadata operations.
+ * Port of PHP Check_Types_Grant() (index.php:967).
+ *
+ * Admin users always get 'WRITE'. Otherwise, checks grants[0] (the type-system
+ * grant at ID 0) for 'READ' or 'WRITE'. When fatal is true and the user lacks
+ * access, throws an object with status 403 so callers can translate it into an
+ * HTTP response.
+ *
+ * @param {Object} grants   - Loaded grants object (from loadGrants)
+ * @param {string} username - Current username
+ * @param {boolean} [fatal=true] - If true, throw on insufficient grant
+ * @returns {string|undefined} 'READ' or 'WRITE', or undefined when non-fatal and no grant
+ */
+function checkTypesGrant(grants, username, fatal = true) {
+  // Admin always has WRITE access — mirrors PHP: if($GLOBALS["GLOBAL_VARS"]["user"] == "admin") return "WRITE"
+  if (username && username.toLowerCase() === 'admin') {
+    return 'WRITE';
+  }
+
+  // Check grant ID 0 (type-system grant) — mirrors PHP: if(isset($GLOBALS["GRANTS"][0]))
+  if (grants && grants[0] !== undefined) {
+    if (grants[0] === 'READ' || grants[0] === 'WRITE') {
+      return grants[0];
+    }
+  }
+
+  // No valid grant found
+  if (fatal) {
+    const err = new Error('You do not have the grant to view and edit the metadata');
+    err.status = 403;
+    throw err;
+  }
+
+  return undefined;
+}
+
+/**
  * Legacy DDL grant check middleware.
  * Checks WRITE grant on types (root level, id=0, t=0) before any type modification.
+ * Uses checkTypesGrant() for PHP-parity authorization.
  *
- * PHP parity: PHP checks DDL grant before any type modification.
+ * PHP parity: PHP calls Check_Types_Grant() before any type modification.
  */
 async function legacyDdlGrantCheck(req, res, next) {
   const db = req.params.db;
   const { grants, username } = req.legacyUser || {};
 
   try {
-    const pool = getPool();
-    const locale = getLocale(req, db);
-    const hasGrant = await checkGrant(pool, db, grants || {}, 0, 0, 'WRITE', username || '');
-    if (!hasGrant) {
-      return res.status(200).json({ error: t9n('insufficient_type_mod', locale) });
+    const grantLevel = checkTypesGrant(grants || {}, username || '', true);
+    if (grantLevel !== 'WRITE') {
+      const locale = getLocale(req, db);
+      return res.status(403).json({ error: t9n('insufficient_type_mod', locale) });
     }
     next();
   } catch (error) {
+    if (error.status === 403) {
+      const locale = getLocale(req, db);
+      return res.status(403).json({ error: error.message });
+    }
     logger.error({ error: error.message, db }, '[legacyDdlGrantCheck] Error');
     const locale = getLocale(req, db);
     return res.status(200).json({ error: t9n('grant_check_failed', locale) });
@@ -3439,8 +3577,7 @@ async function createUserDb(pool, z, userId, email, locale, prefix = 'u') {
   if (email) {
     const emailPrefix = email.split('@')[0].replace(/[^A-Za-z0-9]/g, '').toLowerCase().substring(0, 15);
     if (USER_DB_MASK.test(emailPrefix)) {
-      const [existsCheck] = await pool.query(`SHOW TABLES LIKE ?`, [emailPrefix]);
-      if (existsCheck.length === 0) {
+      if (await isDbVacant(pool, z, emailPrefix)) {
         newDbName = emailPrefix;
       }
     }
@@ -3660,26 +3797,13 @@ router.get('/auth.asp', async (req, res) => {
       // ── Existing user — update tokens (PHP: updateTokens) ──
       const row = existingRows[0];
 
-      if (row.tok_id && row.token) {
-        token = row.token;
-      } else {
-        token = generateToken();
-        await insertRow(z, row.uid, 1, TYPE.TOKEN, token);
-      }
-
-      const xsrf = generateXsrf(token, z, z);
-      if (row.xsrf_id) {
-        await updateRowValue(z, row.xsrf_id, xsrf);
-      } else {
-        await insertRow(z, row.uid, 1, TYPE.XSRF, xsrf);
-      }
-
-      // Update activity timestamp
-      if (row.act_id) {
-        await updateRowValue(z, row.act_id, String(Date.now() / 1000));
-      } else {
-        await insertRow(z, row.uid, 1, TYPE.ACTIVITY, String(Date.now() / 1000));
-      }
+      const updated = await updateTokens(pool, z, {
+        uid: row.uid,
+        tok: row.tok_id,
+        xsrf: row.xsrf_id,
+        act: row.act_id,
+      });
+      token = updated.token;
 
       if (row.db_name) {
         finalDb = row.db_name;
@@ -3826,27 +3950,7 @@ router.get('/my/register', async (req, res) => {
     await pool.query('UPDATE my SET val = ? WHERE id = ?', [hashedPwd, row.pid]);
 
     // PHP line 98: updateTokens(row) — create/update token, xsrf, activity + set cookie
-    let token;
-    if (row.tok) {
-      token = row.token;
-    } else {
-      token = generateToken();
-      await insertRow('my', row.uid, 1, TYPE.TOKEN, token);
-    }
-
-    const xsrfVal = generateXsrf(token, 'my', 'my');
-    if (row.xsrf) {
-      await pool.query('UPDATE my SET val = ? WHERE id = ?', [xsrfVal, row.xsrf]);
-    } else {
-      await insertRow('my', row.uid, 1, TYPE.XSRF, xsrfVal);
-    }
-
-    const nowSec = String(Math.floor(Date.now() / 1000));
-    if (row.act) {
-      await pool.query('UPDATE my SET val = ? WHERE id = ?', [nowSec, row.act]);
-    } else {
-      await insertRow('my', row.uid, 1, TYPE.ACTIVITY, nowSec);
-    }
+    const { token } = await updateTokens(pool, 'my', row);
 
     res.cookie('my', token, { maxAge: 2592000 * 12 * 1000, path: '/' });
 
@@ -5664,6 +5768,62 @@ async function getNextOrder(db, parentId, typeId = null) {
 }
 
 /**
+ * Get next order value for reference objects — PHP GetRefOrd() parity (Issue #300).
+ *
+ * Unlike getNextOrder (Calc_Order) which filters by `t` (type column),
+ * GetRefOrd filters by `val` (value column) because reference rows store
+ * the type identifier in `val`, not `t`.
+ *
+ * PHP: SELECT max(ord) ord FROM $z WHERE up=$parent AND val='$typ'
+ *
+ * @param {import('mysql2/promise').Pool} pool - mysql2 connection pool
+ * @param {string} db   - database (table) name
+ * @param {number} parent - parent row ID
+ * @param {string|number} typ - type value stored in the `val` column
+ * @returns {Promise<number>} next order value (max(ord) + 1, or 1 if none)
+ */
+async function getRefOrd(pool, db, parent, typ) {
+  try {
+    const z = sanitizeIdentifier(db);
+    const [rows] = await pool.query(
+      `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ? AND val = ?`,
+      [parent, String(typ)]
+    );
+    return rows[0]?.next_ord || 1;
+  } catch (error) {
+    return 1;
+  }
+}
+
+/**
+ * Calculate the next sort order for a new object.
+ * Direct port of PHP Calc_Order (index.php:6931).
+ *
+ * Returns COALESCE(MAX(ord)+1, 1) for the given parent and type,
+ * i.e. the next sequential order value.
+ *
+ * @param {import('mysql2/promise').Pool} pool - MySQL connection pool
+ * @param {string} db   - Database (table) name
+ * @param {number} up   - Parent object ID
+ * @param {number} t    - Type ID
+ * @returns {Promise<number>} Next order value (>= 1)
+ * @throws {Error} If the query fails
+ */
+async function calcOrder(pool, db, up, t) {
+  const z = sanitizeIdentifier(db);
+  const result = await execSql(
+    pool,
+    `SELECT COALESCE(MAX(ord)+1, 1) AS next_ord FROM ${z} WHERE t = ? AND up = ?`,
+    [t, up],
+    { label: 'Calc_Order', db }
+  );
+  if (result.rows && result.rows.length > 0) {
+    return result.rows[0].next_ord;
+  }
+  throw new Error(t9n('Cannot Calc the Order'));
+}
+
+/**
  * Insert a new row into the database
  */
 async function insertRow(db, parentId, order, typeId, value) {
@@ -5925,8 +6085,8 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       req.body['t' + reqId] = resolved;
     }
 
-    // Get next order
-    const order = await getNextOrder(db, parentId, typeId);
+    // Get next order (PHP: Calc_Order)
+    const order = await calcOrder(pool, db, parentId, typeId);
 
     // Uniqueness check: if ord=1 (unique), check if same val+type already exists
     if (parseInt(order, 10) === 1 || order === 1) {
@@ -6012,7 +6172,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       if (isMulti && finalValue.includes(',')) {
         const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
         for (const mv of values) {
-          const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+          const attrOrder = await calcOrder(pool, db, id, attrTypeIdNum);
           await insertRow(db, id, attrOrder, attrTypeIdNum, mv);
         }
         continue;
@@ -6035,7 +6195,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
                   return res.status(200).json({ error: `You do not have this object granted (${refCheck[0].val}) (${attrTypeIdNum})` });
                 }
               }
-              const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+              const attrOrder = await getRefOrd(pool, db, id, attrTypeIdNum);
               await insertRow(db, id, attrOrder, rv, String(attrTypeIdNum));
               if (!isMulti) break; // single-ref: only first value
             }
@@ -6044,7 +6204,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
       }
 
-      const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+      const attrOrder = await calcOrder(pool, db, id, attrTypeIdNum);
       await insertRow(db, id, attrOrder, attrTypeIdNum, finalValue);
     }
 
@@ -6072,7 +6232,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
 
         // Store the reference as a child of the new object
-        const attrOrder = await getNextOrder(db, id, refTypeId);
+        const attrOrder = await calcOrder(pool, db, id, refTypeId);
         await insertRow(db, id, attrOrder, refId, '');
       }
     }
@@ -6107,6 +6267,126 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     return res.status(200).json({ error: error.message });
   }
 });
+
+/**
+ * Get_Current_Values — load current field values for an object before save.
+ * Port of PHP Get_Current_Values (index.php:6977).
+ *
+ * Runs GetObjectReqs Query 1 (field definitions) and Query 2 (stored values),
+ * then merges them into plain-object maps the caller can use for validation,
+ * NOT_NULL enforcement, BOOLEAN tracking, and REFERENCE / ARRAY resolution.
+ *
+ * @param {import('mysql2/promise').Pool} pool
+ * @param {string} db   - database (table) name
+ * @param {number|string} id  - object id
+ * @param {number|string} typ - object type id
+ * @param {object} reqs    - mutable requisite map  { reqId → metadata|value }
+ * @param {object} refTyps - reqId → refTypeId mapping
+ * @param {object} arrTyps - reqId → arrSubTypeId mapping
+ * @param {object} revBt   - reqId → base-type name mapping
+ * @returns {Promise<{reqs: object, reqTyps: object, notNull: object, revBt: object, booleans: object}>}
+ */
+async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt) {
+  const z = sanitizeIdentifier(db);
+
+  // ── Query 1: Req field definitions (PHP GetObjectReqs query 1) ──────────
+  const q1 = `SELECT a.id AS req_id, refs.id AS ref_id, a.val AS attrs, a.ord,
+                CASE WHEN refs.id IS NULL THEN typs.t    ELSE refs.t   END AS base_typ,
+                CASE WHEN refs.id IS NULL THEN typs.val  ELSE refs.val END AS type_val,
+                CASE WHEN arrs.id IS NULL THEN NULL      ELSE typs.id  END AS arr_id
+         FROM ${z} a, ${z} typs
+         LEFT JOIN ${z} refs ON refs.id=typs.t AND refs.t!=refs.id
+         LEFT JOIN ${z} arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
+         WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`;
+  const { rows: reqMeta } = await execSql(pool, q1, [typ], { label: 'getCurrentValues_q1', db });
+
+  // Build local metadata from Query 1 (populates reqs, refTyps, arrTyps if empty)
+  const localReqs    = {};   // reqId → { base_typ, attrs }
+  for (const rd of reqMeta) {
+    const k = String(rd.req_id);
+    localReqs[k] = {
+      base_typ: rd.base_typ,
+      attrs:    rd.attrs || '',
+    };
+    if (rd.ref_id != null)       refTyps[k] = String(rd.ref_id);
+    else if (rd.arr_id != null)  arrTyps[k] = String(rd.arr_id);
+  }
+
+  // ── Query 2: Stored values (PHP GetObjectReqs query 2) ─────────────────
+  const q2 = `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
+                CASE WHEN typs.up=0 THEN 0 ELSE reqs.val END AS val,
+                reqs.ord, typs.id AS t, COUNT(1) AS arr_num,
+                origs.t AS bt, typs.val AS ref_val
+         FROM ${z} reqs
+         JOIN ${z} typs  ON typs.id  = reqs.t
+         LEFT JOIN ${z} origs ON origs.id = typs.t
+         WHERE reqs.up = ?
+         GROUP BY val, id, t
+         ORDER BY reqs.ord`;
+  const { rows: storedRows } = await execSql(pool, q2, [id], { label: 'getCurrentValues_q2', db });
+
+  // Process stored rows into a keyed map (PHP: $rows)
+  const rows = {};
+  for (const row of storedRows) {
+    const tStr = String(row.t);
+    rows[tStr] = {
+      id:      row.id != null ? String(row.id) : '',
+      val:     row.val != null ? String(row.val) : '',
+      arr_num: Number(row.arr_num),
+    };
+  }
+
+  // ── Merge pass (PHP foreach over GLOBALS["REQS"]) ──────────────────────
+  const reqTyps  = {};
+  const notNull  = {};
+  const booleans = {};
+
+  // Iterate over all known requisite keys from Query 1
+  for (const key of Object.keys(localReqs)) {
+    const meta = localReqs[key];
+
+    // NOT_NULL detection (PHP: strpos attrs, NOT_NULL_MASK)
+    if (meta.attrs && meta.attrs.includes(':!NULL:')) {
+      notNull[key] = '';
+    }
+
+    // Reverse base-type mapping
+    const baseTypId = meta.base_typ;
+    revBt[key] = REV_BASE_TYPE[baseTypId] || revBt[baseTypId] || '';
+
+    if (rows[key] !== undefined) {
+      // Direct match — stored value keyed by req type id
+      reqs[key]    = rows[key].val;
+      reqTyps[key] = rows[key].id;
+    } else if (refTyps[key] !== undefined) {
+      // REFERENCE resolution: look up by the ref-type id
+      const refKey = refTyps[key];
+      if (rows[refKey] !== undefined) {
+        reqs[key]    = rows[refKey].val;
+        reqTyps[key] = rows[refKey].id;
+      } else {
+        reqs[key]    = '';
+        reqTyps[key] = '';
+      }
+      revBt[key] = 'REFERENCE';
+    } else if (arrTyps[key] !== undefined) {
+      // ARRAY / multiselect resolution: use arr_num
+      const arrKey = arrTyps[key];
+      reqs[key] = rows[arrKey] !== undefined ? rows[arrKey].arr_num : 0;
+    } else if (key !== String(typ)) {
+      // Default: empty
+      reqs[key]    = '';
+      reqTyps[key] = '';
+    }
+
+    // BOOLEAN tracking
+    if (revBt[key] === 'BOOLEAN' && reqs[key] == 1) {  // == intentional (PHP loose comparison)
+      booleans[key] = 1;
+    }
+  }
+
+  return { reqs, reqTyps, notNull, revBt, booleans };
+}
 
 /**
  * _m_save - Save/update object attributes (with copy support)
@@ -6233,6 +6513,17 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     );
     const objTypeEarly = objInfoEarly.length > 0 ? objInfoEarly[0].t : 0;
     const objValEarly = objInfoEarly.length > 0 ? objInfoEarly[0].val : '';
+
+    // Load current field values for this object (PHP: Get_Current_Values)
+    // Provides NOT_NULL enforcement, BOOLEAN tracking, and REFERENCE/ARRAY resolution
+    const currentReqs = {};
+    const currentRefTyps = {};
+    const currentArrTyps = {};
+    const currentRevBt = {};
+    const currentValues = await getCurrentValues(
+      pool, db, objectId, objTypeEarly,
+      currentReqs, currentRefTyps, currentArrTyps, currentRevBt
+    );
 
     // Normal save (not copy)
     // Update value if provided
@@ -6383,7 +6674,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         if (attrs.includes(':MULTI:') && finalValue.includes(',')) {
           const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
           for (const mv of values) {
-            const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+            const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
             await insertRow(db, objectId, attrOrder, typeIdNum, mv);
           }
           await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
@@ -6423,7 +6714,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         if (existing) {
           await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
         } else {
-          const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+          const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
           await insertRow(db, objectId, attrOrder, refVal, '');
         }
         await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
@@ -6452,7 +6743,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         await updateRowValue(db, existing.id, finalValue);
       } else {
         // Create new requisite
-        const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+        const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
         await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
       }
 
@@ -6741,7 +7032,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
           await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
           lastReqId = String(existing.id);
         } else {
-          const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+          const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
           const newId = await insertRow(db, objectId, attrOrder, refVal, '');
           lastReqId = String(newId);
         }
@@ -6758,7 +7049,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
         if (attrs.includes(':MULTI:') && finalValue.includes(',')) {
           const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
           for (const mv of values) {
-            const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+            const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
             await insertRow(db, objectId, attrOrder, typeIdNum, mv);
           }
           await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
@@ -6772,7 +7063,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
         await updateRowValue(db, existing.id, finalValue);
         lastReqId = String(existing.id);
       } else {
-        const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+        const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
         const newId = await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
         lastReqId = String(newId);
       }
@@ -6873,7 +7164,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
       [oldParentId, objType, oldOrd]
     );
 
-    const newOrder = await getNextOrder(db, newParentId, objType);
+    const newOrder = await calcOrder(pool, db, newParentId, objType);
     await pool.query(`UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
@@ -9302,19 +9593,12 @@ router.post('/:db/jwt', async (req, res) => {
     const user = rows[0];
 
     // PHP authJWT: updateTokens() regenerates token+xsrf, sets cookie
-    const newToken = generateToken();
-    const newXsrf  = generateXsrf(newToken, db, db);
-
-    if (user.tok_id) {
-      await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [newToken, user.tok_id]);
-    } else {
-      await pool.query(`INSERT INTO \`${db}\` (up,ord,t,val) VALUES (?,1,${TYPE.TOKEN},?)`, [user.uid, newToken]);
-    }
-    if (user.xsrf_id) {
-      await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [newXsrf, user.xsrf_id]);
-    } else {
-      await pool.query(`INSERT INTO \`${db}\` (up,ord,t,val) VALUES (?,1,${TYPE.XSRF},?)`, [user.uid, newXsrf]);
-    }
+    const { token: newToken, xsrf: newXsrf } = await updateTokens(pool, db, {
+      uid: user.uid,
+      tok: user.tok_id,
+      xsrf: user.xsrf_id,
+      act: null,
+    });
 
     res.cookie(db, newToken, { path: '/', httpOnly: false });
 
@@ -9414,11 +9698,8 @@ router.all('/my/_new_db', async (req, res) => {
   try {
     const pool = getPool();
 
-    // Check if database already exists
-    const existsQuery = `SHOW TABLES LIKE '${newDbName}'`;
-    const [existingTables] = await pool.query(existsQuery);
-
-    if (existingTables.length > 0) {
+    // Check if database name is already registered (PHP: isDbVacant)
+    if (!(await isDbVacant(pool, 'my', newDbName))) {
       return res.status(200).json({ error: `Database "${newDbName}" already exists` });
     }
 
@@ -13342,6 +13623,7 @@ router.post('/:db/:action', async (req, res) => {
 export {
   legacyAuthMiddleware,
   legacyXsrfCheck,
+  checkTypesGrant,
   legacyDdlGrantCheck,
   resolveBuiltIn,
   recursiveDelete,
@@ -13360,6 +13642,11 @@ export {
   sendMail,
   sanitizeIdentifier,
   checkInjection,
+  getRefOrd,
+  calcOrder,
+  isDbVacant,
+  updateTokens,
+  getCurrentValues,
 };
 
 export default router;
