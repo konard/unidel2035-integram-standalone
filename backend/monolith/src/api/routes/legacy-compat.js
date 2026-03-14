@@ -726,14 +726,10 @@ function safePath(base, userInput) {
 function localize(text, locale) {
   if (!text || !text.includes('<t9n>')) return text || '';
   const loc = (locale || 'EN').toUpperCase();
-  return text.replace(/<t9n>[\s\S]*?<\/t9n>/g, (match) => {
-    const marker = `[${loc}]`;
-    const idx = match.indexOf(marker);
-    if (idx === -1) return '';
-    const rest = match.slice(idx + marker.length);
-    const m = rest.match(/^([\s\S]*?)(?:\[[A-Z]{2}\]|<\/t9n>)/);
-    return m ? m[1] : '';
-  });
+  const re = new RegExp(`<t9n>(?:(?!</?t9n>).)*?\\[${loc}\\]((?:(?!\\[[A-Z]{2}\\])(?!</t9n>).)*)(?:\\[[A-Z]{2}\\](?:(?!</t9n>).)*)?</t9n>`, 'gs');
+  // Two-pass: extract locale content, then strip any unmatched <t9n> blocks
+  const result = text.replace(re, '$1');
+  return result.replace(/<t9n>.*?<\/t9n>/gs, '');
 }
 
 /**
@@ -13903,6 +13899,7 @@ export {
   getFile,
   makeTree,
   parseBlock,
+  localize,
 };
 
 export default router;
