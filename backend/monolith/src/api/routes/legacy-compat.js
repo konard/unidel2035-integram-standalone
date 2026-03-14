@@ -282,6 +282,13 @@ router.use(phpJsonMiddleware());
 router.param('db', (req, res, next, val) => { req.params.db = val.toLowerCase(); next(); });
 router.param('action', (req, res, next, val) => { req.params.action = val.toLowerCase(); next(); });
 
+// PHP parity: strtolower($_SERVER["REQUEST_URI"]) — entire URI is lowercased before routing
+// This ensures hardcoded routes like /xsrf, /csv_all, /_m_del match regardless of case
+router.use((req, res, next) => {
+  req.url = req.url.toLowerCase();
+  next();
+});
+
 router.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.removeHeader('Access-Control-Allow-Credentials');
@@ -577,9 +584,10 @@ function legacyRespond(req, res, db, data) {
 
   if (effectiveNextAct === 'nul') return res.send('');
 
-  // Build redirect URL: /{db}/{next_act}/{id}[?args][#obj]
+  // Build redirect URL: /{db}/{next_act}/{id}[/?args][#obj]
+  // PHP: "/$z/$next_act/$id" . (strlen($arg) ? "/?$arg" : "") — note slash before ?
   const idPart  = id  ? `/${id}`   : '';
-  const argPart = args && String(args).length ? `?${args}` : '';
+  const argPart = args && String(args).length ? `/?${args}` : '';
   const hashPart = obj != null ? `#${obj}` : '';
   return res.redirect(`/${db}/${effectiveNextAct}${idPart}${argPart}${hashPart}`);
 }
@@ -2088,11 +2096,15 @@ function formatValView(typeId, val, tzone = 0) {
       }
       break;
 
-    case 'SIGNED':
-      if (val !== 0) {
-        return String(parseFloat(val));
-      }
-      break;
+    case 'SIGNED': {
+      if (val === '' || val === null || val === undefined) break;
+      // PHP: number_format(int_part) + "." + substr(dec_part+"00", 0, max(2, len(dec_part)))
+      const parts = String(val).trim().split('.');
+      const intPart = String(parseInt(parts[0], 10) || 0);
+      const decPart = parts[1] || '';
+      const decLen = Math.max(2, decPart.length);
+      return intPart + '.' + (decPart + '00').substring(0, decLen);
+    }
 
     case 'FILE': {
       // PHP: if val contains ":", format is "id:filename" — extract filename for display.
@@ -3526,10 +3538,12 @@ router.post('/:db/auth', async (req, res, next) => {
         pwd.id AS pwd_id,
         token.val AS token,
         token.id AS token_id,
+        act.id AS act_id,
         xsrf.val AS xsrf,
         xsrf.id AS xsrf_id
       FROM ${db} user
       LEFT JOIN ${db} pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
+      LEFT JOIN ${db} act ON act.up = user.id AND act.t = ${TYPE.ACTIVITY}
       LEFT JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
       LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
       WHERE user.val = ? AND user.t = ${TYPE.USER}
@@ -5176,8 +5190,11 @@ router.get('/:db/:page*', async (req, res, next) => {
             i: obj.id,
             u: obj.up,
             o: obj.ord,
-            r: reqIds.map(rid => (reqMap[obj.id] && reqMap[obj.id][rid] !== undefined)
-              ? reqMap[obj.id][rid] : ''),
+            r: [
+              obj.val || '',  // PHP: r[0] = object's own val (index.php:6124)
+              ...reqIds.map(rid => (reqMap[obj.id] && reqMap[obj.id][rid] !== undefined)
+                ? reqMap[obj.id][rid] : ''),
+            ],
           })));
         }
 
@@ -6511,8 +6528,8 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       return res.status(200).json([{ error: t9n('type_required', locale) }]);
     }
 
-    // Verify type and parent exist
-    const { rows: typeCheck } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
+    // Verify type exists and is a metadata row (up=0) — PHP: WHERE obj.id=$id AND obj.up=0
+    const { rows: typeCheck } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? AND up = 0 LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
     if (typeCheck.length === 0) {
       return res.status(200).json([{ error: `Type ${typeId} does not exist` }]);
     }
@@ -6790,7 +6807,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     }
     // Non-JSON: redirect like legacyRespond
     const idPart  = id  ? `/${id}`   : '';
-    const argPart = args && String(args).length ? `?${args}` : '';
+    const argPart = args && String(args).length ? `/?${args}` : '';
     const hashPart = id != null ? `#${id}` : '';
     return res.redirect(`/${db}/${next_act}${idPart}${argPart}${hashPart}`);
   } catch (error) {
@@ -7354,13 +7371,15 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     // PHP args: "saved1=1&F_U=$up&F_I=$id" (always include prefix + F_U + F_I)
     //           "copied1=1&F_U=$up&F_I=$id" for copy operations
     const argsPrefix = isCopy ? 'copied1=1&' : 'saved1=1&';
-    // PHP: if NOT_NULL warning was set, $next_act = "" (prevent redirect)
+    // PHP: if NOT_NULL warning, $next_act="" then $a="edit_obj", and api_dump uses $a (line 9172)
     const hasNotNullWarning = warnings.includes('mandatory');
     const response = {
       id: String(objType),
       obj: objectId,
-      next_act: hasNotNullWarning ? '' : 'object',
-      args: `${argsPrefix}F_U=${objUp}&F_I=${objectId}`,
+      next_act: hasNotNullWarning ? 'edit_obj' : 'object',
+      args: hasNotNullWarning
+        ? `${argsPrefix}F_U=${objUp}&F_I=${objectId}${req.body.tab ? '&tab=' + parseInt(req.body.tab, 10) : ''}&warning=${warnings}`
+        : `${argsPrefix}F_U=${objUp}&F_I=${objectId}`,
       warnings,
     };
 
@@ -7611,9 +7630,15 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
 
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
       if (existing) {
-        await updateRowValue(db, existing.id, finalValue);
-        lastReqId = String(existing.id);
-      } else {
+        if (finalValue === '' || finalValue === null) {
+          // PHP: Delete($cur_id) — recursive delete for empty scalar (index.php:7937)
+          await execSql(pool, `DELETE FROM \`${db}\` WHERE id = ? OR up = ?`, [existing.id, existing.id], { label: 'm_set_delete_empty' });
+          lastReqId = '';
+        } else {
+          await updateRowValue(db, existing.id, finalValue);
+          lastReqId = String(existing.id);
+        }
+      } else if (finalValue !== '' && finalValue !== null) {
         const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
         const newId = await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
         lastReqId = String(newId);
@@ -7707,7 +7732,9 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     // Order adjustment in old parent: shift down peers after removed object
     await execSql(pool, `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`, [oldParentId, objType, oldOrd], { label: 'post_db_m_move_id_update' });
 
-    const newOrder = await calcOrder(pool, db, newParentId, objType);
+    // PHP: COALESCE(MAX(reqs.ord)+1,1) where reqs.up=$up — no type filter (index.php:8244)
+    const { rows: [ordRow] } = await execSql(pool, `SELECT COALESCE(MAX(ord)+1, 1) AS next_ord FROM \`${db}\` WHERE up = ?`, [newParentId], { label: 'm_move_new_ord' });
+    const newOrder = ordRow ? ordRow.next_ord : 1;
     await execSql(pool, `UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId], { label: 'post_db_m_move_id_update' });
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
@@ -8257,6 +8284,8 @@ router.get('/:db/xsrf', async (req, res) => {
     // Use the stored xsrf_val as authoritative; fall back to recomputed if not set.
     const xsrf = user.xsrf_val || generateXsrf(token, db, db);
 
+    // PHP: api_dump(..., "login.json") → Content-Disposition: attachment;filename=login.json
+    res.setHeader('Content-Disposition', 'attachment;filename=login.json');
     return res.status(200).json({
       _xsrf: xsrf,
       token,
@@ -8548,12 +8577,12 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     if (restrictParam) {
       const restrictIds = restrictParam.split(',').filter(v => /^\d+$/.test(v)).map(v => parseInt(v, 10));
       if (restrictIds.length > 0 && refReqs.length > 0) {
-        // PHP applies restrict to the first requisite's type column
+        // PHP: AND a$req.id=<value> — restrict by row ID, not type (index.php:9008)
         const firstReqAlias = `a${refReqs[0].reqId}`;
         if (restrictIds.length === 1) {
-          whereClause += ` AND ${firstReqAlias}.t = ${restrictIds[0]}`;
+          whereClause += ` AND ${firstReqAlias}.id = ${restrictIds[0]}`;
         } else {
-          whereClause += ` AND ${firstReqAlias}.t IN (${restrictIds.join(',')})`;
+          whereClause += ` AND ${firstReqAlias}.id IN (${restrictIds.join(',')})`;
         }
       } else if (restrictIds.length > 0) {
         // No requisites — fall back to filtering by vals.id
@@ -8584,7 +8613,9 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
           searchConcat = `CONCAT(${searchConcat}, '/', COALESCE(a${rq.reqId}.val, ''))`;
         }
         searchClause = ` AND ${searchConcat} LIKE ?`;
-        searchParams.push(`%${searchQuery}%`);
+        // PHP: preg_replace("( ?\/ ?)","%/%",$_REQUEST["q"]) — normalize slashes for LIKE
+        const normalizedSearch = searchQuery.includes('%') ? searchQuery : searchQuery.replace(/\s?\/\s?/g, '%/%');
+        searchParams.push(`%${normalizedSearch}%`);
       }
     }
 
@@ -8648,7 +8679,12 @@ router.all('/:db/_connect/:id?', legacyAuthMiddleware, async (req, res) => {
   try {
     const pool = getPool();
 
-    // PHP: if $id == 0 → error; else fetch CONNECT requisite URL and proxy
+    // PHP: if($id == 0) my_die("Invalid id (0)") — index.php:9089
+    if (!objectId) {
+      const locale = getLocale(req, db);
+      return res.status(200).json([{ error: t9n('[RU]Неверный id (0)[EN]Invalid id (0)', locale) }]);
+    }
+
     if (objectId) {
       const { rows: [row] } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CONNECT} LIMIT 1`, [objectId], { label: 'query_select' });
       if (!row || !row.val) {
@@ -8854,9 +8890,19 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
       return res.status(200).json([{ error: 'No fields to update'  }]);
     }
 
-    // PHP parity: duplicate name check — cannot rename type to an existing name
-    if (val !== undefined) {
-      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? AND id != ? LIMIT 1`, [val, id], { label: 'unique_select' });
+    // PHP parity: duplicate name check (index.php:8586-8588)
+    // PHP: LEFT JOIN dup ON dup.id!=$id AND dup.id!=dup.t AND dup.val='$val' AND dup.t=$t WHERE dup.id IS NULL
+    // Checks same name AND same base type, excluding self and self-referential rows
+    if (val !== undefined && t !== undefined) {
+      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id != ? AND id != t AND val = ? AND t = ? LIMIT 1`, [id, val, t], { label: 'unique_select' });
+      if (dupeRows.length > 0) {
+        return res.status(200).json([{ error: `Type with name "${val}" already exists` }]);
+      }
+    } else if (val !== undefined) {
+      // When base type not changing, check against current base type
+      const { rows: curRows } = await execSql(pool, `SELECT t FROM \`${db}\` WHERE id = ? LIMIT 1`, [id], { label: 'cur_type_select' });
+      const curT = curRows.length > 0 ? curRows[0].t : 0;
+      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id != ? AND id != t AND val = ? AND t = ? LIMIT 1`, [id, val, curT], { label: 'unique_select' });
       if (dupeRows.length > 0) {
         return res.status(200).json([{ error: `Type with name "${val}" already exists` }]);
       }
@@ -8901,9 +8947,10 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     // PHP parity: hard-block if type has existing instances (die() in PHP)
     const { rows: [instRow] } = await execSql(pool, `SELECT COUNT(id) AS cnt FROM \`${db}\` WHERE t = ?`, [id], { label: 'post_db_d_del_typeId_select' });
     if (instRow && instRow.cnt > 0) {
-      return res.status(400).json({
+      // PHP: die() → HTTP 200 (index.php:8744)
+      return res.status(200).json([{
         error: `Cannot delete the Type in case there are objects of this type (total objects: ${instRow.cnt})!`
-      });
+      }]);
     }
 
     // PHP parity: hard-block if type or its requisites are used in reports (my_die() in PHP)
@@ -8911,9 +8958,9 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
        WHERE \`${db}\`.t = ${TYPE.REP_COLS} AND \`${db}\`.val = reqs.id
        AND (reqs.up = ? OR reqs.id = ?) LIMIT 1`, [id, id], { label: 'post_db_d_del_typeId_select' });
     if (repRows.length > 0) {
-      return res.status(400).json({
+      return res.status(200).json([{
         error: `The type or its requisites are used in reports`
-      });
+      }]);
     }
 
     // PHP parity: hard-block if type or its requisites are used in roles (die() in PHP)
@@ -8921,9 +8968,9 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
        WHERE r.t = ${TYPE.ROLE} AND r.up = 1 AND objs.up = r.id
        AND objs.val = \`${db}\`.id AND (\`${db}\`.up = ? OR \`${db}\`.id = ?) LIMIT 1`, [id, id], { label: 'post_db_d_del_typeId_select' });
     if (roleRows.length > 0) {
-      return res.status(400).json({
+      return res.status(200).json([{
         error: `The type or its requisites are used in roles!`
-      });
+      }]);
     }
 
     // Use recursiveDelete — type may have requisites/children
@@ -9747,8 +9794,8 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
     const { rows: rows } = await execSql(pool, query, [objectId, objectId], { label: 'query_query' });
 
     if (rows.length === 0) {
-      // PHP returns HTTP 200 with error JSON, not 404
-      return res.status(200).json([{ error: 'Object not found' }]);
+      // PHP: $meta stays "{" → outputs "{}" (empty object) when no rows found
+      return res.status(200).json({});
     }
 
     // Build response matching PHP format (line 8838-8857)
@@ -10223,9 +10270,8 @@ router.all('/my/_new_db', async (req, res) => {
           // PHP also inserts date and template info
           await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 275, ?)`, [recordId, new Date().toISOString().slice(0, 10).replace(/-/g, '')], { label: 'query_insert' });
           await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 283, ?)`, [recordId, template], { label: 'query_insert' });
-          if (description) {
-            await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 276, ?)`, [recordId, description], { label: 'query_insert' });
-          }
+          // PHP always inserts description row, even if empty (index.php:8822)
+          await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 276, ?)`, [recordId, description], { label: 'query_insert' });
         }
       } catch (e) {
         logger.warn('[Legacy _new_db] Failed to register DB in my table', { error: e.message });
