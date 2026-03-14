@@ -1777,6 +1777,124 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
 }
 
 // ============================================================================
+// buildPostFields — multipart/form-data builder for connector POST (PHP parity)
+// PHP: build_post_fields() — index.php lines 3883–3911
+// Parses URL-encoded POST body, detects file references (=@/path or =@http://),
+// downloads remote files or reads local uploads, returns FormData-ready object.
+// Used by _connect and report curl_exec when POST data contains file references.
+// ============================================================================
+
+/**
+ * Build multipart/form-data fields from a URL-encoded POST string.
+ *
+ * PHP parity: build_post_fields($data) — index.php:3883-3911
+ *
+ * The PHP function:
+ *   1. Splits the data on "&"
+ *   2. For each key=value pair, checks if value starts with "@"
+ *   3. If "@/upload_dir/..." → local file upload via curl_file_create
+ *   4. If "@http..." → downloads the remote file to a temp path, then curl_file_create
+ *   5. Otherwise, just a plain string value
+ *
+ * In Node.js we return a FormData instance (global in Node 20+, undici fallback)
+ * that can be passed directly to fetch() as the body.
+ *
+ * @param {string} data - URL-encoded POST string, e.g. "key1=val1&file=@/download/db/photo.jpg"
+ * @param {string} db   - Database name (for resolving local upload paths)
+ * @param {number} [userId=0] - Current user ID (for temp file naming)
+ * @returns {Promise<FormData>} FormData ready to be used as fetch() body
+ */
+async function buildPostFields(data, db, userId = 0) {
+  // Node.js 20+ has global FormData and File; fall back to undici for older runtimes
+  const _FormData = typeof FormData !== 'undefined' ? FormData : (await import('undici')).FormData;
+  const _File = typeof File !== 'undefined' ? File : (await import('undici')).File;
+  const formData = new _FormData();
+  const pairs = data.split('&');
+  let tempIdx = 0;
+
+  const uploadBase = path.join(legacyPath, 'download', db);
+
+  for (const pair of pairs) {
+    const eqPos = pair.indexOf('=');
+    if (eqPos === -1) continue;
+
+    const key = decodeURIComponent(pair.substring(0, eqPos));
+    let val = decodeURIComponent(pair.substring(eqPos + 1));
+
+    if (val.startsWith('@')) {
+      // File reference — strip the "@"
+      const filePath = val.substring(1);
+
+      // Extract filename from path (last segment)
+      const fileName = filePath.split('/').pop();
+
+      if (filePath.startsWith('/download/') || filePath.startsWith('download/')) {
+        // Local file upload — resolve relative to legacy server root
+        // PHP: if(strpos($v, "/".UPLOAD_DIR) === 0) → local file
+        const localPath = filePath.startsWith('/')
+          ? path.join(legacyPath, filePath)
+          : path.join(legacyPath, filePath);
+
+        if (!fs.existsSync(localPath)) {
+          throw new Error(`File not found ${localPath}`);
+        }
+        const fileBuffer = fs.readFileSync(localPath);
+        const file = new _File([fileBuffer], fileName);
+        formData.set(key, file, fileName);
+      } else if (filePath.toLowerCase().startsWith('http')) {
+        // Remote file — download to temp, then attach
+        // PHP: file_put_contents(UPLOAD_DIR.$localTemp, file_get_contents($v))
+        const localTemp = `tmp_${tempIdx++}_${userId}`;
+        const tempPath = path.join(uploadBase, localTemp);
+
+        // Ensure upload directory exists
+        fs.mkdirSync(uploadBase, { recursive: true });
+
+        const response = await fetch(filePath);
+        if (!response.ok) {
+          throw new Error(`Failed to download file from ${filePath}: ${response.status}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        // Write temp file (PHP parity: file_put_contents)
+        fs.writeFileSync(tempPath, buffer);
+
+        const file = new _File([buffer], fileName);
+        formData.set(key, file, fileName);
+      } else {
+        // Not a valid file path — PHP dies with "Forbidden path"
+        throw new Error(`Forbidden path ${filePath}, use http(s) or /download/`);
+      }
+    } else {
+      // Plain string value
+      formData.set(key, val);
+    }
+  }
+
+  logger.debug('[buildPostFields] Built form data', {
+    db,
+    fieldCount: [...formData.keys()].length,
+  });
+
+  return formData;
+}
+
+/**
+ * Check if a URL-encoded POST body contains file references that require
+ * multipart/form-data handling (PHP parity: index.php line 3440).
+ *
+ * PHP: strpos($post, "=@/") || strpos($post, "=@http")
+ *
+ * @param {string} postData - URL-encoded POST string
+ * @returns {boolean} true if multipart handling is needed
+ */
+function needsMultipartPost(postData) {
+  if (!postData || typeof postData !== 'string') return false;
+  return postData.includes('=@/') || postData.includes('=@http');
+}
+
+// ============================================================================
 // Phase 1 — New Helper Functions (PHP parity)
 // ============================================================================
 
@@ -7512,7 +7630,32 @@ router.all('/:db/_connect/:id?', legacyAuthMiddleware, async (req, res) => {
       if (!fetchFn) {
         return res.status(200).send(JSON.stringify({ proxy: proxyUrl }));
       }
-      const upstream = await fetchFn(proxyUrl, { headers: { 'User-Agent': 'Integram' } });
+
+      // Build fetch options — handle POST with optional multipart file uploads
+      // PHP parity: index.php line 3440 — if POST body has file refs, use build_post_fields()
+      const fetchOpts = { headers: { 'User-Agent': 'Integram' } };
+
+      // Check for POST data in request body (URL-encoded string)
+      const rawPost = typeof req.body === 'string' ? req.body
+        : (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0)
+          ? new URLSearchParams(req.body).toString()
+          : '';
+
+      if (rawPost) {
+        fetchOpts.method = 'POST';
+        if (needsMultipartPost(rawPost)) {
+          // File references detected — build multipart/form-data
+          const userId = req.legacyUser ? req.legacyUser.uid : 0;
+          fetchOpts.body = await buildPostFields(rawPost, db, userId);
+          // Let fetch set Content-Type with boundary automatically
+        } else {
+          // Plain POST — send as application/x-www-form-urlencoded
+          fetchOpts.body = rawPost;
+          fetchOpts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        }
+      }
+
+      const upstream = await fetchFn(proxyUrl, fetchOpts);
       const body = await upstream.text();
       return res.status(upstream.ok ? 200 : upstream.status).send(body);
     }
@@ -11503,6 +11646,46 @@ async function exportTerms(pool, db, id, ctx) {
       }
     }
   }
+}
+
+/**
+ * CheckSubst — look up a structural ID substitution.
+ * PHP parity: index.php lines 3991–3997
+ *
+ * During CSV/BKI import, when an imported type ID does not match an existing
+ * local type, ResolveType() records a mapping in ctx.localStruct.subst.
+ * CheckSubst returns the substituted (local) ID when one exists, or the
+ * original ID unchanged.
+ *
+ * @param {number|string} i   - the structural / type ID to check
+ * @param {object}        ctx - shared import context (must have localStruct)
+ * @returns {number|string} substituted ID or original
+ */
+function checkSubst(i, ctx) {
+  if (ctx.localStruct && ctx.localStruct.subst && ctx.localStruct.subst[i] !== undefined) {
+    return ctx.localStruct.subst[i];
+  }
+  return i;
+}
+
+/**
+ * CheckObjSubst — look up an object ID substitution.
+ * PHP parity: index.php lines 3998–4004
+ *
+ * During CSV/BKI import, when an imported object row ID collides with an
+ * existing row of a different type, the importer creates a new row and records
+ * the old→new mapping in ctx.objSubst.  CheckObjSubst returns the substituted
+ * (new) object ID when one exists, or the original ID unchanged.
+ *
+ * @param {number|string} i   - the object ID to check
+ * @param {object}        ctx - shared import context (must have objSubst)
+ * @returns {number|string} substituted ID or original
+ */
+function checkObjSubst(i, ctx) {
+  if (ctx.objSubst && ctx.objSubst[i] !== undefined) {
+    return ctx.objSubst[i];
+  }
+  return i;
 }
 
 /**
