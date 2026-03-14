@@ -10,7 +10,7 @@
 
 | Category | Total | Full | Partial | Stub | Missing | N/A |
 |----------|-------|------|---------|------|---------|-----|
-| **Functions** | 96 | 51 | 11 | 2 | 11 | 21 |
+| **Functions** | 96 | 53 | 11 | 2 | 9 | 21 |
 | **Route Case Blocks** | 31 | 25 | 2 | 0 | 2 | 2 |
 | **Block Type Handlers** | 82 | 0 | 0 | 0 | 0 | 82 |
 | **Global Init Code** | 5 | 3 | 1 | 0 | 1 | 0 |
@@ -169,8 +169,8 @@
 | 81 | `UnHideDelimiters()` | 1631-1633 | `unHideDelimiters()` | **Full** | Implemented in PR #280 |
 | 82 | `constructHeader()` | 1635-1681 | Inline in export | **Full** | — |
 | 83 | `build_post_fields()` | 3883-3910 | `buildPostFields()` | **Full** | Implemented in PR #292 |
-| 84 | `getJsonVal()` | 3912-3930 | Not implemented | **Missing** | JSON path extraction for reports |
-| 85 | `checkJson()` | 3932-3938 | Not implemented | **Missing** | JSON validation for reports |
+| 84 | `getJsonVal()` | 3912-3930 | `getJsonVal()` in `report-functions.js` | **Full** | Implemented in PR #293 |
+| 85 | `checkJson()` | 3932-3938 | `checkJson()` in `report-functions.js` | **Full** | Implemented in PR #293 |
 | 86 | `Slash_semi()` | 3940-3942 | `slashSemi()` | **Full** | Implemented in PR #281 |
 | 87 | `UnSlash_semi()` | 3944-3946 | `unSlashSemi()` | **Full** | Implemented in PR #281 |
 | 88 | `Download_send_headers()` | 3948-3957 | `res.setHeader()` inline | **Full** | — |
@@ -350,7 +350,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | 8 | ~~`NormalSize()`~~ | ~~File sizes show raw bytes~~ | ~~UX~~ — **Implemented in PR #290** |
 | 9 | `RepoGrant()` | Repository-level access check | Advanced permissions |
 | 10 | ~~`build_post_fields()`~~ | ~~External connector POST fails~~ | ~~Connectors~~ — **Implemented in PR #292** |
-| 11 | `getJsonVal()` / `checkJson()` | JSON extraction in reports | Advanced reporting |
+| 11 | ~~`getJsonVal()` / `checkJson()`~~ | ~~JSON extraction in reports~~ | ~~Advanced reporting~~ — **Implemented in PR #293** |
 
 ### 6.4 Low (Edge Cases)
 
