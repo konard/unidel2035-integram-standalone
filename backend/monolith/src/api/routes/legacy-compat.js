@@ -809,6 +809,221 @@ async function grant1Level(pool, db, grants, id, username = '') {
   return false;
 }
 
+/**
+ * Build SQL WHERE fragment from a mask pattern (simplified for mask checking).
+ * Port of PHP Construct_WHERE() — only the subset needed by Fetch_WHERE_for_mask.
+ * Called with key=typeId, mask=pattern, always with cur_typ=1 (fake) and join=false.
+ * Returns raw WHERE string starting with " AND ".
+ */
+function constructWhereForMask(key, mask) {
+  let value = mask;
+  let NOT = '';
+  let NOT_EQ = '';
+  let EQ = '=';
+  let NOT_flag = false;
+
+  // Handle ! prefix
+  if (value.startsWith('!')) {
+    NOT = 'NOT';
+    NOT_EQ = '!';
+    value = value.substring(1);
+    NOT_flag = true;
+  } else if (value.trimStart().startsWith('>=') || value.trimStart().startsWith('<=')) {
+    NOT_EQ = value.trimStart().substring(0, 2);
+    value = value.trimStart().substring(2);
+    EQ = '';
+  } else if (value.trim().startsWith('>') || value.trim().startsWith('<')) {
+    NOT_EQ = value.trimStart().substring(0, 1);
+    value = value.trimStart().substring(1);
+    EQ = '';
+  } else {
+    NOT_EQ = '';
+  }
+
+  // @ prefix — ID match
+  if (value.startsWith('@')) {
+    const idVal = parseInt(value.substring(1).replace(/ /g, ''), 10);
+    return ` AND a${key}.id${NOT_EQ}${EQ}${idVal} `;
+  }
+
+  // % alone — NULL check
+  if (value === '%') {
+    const search_val = `IS ${NOT_flag ? '' : 'NOT '}NULL`;
+    return ` AND a${key}.val ${search_val} `;
+  }
+
+  // Range: value1..value2
+  if (value.includes('..')) {
+    const parts = value.split('..');
+    const from = parseFloat(parts[0].replace(/ /g, ''));
+    const to = parseFloat(parts[1].replace(/ /g, ''));
+    if (!isNaN(from) && !isNaN(to)) {
+      return ` AND a${key}.val BETWEEN ${from} AND ${to} `;
+    }
+  }
+
+  // Escape value for SQL
+  const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+  let search_val;
+  if (!value.includes('%')) {
+    search_val = `${NOT_EQ}${EQ}'${escaped}' `;
+  } else {
+    search_val = `${NOT} LIKE '${escaped}' `;
+  }
+
+  if (NOT_flag) {
+    return ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL) `;
+  }
+  return ` AND a${key}.val ${search_val} `;
+}
+
+/**
+ * Build SQL expression to test a value against a mask.
+ * Port of PHP Fetch_WHERE_for_mask() (index.php:888-893).
+ * Returns a SQL expression suitable for SELECT — evaluates to 1 (match) or 0 (no match).
+ */
+function fetchWhereForMask(t, val, mask) {
+  const where = constructWhereForMask(t, mask);
+  // Strip leading " AND " (5 chars)
+  const stripped = where.substring(5);
+  // Replace a{t}.val and a{t}.id with the actual value (escaped)
+  const replacement = (val === null || val === undefined)
+    ? 'NULL'
+    : `'${String(val).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  return stripped.replace(new RegExp(`a${t}\\.(val|id)`, 'g'), replacement);
+}
+
+/**
+ * Check value-level grant by mask.
+ * Port of PHP Check_Val_granted() (index.php:921-966).
+ * @param {Object} pool - MySQL pool
+ * @param {string} db - Database name
+ * @param {Object} grants - Loaded grants object
+ * @param {number} t - Type ID to check masks for
+ * @param {string} val - Value to check
+ * @param {number} id - Object ID (default: 0)
+ * @returns {string|boolean|undefined} grant level, true, 'BARRED', or undefined
+ */
+async function checkValGranted(pool, db, grants, t, val, id = 0) {
+  if (!grants || !grants.mask || !grants.mask[t]) {
+    return undefined;
+  }
+
+  let ok;
+  for (const [mask, level] of Object.entries(grants.mask[t])) {
+    if (level === '') continue;
+
+    // Empty value check
+    if (!String(val || '').length) {
+      if (mask === '!%') {
+        if (level === 'BARRED') {
+          ok = 'BARRED';
+          break;
+        } else {
+          ok = level;
+        }
+      } else {
+        continue;
+      }
+    }
+
+    // @ prefix — ID match (handled directly, not via SQL)
+    if (mask.startsWith('@')) {
+      const maskId = parseInt(mask.substring(1), 10);
+      if (parseInt(id, 10) === maskId || parseInt(id, 10) === 0) {
+        if (level !== 'BARRED') {
+          ok = 'BARRED';
+          break;
+        }
+        break;
+      }
+      continue;
+    }
+
+    // SQL mask check via fetchWhereForMask
+    const sqlExpr = fetchWhereForMask(t, val, mask);
+    if (sqlExpr === '') return undefined;
+
+    try {
+      const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+      if (rows.length > 0) {
+        const firstVal = rows[0][Object.keys(rows[0])[0]];
+        if (firstVal) {
+          if (level === 'BARRED') {
+            ok = 'BARRED';
+            break;
+          } else {
+            ok = level;
+          }
+        }
+      }
+    } catch (error) {
+      logger.error('[Grants] Error in checkValGranted SQL', { error: error.message, db, t, mask });
+    }
+  }
+
+  if (ok === undefined) {
+    // PHP: return isset($GLOBALS["GRANTS"][$t]) ? isset($GLOBALS["GRANTS"][$t]) : "BARRED";
+    return grants[t] ? true : 'BARRED';
+  }
+
+  if (ok === 'BARRED') {
+    // PHP calls my_die() here — we return 'BARRED' and let the caller handle it
+    return 'BARRED';
+  }
+
+  return ok;
+}
+
+/**
+ * Check grant for report column operations.
+ * Port of PHP CheckRepColGranted() (index.php:7476-7492).
+ * @param {Object} pool - MySQL pool
+ * @param {string} db - Database name
+ * @param {Object} grants - Loaded grants object
+ * @param {number} id - Object ID (type ID for the report column)
+ * @param {number|string} level - 0 for READ, non-zero for WRITE
+ * @param {string} username - Current username
+ * @returns {boolean} true if granted, throws/returns error message if not
+ */
+async function checkRepColGranted(pool, db, grants, id, level = 0, username = '') {
+  const [rows] = await pool.query(
+    `SELECT obj.up, req.id req FROM \`${db}\` obj
+     LEFT JOIN (\`${db}\` req CROSS JOIN \`${db}\` par)
+       ON req.t = obj.id AND par.up = 0 AND req.up = par.id
+     WHERE obj.id = ?`,
+    [id]
+  );
+
+  if (rows.length === 0) return true;
+  const row = rows[0];
+
+  if (level !== 0) {
+    // WRITE check
+    if (parseInt(row.up, 10) === 0) {
+      const g = await grant1Level(pool, db, grants, id, username);
+      if (!g) {
+        return 'NOT_GRANTED';
+      }
+    } else {
+      if (!await checkGrant(pool, db, grants, row.up, id, 'WRITE', username)) {
+        return 'NOT_GRANTED';
+      }
+    }
+  } else {
+    // READ check
+    const checkId = parseInt(row.up, 10) === 0 ? id : row.up;
+    const g1 = await grant1Level(pool, db, grants, checkId, username);
+    const g2 = row.req ? await grant1Level(pool, db, grants, row.req, username) : false;
+    if (!g1 && !g2) {
+      return 'NOT_GRANTED';
+    }
+  }
+
+  return true;
+}
+
 // ============================================================================
 // Value Formatting Functions (Phase 4 - remaining 10%)
 // ============================================================================
@@ -3868,6 +4083,14 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     );
     const baseType = typeMeta.length > 0 ? typeMeta[0].base_type : 0;
 
+    // PHP parity: CheckRepColGranted($val) for REPORT_COLUMN types (index.php:8323-8324)
+    if (baseType === TYPE.REPORT_COLUMN && parseInt(value, 10) !== 0) {
+      const repColResult = await checkRepColGranted(pool, db, grants || {}, parseInt(value, 10), 0, username || '');
+      if (repColResult === 'NOT_GRANTED') {
+        return res.status(200).json({ error: `Object type #${value} is not granted` });
+      }
+    }
+
     // Default values: DATE→today, DATETIME→timestamp, SIGNED→1, NUMBER+unique→MAX+1
     if (!value) {
       if (baseType === TYPE.DATE) {
@@ -3987,6 +4210,16 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       if (!REV_BASE_TYPE[attrBaseType]) {
         const refVal = parseInt(finalValue, 10);
         if (refVal > 0) {
+          // PHP parity: Check_Val_granted for ref values (index.php:8493-8495)
+          const [refCheck] = await pool.query(
+            `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [refVal, attrTypeIdNum]
+          );
+          if (refCheck.length > 0) {
+            const valGrantResult = await checkValGranted(pool, db, grants || {}, attrTypeIdNum, refCheck[0].val, refVal);
+            if (valGrantResult === 'BARRED') {
+              return res.status(200).json({ error: `You do not have this object granted (${refCheck[0].val}) (${attrTypeIdNum})` });
+            }
+          }
           const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
           await insertRow(db, id, attrOrder, refVal, '');
           continue;
@@ -4333,6 +4566,23 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         const refVal = parseInt(finalValue, 10);
         if (refVal > 0) {
           await checkNewRef(pool, db, typeIdNum, refVal);
+          // PHP parity: Check_Val_granted for ref values (index.php:8115-8119)
+          const [refCheck] = await pool.query(
+            `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [refVal, typeIdNum]
+          );
+          if (refCheck.length > 0) {
+            const valGrantResult = await checkValGranted(pool, db, grants || {}, typeIdNum, refCheck[0].val, refVal);
+            if (valGrantResult === 'BARRED') {
+              return res.status(200).json({ error: `You do not have this object granted (${refCheck[0].val}) (${typeIdNum})` });
+            }
+          }
+          // PHP parity: CheckRepColGranted for REPORT_COLUMN ref types (index.php:8095-8096)
+          if (baseType === TYPE.REPORT_COLUMN) {
+            const repColResult = await checkRepColGranted(pool, db, grants || {}, refVal, 0, username || '');
+            if (repColResult === 'NOT_GRANTED') {
+              return res.status(200).json({ error: `Object type #${refVal} is not granted` });
+            }
+          }
         }
         const existing = await getRequisiteByType(db, objectId, typeIdNum);
         if (existing) {
@@ -9157,6 +9407,8 @@ export {
   getSubdir,
   getFilename,
   checkNewRef,
+  checkValGranted,
+  checkRepColGranted,
 };
 
 export default router;
