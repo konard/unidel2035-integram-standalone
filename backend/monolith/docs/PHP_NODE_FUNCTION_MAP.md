@@ -14,7 +14,7 @@
 | **Route Case Blocks** | 31 | 24 | 3 | 0 | 2 | 2 |
 | **Block Type Handlers** | 82 | 0 | 0 | 0 | 0 | 82 |
 | **Global Init Code** | 5 | 3 | 1 | 0 | 1 | 0 |
-| **Helper Functions (funcs.php)** | 5 | 0 | 0 | 0 | 5 | 0 |
+| **Helper Functions (funcs.php)** | 5 | 5 | 0 | 0 | 0 | 0 |
 
 **Key:**
 - **Full** — Functionally equivalent, same inputs/outputs
@@ -95,7 +95,7 @@
 
 | # | PHP Function | Lines | Node.js Equivalent | Status | What's Missing |
 |---|--------------|-------|-------------------|--------|----------------|
-| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Aggregates (`SUM`/`AVG`/`MIN`/`MAX`/`COUNT`/`GROUP_CONCAT`) and `GROUP BY` implemented in PR #266. Missing: sub-queries `[report_name]`, `REP_WHERE`, `REP_PIVOT`, complex JOIN aliases, `REP_COL_FUNC` (abn_* functions) |
+| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Aggregates (`SUM`/`AVG`/`MIN`/`MAX`/`COUNT`/`GROUP_CONCAT`) and `GROUP BY` implemented in PR #266. Sub-queries `[report_name]` implemented in PR #267. `REP_COL_FUNC` (abn_* functions) implemented in PR #268. Missing: `REP_WHERE`, `REP_PIVOT`, complex JOIN aliases |
 | 41 | `Get_block_data()` (case "&functions") | 4021-4027 | Not implemented | **Missing** | Report function list for calculatables |
 | 42 | `Get_block_data()` (case "&formats") | 4028-4033 | Not implemented | **Missing** | Format list for reports |
 | 43 | `exportHeader()` | 1683-1688 | Inline in CSV export | **Full** | — |
@@ -250,7 +250,7 @@
 | 37 | `case "csv_all"` | 4087-4176 | `GET /:db/csv_all` | **Full** | — |
 | 38 | `case "restore"` | 4178-4237 | `POST /:db/restore` | **Full** | — |
 | 39 | `case "backup"` | 4239-4291 | `GET /:db/backup` | **Full** | — |
-| 40 | `case "report"` / `"smartq"` / `"sql"` | 9120-9127 | `ALL /:db/report/:reportId?` | **Partial** | Missing sub-queries, pivot, complex JOINs |
+| 40 | `case "report"` / `"smartq"` / `"sql"` | 9120-9127 | `ALL /:db/report/:reportId?` | **Partial** | Missing pivot, complex JOINs (sub-queries implemented in PR #267) |
 | 41 | `case "dir_admin"` | 9128-9131 | `GET /:db/dir_admin` | **N/A** | File browser UI, PHP-specific |
 | 42 | `default:` (page render) | 9114-9158 | `GET /:db`, `GET /:db/:page*` | **N/A** | HTML template rendering |
 
@@ -316,11 +316,11 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 | # | PHP Function | Lines | Node.js Equivalent | Status | What's Missing |
 |---|--------------|-------|-------------------|--------|----------------|
-| 1 | `abn_DATE2STR()` | 2-11 | Not implemented | **Missing** | Russian date formatting for reports |
-| 2 | `semantic()` | 13-112 | Not implemented | **Missing** | Number to words helper (Russian) |
-| 3 | `abn_RUB2STR()` | 115-167 | Not implemented | **Missing** | Rubles to words (Russian) |
-| 4 | `abn_NUM2STR()` | 169-204 | Not implemented | **Missing** | Number to words (Russian) |
-| 5 | `abn_Translit()` | 206-213 | Not implemented | **Missing** | Cyrillic transliteration |
+| 1 | `abn_DATE2STR()` | 2-11 | `abn_DATE2STR()` in `report-functions.js` | **Full** | — |
+| 2 | `semantic()` | 13-112 | `semantic()` in `report-functions.js` | **Full** | — |
+| 3 | `abn_RUB2STR()` | 115-167 | `abn_RUB2STR()` in `report-functions.js` | **Full** | — |
+| 4 | `abn_NUM2STR()` | 169-204 | `abn_NUM2STR()` in `report-functions.js` | **Full** | — |
+| 5 | `abn_Translit()` | 206-213 | `abn_Translit()` in `report-functions.js` | **Full** | — |
 
 ---
 
@@ -330,7 +330,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
-| 1 | `Compile_Report()` sub-queries `[report_name]` | Reports referencing other reports fail | Core reporting |
+| 1 | ~~`Compile_Report()` sub-queries `[report_name]`~~ | ~~Reports referencing other reports fail~~ | ~~Core reporting~~ — **Implemented in PR #267** |
 | 2 | `Insert_batch()` | Performance degradation on bulk imports | Restore, data migration |
 
 ### 6.2 High (Affects Significant Features)
@@ -340,7 +340,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | 3 | `Compile_Report()` REP_PIVOT | Pivot tables don't work | Advanced reporting |
 | 4 | `Compile_Report()` REP_WHERE | Custom WHERE clauses in reports | Advanced reporting |
 | 5 | `_ref_reqs` grant mask integration | Reference dropdowns may show unauthorized items | Security |
-| 6 | `abn_*` functions (DATE2STR, RUB2STR, etc.) | Russian locale reports fail | Localization |
+| 6 | ~~`abn_*` functions (DATE2STR, RUB2STR, etc.)~~ | ~~Russian locale reports fail~~ | ~~Localization~~ — **Implemented in PR #268** |
 
 ### 6.3 Medium (Nice-to-Have)
 
@@ -374,11 +374,11 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 ## 8. Recommendations
 
-1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. Sub-queries and pivot tables are used in production reports. (Note: Aggregates implemented in PR #266.)
+1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. ~~Sub-queries~~ and pivot tables are used in production reports. (Note: Aggregates implemented in PR #266, sub-queries implemented in PR #267, abn_* functions implemented in PR #268. Remaining: REP_PIVOT, REP_WHERE, complex JOIN aliases.)
 
 2. **Add batch insert** — `Insert_batch()` is critical for restore and data migration performance.
 
-3. **Implement `abn_*` functions** — These are used in Russian-locale reports for formatting numbers and dates.
+3. ~~**Implement `abn_*` functions**~~ — **Implemented in PR #268** — These are now available for Russian-locale reports.
 
 4. **Consider grant mask in `_ref_reqs`** — Security concern: reference dropdowns should respect row-level masks.
 
