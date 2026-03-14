@@ -2167,16 +2167,24 @@ async function checkNewRef(pool, db, refTypeId, value) {
  * @param {number} dstId - destination object ID
  */
 async function populateReqs(pool, db, srcId, dstId) {
+  // PHP parity: SELECT with sub-query to detect children (ch column)
+  // Reqs with children or FILE type need individual INSERT (for insertId),
+  // leaf reqs are batched via insertBatch() for performance.
   const [children] = await pool.query(
-    `SELECT r.id, r.t, r.val, r.ord, typ.t AS base_t FROM \`${db}\` r
+    `SELECT r.id, r.t, r.val, r.ord, typ.t AS base_t,
+            (SELECT 1 FROM \`${db}\` ch WHERE ch.up = r.id LIMIT 1) AS ch
+     FROM \`${db}\` r
      LEFT JOIN \`${db}\` typ ON typ.id = r.t
      WHERE r.up = ? ORDER BY r.ord`,
     [srcId]
   );
 
   const uploadDir = path.join(legacyPath, 'download', db);
+  const batchRows = []; // accumulate leaf reqs for batch insert
+
   for (const child of children) {
     let copiedVal = child.val;
+
     // For FILE-type requisites, physically copy the file to avoid shared reference
     if (child.base_t === TYPE.FILE && child.val && child.val.length > 0) {
       const srcFile = path.join(uploadDir, path.basename(child.val));
@@ -2192,13 +2200,28 @@ async function populateReqs(pool, db, srcId, dstId) {
           logger.warn('[Legacy populateReqs] File copy failed', { srcFile, error: copyErr.message });
         }
       }
+      // FILE reqs need insertId for file naming — individual INSERT
+      const [insertResult] = await pool.query(
+        `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
+        [dstId, child.ord, child.t, copiedVal]
+      );
+      await populateReqs(pool, db, child.id, insertResult.insertId);
+    } else if (child.ch === 1) {
+      // Req has children — need insertId for recursion, individual INSERT
+      const [insertResult] = await pool.query(
+        `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
+        [dstId, child.ord, child.t, copiedVal]
+      );
+      await populateReqs(pool, db, child.id, insertResult.insertId);
+    } else {
+      // Leaf req — accumulate for batch insert (PHP: Insert_batch)
+      batchRows.push([dstId, child.ord, child.t, copiedVal]);
     }
-    const [insertResult] = await pool.query(
-      `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
-      [dstId, child.ord, child.t, copiedVal]
-    );
-    // Recurse into children of this child
-    await populateReqs(pool, db, child.id, insertResult.insertId);
+  }
+
+  // Flush accumulated leaf reqs in one batch INSERT
+  if (batchRows.length > 0) {
+    await insertBatch(pool, db, batchRows);
   }
 }
 
@@ -5123,6 +5146,43 @@ async function insertRow(db, parentId, order, typeId, value) {
   const query = `INSERT INTO ${db} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
   const [result] = await pool.query(query, [parentId, order, typeId, value]);
   return result.insertId;
+}
+
+/**
+ * Batch INSERT for restore and bulk import — PHP parity: Insert_batch()
+ * PHP reference: index.php lines 7034–7052
+ *
+ * Accumulates rows and flushes them in a single multi-row INSERT statement
+ * for significantly better performance during restore/import/copy operations.
+ *
+ * @param {Object} pool    - MySQL connection pool
+ * @param {string} db      - database (table) name
+ * @param {Array<Array>} rows - array of [up, ord, t, val] tuples
+ * @param {Object} [options]
+ * @param {number} [options.batchSize=1000] - max rows per INSERT statement
+ * @param {string} [options.columns='up, ord, t, val'] - column list
+ * @param {boolean} [options.ignore=false] - use INSERT IGNORE
+ * @returns {Promise<number>} total number of inserted rows
+ */
+async function insertBatch(pool, db, rows, options = {}) {
+  if (!rows || rows.length === 0) return 0;
+  const {
+    batchSize = 1000,
+    columns = 'up, ord, t, val',
+    ignore = false,
+  } = options;
+  const ignoreKw = ignore ? ' IGNORE' : '';
+  let totalInserted = 0;
+
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+    const [result] = await pool.query(
+      `INSERT${ignoreKw} INTO \`${db}\` (${columns}) VALUES ?`,
+      [batch]
+    );
+    totalInserted += result.affectedRows;
+  }
+  return totalInserted;
 }
 
 /**
@@ -10604,10 +10664,15 @@ router.get('/:db/csv_all', async (req, res) => {
       ORDER BY a.id, reqs.ord
     `);
 
-    // Build type structure (similar to PHP logic)
-    const typ = {}; // id -> name
-    const base = {}; // id -> base type
-    const reqs = {}; // id -> array of requisite IDs
+    // Build type structure with optimized JOINs (PHP parity: index.php 4101–4131)
+    // PHP builds $select[$i], $join[$i] per type so all requisite values are fetched
+    // in a single query via JOINs, instead of N+1 queries per object.
+    const typ = {};    // id -> CSV header string
+    const base = {};   // id -> base type id
+    const reqs = {};   // id -> array of requisite IDs
+    const select = {}; // id -> SQL SELECT fragment for JOINed requisites
+    const join = {};   // id -> SQL JOIN fragment for requisites
+    const arr = {};    // id -> true if this type is an array-type (has sub-requisites)
     const reqSet = new Set(); // Types used as requisites
 
     for (const row of typeRows) {
@@ -10619,77 +10684,92 @@ router.get('/:db/csv_all', async (req, res) => {
 
       if (!reqSet.has(i) && !typ[i]) {
         typ[i] = maskCsvDelimiters(row.val);
+        select[i] = '';
+        join[i] = '';
         reqs[i] = [];
       }
 
       if (row.req) {
         if (!reqs[i]) reqs[i] = [];
-        reqs[i].push({
-          reqId: row.req_id,
-          reqBase: row.req_base,
-          isRef: row.ref === 1
-        });
-        delete typ[row.req];
+        const rid = row.req_id;
+        reqs[i].push(rid);
+        base[rid] = row.req_base;
+        delete typ[row.req]; // Remove types used as requisites from independent list
         reqSet.add(row.req);
         typ[i] = (typ[i] || '') + ';' + maskCsvDelimiters(row.req);
+
+        // PHP: if($row["req_req"] > 0) — this requisite has sub-requisites (array type)
+        if (row.req_req > 0) {
+          arr[row.req_t] = true;
+        } else {
+          const r = row.req_base;
+          if (row.ref === 1) {
+            // PHP: reference JOIN — l$rid finds the link, r$rid resolves the referenced object
+            join[i] += ` LEFT JOIN (${db} l${rid} CROSS JOIN ${db} r${rid} USE INDEX (PRIMARY)) ON l${rid}.up=obj.id AND r${rid}.id=l${rid}.t AND r${rid}.t=${r}`;
+          } else {
+            const revBtR = REV_BASE_TYPE[r] || null;
+            if (['CHARS', 'MEMO', 'FILE', 'HTML'].includes(revBtR)) {
+              // PHP: text-type requisites have a sub-row for the actual text content
+              join[i] += ` LEFT JOIN ${db} r${rid} ON r${rid}.up=obj.id AND r${rid}.t=${rid} LEFT JOIN ${db} t${rid} ON t${rid}.up=r${rid}.id AND t${rid}.t=0 AND t${rid}.ord=0`;
+              select[i] += `, IF(t${rid}.id IS NULL, 0, r${rid}.id) t${rid}`;
+            } else {
+              join[i] += ` LEFT JOIN ${db} r${rid} ON r${rid}.up=obj.id AND r${rid}.t=${rid}`;
+            }
+            select[i] += `, r${rid}.val v${rid}`;
+          }
+        }
       }
     }
 
-    // Build CSV content
+    // Build CSV content with batched fetching (PHP parity: index.php 4132–4168)
+    // PHP uses cursor-based pagination with batch size = 500000/(num_reqs+1)
     let csvContent = '\ufeff'; // BOM for UTF-8
 
     for (const typeId of Object.keys(typ)) {
       const id = parseInt(typeId, 10);
       csvContent += typ[typeId];
 
-      // Get objects of this type
-      const [objects] = await pool.query(`
-        SELECT id, val FROM ${db}
-        WHERE t = ? AND up != 0
-        ORDER BY id
-        LIMIT 500000
-      `, [id]);
+      const reqCount = (reqs[id] || []).length;
+      const limit = Math.round(500000 / (reqCount + 1));
+      let last = 0;
+      let rowsNumber = 0;
 
-      for (const obj of objects) {
-        let line = '\n' + maskCsvDelimiters(formatValView(base[id], obj.val));
+      do {
+        // PHP: fetch object IDs in batches using cursor pagination
+        let idQuery;
+        if (arr[id]) {
+          // Array-type: extra parent check (obj.up's up must also be != 0)
+          idQuery = `SELECT obj.id FROM ${db} obj, ${db} up WHERE obj.t=${id} AND obj.up!=0 AND up.id=obj.up AND up.up!=0 AND obj.id>${last} ORDER BY obj.id LIMIT ${limit}`;
+        } else {
+          idQuery = `SELECT id FROM ${db} obj WHERE t=${id} AND up!=0 AND id>${last} ORDER BY id LIMIT ${limit}`;
+        }
 
-        // Get requisites for each object
-        if (reqs[id] && reqs[id].length > 0) {
-          for (const rq of reqs[id]) {
-            if (rq.isRef) {
-              // PHP parity: reference values — child.t = referenced object's ID
-              // JOIN to resolve: find child whose t points to an instance of reqId type,
-              // then get the referenced object's display val
-              const [reqRows] = await pool.query(`
-                SELECT ref_obj.val AS display_val
-                FROM ${db} child
-                JOIN ${db} ref_obj ON ref_obj.id = child.t
-                WHERE child.up = ? AND ref_obj.t = ?
-                LIMIT 1
-              `, [obj.id, rq.reqId]);
+        const [idRows] = await pool.query(idQuery);
+        rowsNumber = idRows.length;
 
-              if (reqRows.length > 0) {
-                line += ';' + maskCsvDelimiters(reqRows[0].display_val || '');
-              } else {
-                line += ';';
-              }
-            } else {
-              const [reqRows] = await pool.query(`
-                SELECT val FROM ${db}
-                WHERE up = ? AND t = ?
-                LIMIT 1
-              `, [obj.id, rq.reqId]);
+        if (idRows.length > 0) {
+          const first = idRows[0].id;
+          last = idRows[idRows.length - 1].id;
 
-              if (reqRows.length > 0) {
-                line += ';' + maskCsvDelimiters(formatValView(rq.reqBase, reqRows[0].val));
-              } else {
-                line += ';';
-              }
+          // PHP: single query with all JOINs to fetch object + all requisite values at once
+          const dataQuery = `SELECT obj.id, obj.val${select[id] || ''} FROM ${db} obj${join[id] || ''} WHERE obj.t=${id} AND obj.up!=0 AND obj.id>=${first} AND obj.id<=${last}`;
+          const [dataRows] = await pool.query(dataQuery);
+
+          let h = '';
+          let prev = 0;
+          for (const row of dataRows) {
+            if (prev !== row.id) {
+              h += '\n' + maskCsvDelimiters(formatValView(base[id], row.val));
+              prev = row.id;
+            }
+            for (const rid of (reqs[id] || [])) {
+              const v = row[`v${rid}`];
+              h += ';' + maskCsvDelimiters(formatValView(base[rid], v));
             }
           }
+          csvContent += h;
         }
-        csvContent += line;
-      }
+      } while (rowsNumber === limit);
 
       csvContent += '\n\n';
     }
@@ -11037,6 +11117,345 @@ router.get('/:db/backup', async (req, res) => {
 });
 
 // ============================================================================
+// BKI export — constructHeader, exportHeader, exportTerms, Export_reqs
+// PHP: index.php lines 1635–1749
+// Exports object data in BKI (structured text) format
+// ============================================================================
+
+/**
+ * constructHeader — recursively builds BKI header metadata for a type.
+ * Populates ctx.localStruct, ctx.base, ctx.uniq, ctx.linx, ctx.refs,
+ * ctx.arrays, ctx.pwds, ctx.multi with structural information.
+ *
+ * @param {object} pool   - MySQL connection pool
+ * @param {string} db     - database (table) name
+ * @param {number} id     - object/type ID to describe
+ * @param {object} ctx    - shared context accumulator
+ * @param {number} parent - parent ID (for recursion tracking)
+ */
+async function constructHeader(pool, db, id, ctx, parent = 0) {
+  if (ctx.localStruct[id]) return; // already processed
+
+  ctx.parents[id] = parent;
+
+  const [rows] = await pool.query(`
+    SELECT CASE WHEN LENGTH(obj.val)=0 THEN obj.id ELSE obj.t END AS t,
+           CASE WHEN LENGTH(obj.val)=0 THEN obj.t ELSE obj.val END AS val,
+           req.id AS req_id, req.t AS req_t, refr.val AS req, refr.t AS ref_t,
+           req.val AS attr, base.t AS base_t, arr.id AS arr,
+           linx.i, obj.ord AS uniq
+    FROM \`${db}\` obj
+      LEFT JOIN (\`${db}\` req CROSS JOIN \`${db}\` refr CROSS JOIN \`${db}\` base)
+        ON req.up = obj.id AND refr.id = req.t AND base.id = refr.t
+      LEFT JOIN \`${db}\` arr ON arr.up = req.t AND arr.t != 0 AND arr.ord = 1
+      CROSS JOIN (SELECT COUNT(1) AS i FROM \`${db}\` WHERE up = 0 AND t = ?) linx
+    WHERE obj.id = ?
+    ORDER BY req.ord
+  `, [id, id]);
+
+  for (const row of rows) {
+    if (!ctx.localStruct[id]) {
+      // First row — build the type descriptor line (slot 0)
+      const baseLabel = REV_BASE_TYPE[row.t] ? ':' + REV_BASE_TYPE[row.t] : '';
+      const uniqueTag = String(row.uniq) === '1' ? ':unique' : '';
+      ctx.localStruct[id] = { 0: `${id}:${MaskDelimiters(row.val)}${baseLabel}${uniqueTag}` };
+      ctx.base[id] = row.t;
+      ctx.uniq[id] = row.uniq;
+      if (Number(row.i)) {
+        // Other objects reference this type — need to export IDs
+        ctx.linx[id] = '';
+      }
+    }
+
+    if (row.req_t) {
+      // This type has requisites
+      if (row.ref_t !== row.base_t) {
+        // Reference requisite
+        const attrStr = row.attr ? ':' + MaskDelimiters(row.attr) : '';
+        ctx.localStruct[id][row.req_id] = `ref:${row.req_id}:${row.req_t}${attrStr}`;
+        if (!ctx.localStruct[row.req_t]) {
+          await constructHeader(pool, db, row.req_t, ctx, id);
+        }
+        if (!ctx.localStruct[row.ref_t]) {
+          await constructHeader(pool, db, row.ref_t, ctx, id);
+        }
+        ctx.refs[row.req_id] = row.ref_t;
+        if (row.attr && String(row.attr).includes(':MULTI:')) {
+          ctx.multi[row.req_id] = row.ref_t;
+        }
+      } else if (row.arr) {
+        // Array requisite
+        const attrStr = row.attr ? ':' + MaskDelimiters(row.attr) : '';
+        ctx.localStruct[id][row.req_id] = `arr:${row.req_t}${attrStr}`;
+        if (!ctx.localStruct[row.req_t]) {
+          await constructHeader(pool, db, row.req_t, ctx, id);
+          ctx.arrays[row.req_t] = '';
+        }
+      } else {
+        // Simple (scalar) requisite
+        const typeName = REV_BASE_TYPE[row.ref_t] || 'SHORT';
+        const attrStr = row.attr ? ':' + MaskDelimiters(row.attr) : '';
+        ctx.localStruct[id][row.req_id] = `${MaskDelimiters(row.req)}:${typeName}${attrStr}`;
+        if (typeName === 'PWD') {
+          ctx.pwds[row.req_id] = '';
+        }
+        ctx.base[row.req_id] = row.base_t;
+      }
+    }
+  }
+}
+
+/**
+ * exportHeader — serialises all collected localStruct entries into BKI header text.
+ * @param {object} ctx - shared context with localStruct
+ * @returns {string} header section
+ */
+function exportHeader(ctx) {
+  let headStr = '';
+  for (const id of Object.keys(ctx.localStruct)) {
+    const entry = ctx.localStruct[id];
+    // entry is an object keyed by 0, reqId, reqId, …  – join values with ";"
+    const vals = Object.keys(entry)
+      .sort((a, b) => Number(a) - Number(b))
+      .map(k => entry[k]);
+    headStr += vals.join(';') + ';\r\n';
+  }
+  return headStr;
+}
+
+/**
+ * exportTerms — ensures that a term/dictionary type referenced from a REP_COLS
+ * row has its header emitted (possibly as a "subst:" substitution line).
+ *
+ * @param {object} pool - MySQL connection pool
+ * @param {string} db   - database name
+ * @param {number} id   - the term object ID
+ * @param {object} ctx  - shared context
+ */
+async function exportTerms(pool, db, id, ctx) {
+  ctx.termDefs[id] = 1;
+
+  const [rows] = await pool.query(`
+    SELECT obj.t AS type, obj.up, type.t AS base
+    FROM \`${db}\` obj, \`${db}\` type
+    WHERE obj.id = ? AND type.id = obj.t
+  `, [id]);
+
+  if (rows.length === 0) return;
+  const row = rows[0];
+
+  if (String(row.up) === '0') {
+    // Top-level object — just ensure its header is built
+    await constructHeader(pool, db, id, ctx);
+  } else {
+    // Sub-object — build parent header then create a "subst:" alias
+    await constructHeader(pool, db, row.up, ctx);
+    const parentStruct = ctx.localStruct[row.up];
+    if (parentStruct) {
+      for (const key of Object.keys(parentStruct)) {
+        if (Number(key) === id) {
+          ctx.localStruct[id] = { 0: `subst:${id}:${row.up}:${parentStruct[key]}` };
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Export_reqs — recursively exports the data rows for a single object in BKI
+ * format.  Mirrors PHP Export_reqs($id, $obj, $val, $ref).
+ *
+ * @param {object}  pool - MySQL pool
+ * @param {string}  db   - database name
+ * @param {number}  id   - type / structural ID
+ * @param {number}  obj  - concrete object row ID
+ * @param {string}  val  - masked value for the object
+ * @param {object}  ctx  - shared context
+ * @param {string}  ref  - ref prefix (empty or "val:")
+ * @param {number}  fU   - F_U parameter (>1 means export order)
+ * @returns {string} BKI data lines
+ */
+async function Export_reqs(pool, db, id, obj, val, ctx, ref = '', fU = 0) {
+  if (ctx.exported[obj] !== undefined) return '';
+  ctx.exported[obj] = '';
+
+  let str = '';
+  let children = '';
+  let refs = '';
+
+  if (ctx.data[obj] === undefined) {
+    const reqs = {};
+
+    const [rows] = await pool.query(`
+      SELECT DISTINCT obj.id, obj.t, obj.val, obj.ord,
+             req.t AS req_t, req.val AS req_val, req.up AS rup, par.up AS ref
+      FROM \`${db}\` obj
+        LEFT JOIN \`${db}\` req ON req.id = obj.t
+        LEFT JOIN \`${db}\` par ON par.id = req.up
+      WHERE obj.up = ?
+      ORDER BY obj.ord
+    `, [obj]);
+
+    for (const row of rows) {
+      // If this is a REP_COLS reference to a term not yet in localStruct, export it
+      if (Number(row.t) === TYPE.REP_COLS &&
+          String(row.val) !== '0' &&
+          !ctx.localStruct[row.val] &&
+          !ctx.termDefs[row.val]) {
+        await exportTerms(pool, db, Number(row.val), ctx);
+      }
+
+      if (Number(row.rup) !== id && Number(row.rup) !== 0) {
+        // Reference value
+        const key = row.val;
+        reqs[key] = (reqs[key] !== undefined ? reqs[key] + ',' : '') + row.t;
+        const refArg = String(row.ref) === '1' ? row.val + ':' : '0';
+        refs += await Export_reqs(pool, db, Number(row.req_t), Number(row.t),
+          MaskDelimiters(row.req_val), ctx, refArg, fU);
+      } else if (ctx.arrays[row.t] !== undefined) {
+        // Array child
+        children += await Export_reqs(pool, db, Number(row.t), Number(row.id),
+          row.val, ctx, '', fU);
+      } else if (ctx.pwds[row.t] === undefined) {
+        // Simple value (skip PWD hashes)
+        reqs[row.t] = MaskDelimiters(row.val);
+      }
+    }
+
+    // Build the line from localStruct column order
+    const struct = ctx.localStruct[id];
+    if (struct) {
+      for (const key of Object.keys(struct).sort((a, b) => Number(a) - Number(b))) {
+        if (Number(key) === 0) {
+          str = MaskDelimiters(val) + ';';
+        } else {
+          str += (reqs[key] !== undefined ? reqs[key] : '') + ';';
+        }
+      }
+    }
+
+    // Determine line prefix
+    if (ctx.arrays[id] !== undefined || ctx.linx[id] === undefined ||
+        (ctx.rootId === id && fU > 1)) {
+      str = `${id}::${str}\r\n`;
+    } else {
+      str = `${ref}${id}:${obj}:${str}\r\n`;
+      ctx.data[obj] = '';
+    }
+  }
+
+  return refs + str + children;
+}
+
+/**
+ * BKI export route.
+ * GET /:db/bki-export?id=<typeId>&F_U=<level>
+ *
+ * Produces a .bki file (zipped) containing:
+ *   - Header lines (type structure)
+ *   - DATA marker
+ *   - Data rows
+ */
+router.get('/:db/bki-export', async (req, res) => {
+  const { db } = req.params;
+  const id = parseInt(req.query.id, 10);
+  const fU = parseInt(req.query.F_U || '0', 10);
+
+  if (!isValidDbName(db)) {
+    return res.status(200).send('Invalid database');
+  }
+  if (!id || isNaN(id)) {
+    return res.status(400).send('Missing or invalid id parameter');
+  }
+
+  try {
+    const pool = getPool();
+
+    // ── Auth & grant check (same as backup) ──
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let username = '';
+    let grants = {};
+
+    if (token) {
+      const [userRows] = await pool.query(`
+        SELECT u.id, u.val AS username, role_def.id AS role_id
+        FROM \`${db}\` tok
+        JOIN \`${db}\` u ON tok.up = u.id
+        LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+          ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+        WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+        LIMIT 1
+      `, [token]);
+
+      if (userRows.length > 0) {
+        username = userRows[0].username;
+        grants = await getGrants(pool, db, userRows[0].role_id, {
+          username: userRows[0].username, roleId: userRows[0].role_id,
+        });
+      }
+    }
+
+    if (!grants.EXPORT?.[1] && !grants.EXPORT?.[id] &&
+        username.toLowerCase() !== 'admin' && username !== db) {
+      return res.status(403).send('You do not have permission to export');
+    }
+
+    // ── Build BKI context ──
+    const ctx = {
+      localStruct: {},
+      base: {},
+      uniq: {},
+      linx: {},
+      refs: {},
+      arrays: {},
+      pwds: {},
+      multi: {},
+      parents: {},
+      termDefs: {},
+      exported: {},
+      data: {},
+      rootId: id,
+    };
+
+    // Step 1: build header structure for the root type
+    await constructHeader(pool, db, id, ctx);
+
+    // Step 2: iterate all objects of this type and export their data
+    const [objRows] = await pool.query(`
+      SELECT id, t, val, up, ord
+      FROM \`${db}\`
+      WHERE t = ? AND t != up
+      ORDER BY ord
+    `, [id]);
+
+    const dataLines = [];
+    for (const row of objRows) {
+      const line = await Export_reqs(pool, db, id, Number(row.id), row.val, ctx, '', fU);
+      if (line) dataLines.push(line);
+    }
+
+    // Step 3: assemble BKI content
+    const bkiContent = exportHeader(ctx) + 'DATA\r\n' + dataLines.join('');
+
+    // Step 4: wrap in ZIP and send
+    const timestamp = new Date().toISOString().replace(/[:-]/g, '').replace('T', '_').slice(0, 15);
+    const bkiFilename = `data_export_${db}_${timestamp}.bki`;
+    const zipFilename = `${bkiFilename}.zip`;
+    const zipBuffer = buildZip(bkiFilename, bkiContent);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    res.setHeader('Content-Length', zipBuffer.length);
+
+    logger.info('[Legacy BKI export] Completed', { db, id, objects: objRows.length });
+    res.send(zipBuffer);
+  } catch (error) {
+    logger.error('[Legacy BKI export] Error', { error: error.message, db });
+    res.status(500).send('BKI export failed: ' + error.message);
+  }
+});
+
+// ============================================================================
 // restore - Import from binary dump (P0 Critical)
 // PHP: index.php lines 4178–4238
 // Parses compact dump format and generates INSERT statements
@@ -11199,15 +11618,11 @@ router.post('/:db/restore', (req, res, next) => {
       return res.send(sqlLines.join('\n\n'));
     }
 
-    // Execute in batches of 1000
-    const BATCH = 1000;
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH);
-      await pool.query(
-        `INSERT IGNORE INTO \`${db}\` (\`id\`, \`t\`, \`up\`, \`ord\`, \`val\`) VALUES ?`,
-        [batch]
-      );
-    }
+    // Execute in batches using insertBatch utility
+    await insertBatch(pool, db, rows, {
+      columns: '`id`, `t`, `up`, `ord`, `val`',
+      ignore: true,
+    });
 
     logger.info('[Legacy restore] Import completed', { db, rowCount: rows.length });
     res.json({ status: 'Ok', rows: rows.length });
