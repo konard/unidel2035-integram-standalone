@@ -1219,6 +1219,42 @@ function formatValView(typeId, val, tzone = 0) {
         return String(parseFloat(val));
       }
       break;
+
+    case 'FILE': {
+      // PHP: if val contains ":", format is "id:filename" — extract filename for display.
+      // Actual link wrapping is done at call sites via buildObjFileLink().
+      const valStr = String(val);
+      if (valStr.includes(':')) {
+        return valStr.slice(valStr.indexOf(':') + 1);
+      }
+      return valStr;
+    }
+
+    case 'PATH': {
+      // PHP: val format is "id:filename.ext" — extract filename portion.
+      // Full path construction (with getSubdir/getFilename) is handled at call sites.
+      const valStr = String(val);
+      if (valStr.includes(':')) {
+        return valStr.slice(valStr.indexOf(':') + 1);
+      }
+      return valStr;
+    }
+
+    case 'GRANT':
+      // PHP: 0 → TYPE_EDITOR, 1 → ALL_OBJECTS, 10 → FILES
+      if (val == 0) return '*** Type editor ***';
+      if (val == 1) return '*** All objects ***';
+      if (val == 10) return '*** Files ***';
+      return String(val);
+
+    case 'REPORT_COLUMN':
+      // PHP: "0" → CUSTOM_REP_COL ("Calculatable"); full DB lookup handled at call sites.
+      if (val === '0' || val === 0) return 'Calculatable';
+      return String(val);
+
+    case 'PWD':
+      // PHP: strlen($val) ? PASSWORDSTARS : ""
+      return String(val).length > 0 ? '******' : '';
   }
 
   return val;
