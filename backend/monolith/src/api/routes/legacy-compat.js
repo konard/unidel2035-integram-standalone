@@ -8248,6 +8248,13 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     const whereParts  = ['a.t = ?', 'a.up != 0'];
     const whereParams = [report.parentType];
 
+    // Build revBT from report column metadata for constructWhere context
+    const reportRevBT = {};
+    for (const col of report.columns) {
+      if (col.baseType) reportRevBT[col.alias] = REV_BASE_TYPE[col.baseType] || 'SHORT';
+    }
+    const reportCwCtx = { revBT: reportRevBT, refTyps: {}, multi: new Set(), db };
+
     for (const [key, filter] of Object.entries(filters)) {
       // Special key: filter by main object ID (used by dubRecDone)
       if (key === '_id') {
@@ -8262,24 +8269,37 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       // Filter on the joined table column (or a.val for main column)
       const expr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
 
-      // SmartQ text filters: FR_ColName=%searchterm% (LIKE), numeric: FR_ColName=N (>=)
-      // Value with % → LIKE; value starting with @ → by ID; !% → NOT LIKE; else → >= (range from)
-      if (filter.from  !== undefined && filter.from  !== '') {
-        const fv = String(filter.from);
-        if (fv.startsWith('!%')) {
-          whereParts.push(`${expr} NOT LIKE ?`); whereParams.push(fv.slice(1));
-        } else if (fv.includes('%')) {
-          whereParts.push(`${expr} LIKE ?`); whereParams.push(fv);
-        } else if (fv.startsWith('@')) {
-          const fid = parseInt(fv.slice(1), 10);
-          if (!isNaN(fid)) { whereParts.push(`${expr} = ?`); whereParams.push(fid); }
-        } else {
-          whereParts.push(`${expr} >= ?`); whereParams.push(fv);
+      // Use constructWhere for DSL-style filters (from/to/eq translated to F/FR/TO)
+      const cwFilter = {};
+      if (filter.from !== undefined && filter.from !== '') cwFilter.FR = String(filter.from);
+      if (filter.to   !== undefined && filter.to   !== '') cwFilter.TO = String(filter.to);
+      if (filter.eq   !== undefined && filter.eq   !== '') cwFilter.F  = String(filter.eq);
+      if (filter.like !== undefined && filter.like !== '') cwFilter.F  = `%${filter.like}%`;
+      // If from has DSL syntax (%, !, @, etc.) and no TO, treat as F (exact/LIKE filter)
+      if (cwFilter.FR && !cwFilter.TO && !cwFilter.F) {
+        const fv = cwFilter.FR;
+        if (fv.includes('%') || fv.startsWith('!') || fv.startsWith('@') || /^(IN|@IN)\s*\(/i.test(fv)) {
+          cwFilter.F = fv;
+          delete cwFilter.FR;
         }
       }
-      if (filter.to    !== undefined && filter.to    !== '') { whereParts.push(`${expr} <= ?`);       whereParams.push(filter.to); }
-      if (filter.eq    !== undefined && filter.eq    !== '') { whereParts.push(`${expr} = ?`);        whereParams.push(filter.eq); }
-      if (filter.like  !== undefined && filter.like  !== '') { whereParts.push(`${expr} LIKE ?`);     whereParams.push(`%${filter.like}%`); }
+
+      if (Object.keys(cwFilter).length > 0) {
+        // Use alias as key so constructWhere generates a{alias}.val references
+        const cw = constructWhere(col.alias, cwFilter, col.alias, false, reportCwCtx);
+        if (cw.where) {
+          // Replace a{alias}.val with the actual column expression
+          let cwWhere = cw.where.replace(/^ AND /, '');
+          cwWhere = cwWhere.replace(new RegExp(`a${col.alias}\\.val`, 'g'), expr);
+          cwWhere = cwWhere.replace(new RegExp(`a${col.alias}\\.id`, 'g'),
+            col.isMainCol ? 'a.id' : `\`${col.alias}\`.id`);
+          // Also handle vals.val/vals.id for curTyp match
+          cwWhere = cwWhere.replace(/\bvals\.val\b/g, expr);
+          cwWhere = cwWhere.replace(/\bvals\.id\b/g, col.isMainCol ? 'a.id' : `\`${col.alias}\`.id`);
+          whereParts.push(cwWhere);
+          whereParams.push(...cw.params);
+        }
+      }
     }
 
     const lim = Math.min(parseInt(limit, 10)  || 100, 10000);
