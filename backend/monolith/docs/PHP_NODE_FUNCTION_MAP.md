@@ -87,7 +87,7 @@
 | # | PHP Function | Lines | Node.js Equivalent | Status | What's Missing |
 |---|--------------|-------|-------------------|--------|----------------|
 | 36 | `Format_Val()` | 1338-1397 | `formatVal()` | **Full** | — |
-| 37 | `Format_Val_View()` | 1399-1489 | `formatValView()`, `formatObjVal()` | **Full** | — |
+| 37 | `Format_Val_View()` | 1399-1489 | `formatValView()`, `formatObjVal()` | **Full** | FILE/PATH/GRANT/REPORT_COLUMN/PWD display implemented in PR #274 |
 | 38 | `Get_Align()` | 1326-1336 | `getAlign()` | **Full** | — |
 | 39 | `BuiltIn()` | 1576-1616 | `resolveBuiltIn()` | **Full** | 11 additional placeholders added in PR #273 |
 
@@ -203,9 +203,9 @@
 
 | # | PHP Case | Lines | Node.js Route | Status | What's Missing |
 |---|----------|-------|---------------|--------|----------------|
-| 8 | `case "_m_new"` | 8311-8548 | `POST /:db/_m_new/:up?` | **Full** | — |
+| 8 | `case "_m_new"` | 8311-8548 | `POST /:db/_m_new/:up?` | **Full** | Macro defaults and MULTI_MASK auto-detection implemented in PR #275 |
 | 9 | `case "_m_save"` | 7991-8235 | `POST /:db/_m_save/:id` | **Full** | — |
-| 10 | `case "_m_set"` | 7859-7989 | `POST /:db/_m_set/:id` | **Full** | — |
+| 10 | `case "_m_set"` | 7859-7989 | `POST /:db/_m_set/:id` | **Full** | BuiltIn type ID skip + NUMBER/SIGNED pre-cast implemented in PR #276 |
 | 11 | `case "_m_del"` | 8275-8309 | `POST /:db/_m_del/:id` | **Full** | — |
 | 12 | `case "_m_move"` | 8237-8273 | `POST /:db/_m_move/:id` | **Full** | — |
 | 13 | `case "_m_ord"` | 7821-7839 | `POST /:db/_m_ord/:id` | **Full** | — |
