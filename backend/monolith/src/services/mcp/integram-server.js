@@ -321,7 +321,7 @@ class IntegramMCPClient {
     });
 
     if (response.data.failed) {
-      throw new Error('Invalid login or password');
+      throw new Error(`Wrong credentials for user ${login} in ${database}. Please send login and password as POST-parameters.`);
     }
 
     this.token = response.data.token;

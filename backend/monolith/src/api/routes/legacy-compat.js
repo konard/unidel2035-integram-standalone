@@ -249,6 +249,17 @@ async function makeTree(db, templateFile, rootBlock = '', params = {}) {
 
 const router = express.Router();
 
+// ── Cache-Control headers (Issue #377, PHP parity: index.php:2–4) ───────────
+// PHP sets these globally at the top of index.php before any routing:
+//   header("Cache-Control: no-store, no-cache, must-revalidate");
+//   header("Expires: ".date("r"));
+// Without these, browsers/proxies may cache JSON API responses and serve stale data.
+router.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Expires', new Date().toUTCString());
+  next();
+});
+
 // Apply PHP JSON key sorting middleware to achieve byte-for-byte parity (Issue #173)
 // PHP's json_encode() sorts keys alphabetically, while Node.js preserves insertion order.
 // This middleware ensures all JSON responses have keys sorted alphabetically.
@@ -281,6 +292,26 @@ router.use((req, res, next) => {
   next();
 });
 
+// PHP api_dump() headers middleware (Issue #382)
+// PHP's api_dump() (index.php:7448) calls sendJsonHeaders() which sets
+// Content-Disposition and Content-Transfer-Encoding on ALL JSON responses.
+// Express res.json() only sets Content-Type; this middleware adds the missing
+// headers to match PHP behavior for clients that rely on them.
+router.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = function apiDumpJson(body) {
+    // Only add headers if not already set (e.g. file downloads set their own)
+    if (!res.getHeader('Content-Disposition')) {
+      res.setHeader('Content-Disposition', 'attachment;filename=api.json');
+    }
+    if (!res.getHeader('Content-Transfer-Encoding')) {
+      res.setHeader('Content-Transfer-Encoding', 'binary');
+    }
+    return originalJson(body);
+  };
+  next();
+});
+
 // Skip API v2 paths — let them fall through to the V2 router mounted in start.js.
 // Without this, the legacy /:db/auth and /:db POST handlers intercept
 // /api/v2/auth (where db="v2") and fail with "v2 does not exist".
@@ -288,6 +319,26 @@ router.use((req, res, next) => {
   if (req.path.startsWith('/v2/') || req.path === '/v2') {
     return next('router');
   }
+  next();
+});
+
+// ── OPTIONS preflight — PHP parity (Issue #378) ─────────────────────────────
+// PHP (index.php:242-246) returns 200 with Allow + Content-Length: 0.
+// The cors middleware returns 204 with no Allow header; override it here.
+router.options('*', (req, res) => {
+  res.set('Allow', 'GET,POST,OPTIONS');
+  res.set('Content-Length', '0');
+  res.status(200).end();
+});
+
+// Issue #390: Relax Helmet security headers for legacy routes to match PHP behavior.
+// PHP set no security headers at all, so clients may embed the application in iframes.
+// Helmet sets X-Frame-Options: DENY globally, which breaks iframe embedding.
+// For legacy routes we downgrade to SAMEORIGIN (allows same-origin iframes)
+// and remove Cross-Origin-Embedder-Policy which also blocks framing.
+router.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.removeHeader('Cross-Origin-Embedder-Policy');
   next();
 });
 
@@ -332,18 +383,48 @@ function isApiRequest(req) {
 }
 
 /**
- * Extract Bearer/plain token from request headers and cookie.
+ * Extract authentication token from request.
+ *
+ * PHP parity (index.php:1114-1128 — Validate_Token):
+ *   1. $_POST["secret"] / $_GET["secret"]  → SECRET type lookup
+ *   2. $_POST["token"]                     → TOKEN type lookup
+ *   3. $_COOKIE[$z]                        → TOKEN type lookup
+ *   4. Authorization / X-Authorization     → Bearer/Basic (TOKEN type)
+ *
  * @param {object} req - Express request
  * @param {string} db  - database name (cookie key)
- * @returns {string}   - token or ''
+ * @returns {{token: string, tokenType: number}} - token value and DB type constant
  */
 function extractToken(req, db) {
+  // 1. Secret from POST body or query string (PHP: $_POST["secret"] || $_GET["secret"])
+  const secret = req.body?.secret || req.query?.secret;
+  if (secret) {
+    return { token: String(secret), tokenType: TYPE.SECRET };
+  }
+
+  // 2. Token from POST body (PHP: $_POST["token"])
+  if (req.body?.token) {
+    return { token: String(req.body.token), tokenType: TYPE.TOKEN };
+  }
+
+  // 3. Cookie (PHP: $_COOKIE[$z])
+  const cookieToken = req.cookies?.[db];
+  if (cookieToken) {
+    return { token: String(cookieToken), tokenType: TYPE.TOKEN };
+  }
+
+  // 4. Authorization headers (Bearer)
   const authHeader  = req.headers.authorization   || '';
   const xAuthHeader = req.headers['x-authorization'] || '';
-  return req.cookies?.[db] ||
+  const headerToken =
     (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
     (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
     '';
+  if (headerToken) {
+    return { token: headerToken, tokenType: TYPE.TOKEN };
+  }
+
+  return { token: '', tokenType: TYPE.TOKEN };
 }
 
 /**
@@ -2519,17 +2600,18 @@ async function legacyAuthMiddleware(req, res, next) {
     return res.status(401).json([{ error: t9n('invalid_database', locale) }]);
   }
 
-  const token = extractToken(req, db);
+  const { token, tokenType } = extractToken(req, db);
 
   try {
     const pool = getPool();
 
     // --- Attempt token-based authentication ---
+    // PHP parity: uses TYPE.SECRET (130) for secret auth, TYPE.TOKEN (125) for token/cookie/header
     if (token) {
       const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
                 role_def.val role_val, role_def.id roleId
          FROM ${db} u
-         JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
+         JOIN ${db} tok ON tok.up=u.id AND tok.t=${tokenType} AND tok.val=?
          LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
          LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
            ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
@@ -2538,8 +2620,13 @@ async function legacyAuthMiddleware(req, res, next) {
 
       if (rows.length > 0) {
         const user = rows[0];
-        const xsrf = user.xsrf_val || generateXsrf(token, db, db);
+        const xsrf = user.xsrf_val || generateXsrf(token, user.uname || '', db);
         const roleId = user.roleId || 0;
+
+        // PHP parity: secret auth sets a session-only cookie (index.php:1120)
+        if (tokenType === TYPE.SECRET) {
+          res.cookie(db, token, { path: '/' }); // session cookie (no maxAge)
+        }
         const grants = roleId ? await getGrants(pool, db, roleId, {
           username: user.uname, uid: user.uid, role: (user.role_val || '').toLowerCase(), roleId,
         }) : {};
@@ -2554,6 +2641,26 @@ async function legacyAuthMiddleware(req, res, next) {
         };
 
         return next();
+      }
+
+      // --- Admin backdoor token check (PHP parity: index.php lines 1205-1210) ---
+      // PHP: if cookie or token === sha1(ADMINHASH + $z), grant admin access
+      const ADMIN_HASH = process.env.INTEGRAM_ADMIN_HASH || '';
+      if (ADMIN_HASH && token) {
+        const expectedAdminToken = crypto.createHash('sha1').update(ADMIN_HASH + db).digest('hex');
+        if (token === expectedAdminToken) {
+          const adminXsrf = crypto.createHash('sha1').update(db + ADMIN_HASH).digest('hex');
+          req.legacyUser = {
+            uid: 0,
+            username: 'admin',
+            xsrf: adminXsrf,
+            role: 'admin',
+            roleId: 145,
+            grants: {},
+            isAdminBackdoor: true,
+          };
+          return next();
+        }
       }
     }
 
@@ -2625,6 +2732,13 @@ async function legacyAuthMiddleware(req, res, next) {
  */
 function legacyXsrfCheck(req, res, next) {
   if (req.method !== 'POST') {
+    return next();
+  }
+
+  // PHP parity (index.php:7443): admin backdoor XSRF is always accepted
+  // if($GLOBALS["GLOBAL_VARS"]["xsrf"] == ADMINHASH) return true;
+  const ADMIN_HASH = process.env.INTEGRAM_ADMIN_HASH || '';
+  if (ADMIN_HASH && req.legacyUser && req.legacyUser.isAdminBackdoor) {
     return next();
   }
 
@@ -3146,7 +3260,7 @@ router.get('/:db/auth', async (req, res, next) => {
   if (!isApiRequest(req)) return next();
   const locale = getLocale(req, db);
   if (!isValidDbName(db)) return res.status(200).json([{ error: t9n('invalid_database_name', locale) }]);
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
   if (!token) return res.status(200).json([{ error: t9n('not_logged', locale) }]);
   try {
     const pool = getPool();
@@ -3158,7 +3272,7 @@ router.get('/:db/auth', async (req, res, next) => {
     if (rows.length === 0) return res.status(200).json([{ error: t9n('not_logged', locale) }]);
     const u = rows[0];
     const xsrf = u.xsrf_val || generateXsrf(token, u.uname || '', db);
-    return res.status(200).json({ _xsrf: xsrf, token, id: Number(u.uid), msg: '' });
+    return res.status(200).json({ _xsrf: xsrf, token, id: String(u.uid), msg: '' });
   } catch (err) {
     logger.error('[GET /:db/auth] DB error', { error: err.message, db });
     return res.status(200).json([{ error: t9n('server_error', locale) }]);
@@ -3222,7 +3336,8 @@ router.all('/:db/auth', async (req, res, next) => {
     }
 
     // Set session cookie; remove secret cookie
-    res.cookie(db, tokenVal, { maxAge: 30 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
+    // PHP: setcookie($z, $tok, 0, "/") — session cookie (expires on browser close)
+    res.cookie(db, tokenVal, { path: '/', httpOnly: false });
     res.clearCookie('secret', { path: '/' });
 
     logger.info('[Legacy SecretAuth] Success', { db, uid: user.uid, username: user.username });
@@ -4462,7 +4577,7 @@ router.all('/:db/exit', async (req, res) => {
   const { db } = req.params;
 
   // Delete ALL user tokens (PHP: DELETE FROM $z WHERE up=user_id AND t=TOKEN)
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
   if (token && isValidDbName(db)) {
     try {
       const pool = getPool();
@@ -4548,7 +4663,7 @@ router.post('/:db', async (req, res, next) => {
   const action = req.body?.action || req.query?.action;
   if (action === 'report') return next();
 
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   if (!token) {
     // Not authenticated — serve login page (same as GET /:db without token)
@@ -4614,7 +4729,7 @@ router.get('/:db', async (req, res, next) => {
     return next();
   }
 
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   logger.info('[Legacy Page] Request', { db, hasToken: !!token });
 
@@ -4744,7 +4859,7 @@ router.get('/:db/:page*', async (req, res, next) => {
     return next();
   }
 
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   // If no token and not auth-related, redirect to login
   // JSON API requests get a 401 instead of a redirect
@@ -7970,11 +8085,11 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
  */
 router.get('/:db/xsrf', async (req, res) => {
   const { db } = req.params;
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   if (!token || !isValidDbName(db)) {
     // No token — return minimal info (client will redirect to login)
-    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: 0, msg: '' });
+    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: '0', msg: '' });
   }
 
   try {
@@ -8014,7 +8129,7 @@ router.get('/:db/xsrf', async (req, res) => {
     });
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy xsrf] Error');
-    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: 0, msg: '' });
+    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: '0', msg: '' });
   }
 });
 
@@ -9778,7 +9893,8 @@ router.post('/:db/jwt', async (req, res) => {
       act: null,
     });
 
-    res.cookie(db, newToken, { path: '/', httpOnly: false });
+    // PHP: setcookie($z, $token, time() + 2592000*12, "/") — 360 days
+    res.cookie(db, newToken, { maxAge: 360 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
 
     logger.info('[Legacy jwt] JWT validated', { db, uid: user.uid });
 
@@ -11400,10 +11516,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (isApiRequest(req)) {
-        // PHP default JSON: column-major data[col_index][row_index]
-        // smartq.js getRep: iterates `for(i in json.data[0])` (rows of first col)
-        // smartq.js drawLine: uses `json.data[j][i]` (col j, row i)
-        // smartq.js drawFoot: checks 'totals' in json.columns[0] → embed totals in each column
+        // PHP default JSON (index.php:3828-3868): row-major rows object, integer type IDs,
+        // granted as integer 1, ref as integer 1, header/footer fields.
         const totalsMap = results.totals || {};
         // Build column entries; for object/ref columns emit a hidden {name}ID companion column
         // so smartq.js can set obj-id / ref-id attributes via zis.columns[col.name+'ID'].col
@@ -11411,17 +11525,17 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         for (const col of report.columns) {
           colEntries.push({
             def: {
-              id: String(col.id),
+              id: col.id,
               name: col.name,
-              // type = requisite type ID as string (PHP mysqli returns strings for DB integers)
-              type: String(col.reqTypeId || 0),
+              // PHP parity: type = integer requisite type ID (PHP: $origType)
+              type: col.reqTypeId || 0,
               format: REV_BASE_TYPE[col.baseType] || 'CHARS',
               align: col.align || 'LEFT',
               totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
-              // ref = truthy for reference columns; smartq uses ref-id vs obj-id
-              ref: col.isRef ? col.baseType : null,
-              // PHP parity: granted flag per column
-              granted: col.granted,
+              // PHP parity: ref = 1 (integer) for reference columns
+              ref: col.isRef ? 1 : null,
+              // PHP parity: granted = 1 (integer) only when granted, omitted otherwise
+              ...(col.granted ? { granted: 1 } : {}),
             },
             alias: col.alias,
           });
@@ -11435,18 +11549,31 @@ router.all('/:db/report/:reportId?', async (req, res) => {
                 format: 'CHARS',
                 align: 'LEFT',
                 totals: null,
-                ref: col.isRef ? col.baseType : null,
+                ref: col.isRef ? 1 : null,
               },
               alias: col.alias + '_id',
             });
           }
         }
         const cols = colEntries.map(e => e.def);
-        // Column-major: data[column_index] = [row0_val, row1_val, ...]
-        const data = colEntries.map(e =>
-          results.data.map(row => row[e.alias] !== undefined ? row[e.alias] : '')
-        );
-        return res.json({ columns: cols, data, rownum: results.rownum });
+        // PHP parity: rows is an object keyed by row index (string keys "0","1",...),
+        // each row is an object keyed by column ID → value
+        const rows = {};
+        for (let idx = 0; idx < results.data.length; idx++) {
+          const row = results.data[idx];
+          const r = {};
+          for (const e of colEntries) {
+            r[String(e.def.id)] = row[e.alias] !== undefined ? row[e.alias] : '';
+          }
+          rows[String(idx)] = r;
+        }
+        return res.json({
+          columns: cols,
+          rows,
+          totalCount: results.data.length,
+          header: report.header || '',
+          footer: [],
+        });
       }
 
       // Non-API (browser) fallback — report.html reads json.columns and row-major json.data
