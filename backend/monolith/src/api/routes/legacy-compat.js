@@ -5705,6 +5705,34 @@ async function getNextOrder(db, parentId, typeId = null) {
 }
 
 /**
+ * Get next order value for reference objects — PHP GetRefOrd() parity (Issue #300).
+ *
+ * Unlike getNextOrder (Calc_Order) which filters by `t` (type column),
+ * GetRefOrd filters by `val` (value column) because reference rows store
+ * the type identifier in `val`, not `t`.
+ *
+ * PHP: SELECT max(ord) ord FROM $z WHERE up=$parent AND val='$typ'
+ *
+ * @param {import('mysql2/promise').Pool} pool - mysql2 connection pool
+ * @param {string} db   - database (table) name
+ * @param {number} parent - parent row ID
+ * @param {string|number} typ - type value stored in the `val` column
+ * @returns {Promise<number>} next order value (max(ord) + 1, or 1 if none)
+ */
+async function getRefOrd(pool, db, parent, typ) {
+  try {
+    const z = sanitizeIdentifier(db);
+    const [rows] = await pool.query(
+      `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ? AND val = ?`,
+      [parent, String(typ)]
+    );
+    return rows[0]?.next_ord || 1;
+  } catch (error) {
+    return 1;
+  }
+}
+
+/**
  * Insert a new row into the database
  */
 async function insertRow(db, parentId, order, typeId, value) {
@@ -6076,7 +6104,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
                   return res.status(200).json({ error: `You do not have this object granted (${refCheck[0].val}) (${attrTypeIdNum})` });
                 }
               }
-              const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+              const attrOrder = await getRefOrd(pool, db, id, attrTypeIdNum);
               await insertRow(db, id, attrOrder, rv, String(attrTypeIdNum));
               if (!isMulti) break; // single-ref: only first value
             }
@@ -13402,6 +13430,7 @@ export {
   sendMail,
   sanitizeIdentifier,
   checkInjection,
+  getRefOrd,
 };
 
 export default router;
