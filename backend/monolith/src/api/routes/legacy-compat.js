@@ -6383,12 +6383,122 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       .trim();
 
     if (attrsFormula.startsWith('&')) {
-      // Real PHP block reference — requires PHP template engine, not available in Node.js.
-      // Return a simple fallback list using just the dictionary type.
-      logger.warn('[Legacy _ref_reqs] Dynamic formula not supported, using simple fallback', {
-        db, id, formula: attrsFormula
+      // Dynamic formula: the attr value is a report block reference (e.g. "&my_dropdown_report").
+      // PHP: Get_block_data($attrs) — default case resolves block name to a report,
+      //      calls Compile_Report + Execute, then reads ids/vals/alts columns from $blocks.
+      // PHP also sets REQREF["1"] (ID filter) or REQREF["2"] (value LIKE filter) from ?q=.
+      //
+      // Node.js: look up the report by name, compile, build filters from ?q=, execute,
+      // and map the first two visible columns to {id: display_value}.
+      const blockName = attrsFormula; // e.g. "&my_report"
+      logger.info('[Legacy _ref_reqs] Evaluating dynamic formula via report', {
+        db, id, formula: blockName
       });
-      // Simple fallback: return all objects of dic type
+
+      try {
+        // Resolve the report: lookup by block name (strip leading '&')
+        const reportName = blockName.startsWith('&') ? blockName.slice(1) : blockName;
+        const [repRows] = await pool.query(
+          `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+          [reportName]
+        );
+
+        // Also try the full block name (with '&') if bare name not found
+        let reportId = repRows.length > 0 ? repRows[0].id : null;
+        if (!reportId) {
+          const [repRows2] = await pool.query(
+            `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+            [blockName]
+          );
+          reportId = repRows2.length > 0 ? repRows2[0].id : null;
+        }
+        // Also try numeric block name (direct report ID)
+        if (!reportId && /^\d+$/.test(reportName)) {
+          const numId = parseInt(reportName, 10);
+          const [repRows3] = await pool.query(
+            `SELECT id FROM \`${db}\` WHERE id = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+            [numId]
+          );
+          reportId = repRows3.length > 0 ? numId : null;
+        }
+
+        if (reportId) {
+          const report = await compileReport(pool, db, reportId);
+          if (report) {
+            // Build filters from ?q= parameter — PHP REQREF logic:
+            //   REQREF["1"] = @<id>  → filter on first visible column by ID
+            //   REQREF["2"] = %<search>% → filter on second visible column by LIKE
+            const filters = {};
+            if (searchQuery) {
+              // Find first two visible (non-hidden) columns
+              const visibleCols = report.columns.filter(c => !c.hidden);
+              if (searchQuery.startsWith('@')) {
+                // ID-based search: apply to first visible column
+                if (visibleCols.length > 0) {
+                  filters[visibleCols[0].alias] = { from: searchQuery };
+                }
+              } else {
+                // Value search: apply LIKE to second visible column (or first if only one)
+                const searchVal = searchQuery.includes('%') ? searchQuery : `%${searchQuery}%`;
+                const targetCol = visibleCols.length > 1 ? visibleCols[1] : visibleCols[0];
+                if (targetCol) {
+                  filters[targetCol.alias] = { like: searchQuery.includes('%') ? undefined : searchQuery };
+                  if (searchQuery.includes('%')) {
+                    filters[targetCol.alias] = { from: searchQuery };
+                  }
+                }
+              }
+            }
+
+            const results = await executeReport(pool, db, report, filters, limitParam, 0);
+
+            // Map results to dropdown: PHP reads $blocks[$attrs] which has id[], val[], alt[] arrays.
+            // The first column is IDs, second is display values, third is alt values.
+            // In Node.js report results, each row has { id, val, <alias1>, <alias2>, ... }.
+            // The row.id is the main object ID (first column), and subsequent columns provide display values.
+            const formulaResult = {};
+            const resultVisibleCols = report.columns.filter(c => !c.hidden);
+
+            for (const row of results.data) {
+              // PHP: ids = first column, vals = second column, alts = third column
+              // The row.id from report execution is the main object ID
+              const rowId = row.id;
+              if (rowId === undefined || rowId === null) continue;
+              if (!(/^\d+$/.test(String(rowId)))) continue; // PHP: die if non-numeric id
+
+              // Display value: prefer second visible column (val), fall back to third (alt), then main_val
+              let displayVal = '';
+              if (resultVisibleCols.length > 0) {
+                displayVal = row[resultVisibleCols[0].alias] || '';
+              }
+              // If first visible column gave nothing, try main_val
+              if (!displayVal) {
+                displayVal = row.val || row.main_val || '';
+              }
+
+              if (!formulaResult[rowId]) {
+                formulaResult[rowId] = displayVal || '--';
+              }
+            }
+
+            logger.info('[Legacy _ref_reqs] Formula evaluation returned results', {
+              db, id, reportId, count: Object.keys(formulaResult).length
+            });
+            return res.json(formulaResult);
+          }
+        }
+
+        // Report not found — fall back to simple dictionary query
+        logger.warn('[Legacy _ref_reqs] Report not found for formula, using simple fallback', {
+          db, id, formula: blockName, reportName
+        });
+      } catch (formulaError) {
+        logger.warn('[Legacy _ref_reqs] Formula evaluation failed, using simple fallback', {
+          db, id, formula: blockName, error: formulaError.message
+        });
+      }
+
+      // Fallback: return all objects of dic type (when report not found or errors)
       const searchQ = searchQuery.startsWith('@')
         ? null : (searchQuery ? `%${searchQuery.replace(/'/g, "''")}%` : null);
       const searchId = searchQuery.startsWith('@') ? parseInt(searchQuery.slice(1), 10) : null;
