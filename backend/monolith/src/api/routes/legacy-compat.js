@@ -115,6 +115,109 @@ async function getFile(db, file, fatal = true) {
   }
 }
 
+// ── HTML Template Parser (Issue #301) ────────────────────────────────────────
+
+const MAX_INCLUDE_DEPTH = 20;
+
+async function makeTreeInner(blocks, text, curBlock, db, params = {}, depth = 0) {
+  if (depth > MAX_INCLUDE_DEPTH) {
+    throw new Error(`Make_tree: maximum include depth (${MAX_INCLUDE_DEPTH}) exceeded — possible circular FILE include`);
+  }
+
+  // Strip UTF-8 BOM if present
+  if (text.charCodeAt(0) === 0xFEFF) {
+    text = text.slice(1);
+  } else if (text.length >= 3 &&
+             text.charCodeAt(0) === 0xEF &&
+             text.charCodeAt(1) === 0xBB &&
+             text.charCodeAt(2) === 0xBF) {
+    text = text.slice(3);
+  }
+
+  const BEGIN_DELIMITER = '<!-- ';
+  const parts = text.split(BEGIN_DELIMITER);
+  const patt = /^(begin:|end:|file:)\s*(&?[\w\u0400-\u04FF ]+)\s*-->([\s\S]*)$/i;
+
+  if (!blocks[curBlock]) {
+    blocks[curBlock] = {};
+  }
+  blocks[curBlock].CONTENT = '';
+
+  for (let key = 0; key < parts.length; key++) {
+    const a = parts[key];
+    const m = patt.exec(a);
+
+    if (m) {
+      const directive = m[1].toLowerCase();
+      const blockName = m[2].trim().toLowerCase();
+      const rest      = m[3];
+
+      if (directive === 'begin:') {
+        const fullPath = curBlock + '.' + blockName;
+        if (!blocks[fullPath]) blocks[fullPath] = {};
+        blocks[fullPath].PARENT = curBlock;
+        curBlock = fullPath;
+        blocks[curBlock].CONTENT = rest;
+
+      } else if (directive === 'end:') {
+        const expected = blocks[curBlock].PARENT + '.' + blockName;
+        if (expected !== curBlock) {
+          throw new Error(`Invalid blocks nesting (${expected} - ${curBlock})!`);
+        }
+        const insertionPoint = `{_block_.${curBlock}}`;
+        curBlock = blocks[curBlock].PARENT;
+        blocks[curBlock].CONTENT += insertionPoint + rest;
+
+      } else if (directive === 'file:') {
+        let fileContent;
+        if (blockName.trim() === 'a' && params.action) {
+          fileContent = await getFile(db, params.action + '.html', false);
+        } else if (params[blockName.trim()]) {
+          fileContent = await getFile(db, params[blockName.trim()] + '.html', false);
+        } else {
+          fileContent = await getFile(db, blockName.trim() + '.html', false);
+        }
+        if (!fileContent || fileContent.length === 0) {
+          fileContent = await getFile(db, 'info.html');
+        }
+
+        const resolvedName = params[blockName.trim()] || blockName.trim();
+        const fileBlock = curBlock + '.' + resolvedName;
+        const insertionPoint = `{_block_.${fileBlock}}`;
+        if (!blocks[fileBlock]) blocks[fileBlock] = {};
+        blocks[fileBlock].PARENT = curBlock;
+
+        await makeTreeInner(blocks, fileContent, fileBlock, db, params, depth + 1);
+
+        blocks[curBlock].CONTENT += insertionPoint + rest;
+      }
+    } else if (a) {
+      if (key !== 0) {
+        blocks[curBlock].CONTENT += BEGIN_DELIMITER + a;
+      } else {
+        blocks[curBlock].CONTENT = a;
+      }
+    }
+  }
+}
+
+/**
+ * Parse an HTML template file into a block tree.
+ * Port of PHP Make_tree() (index.php:7082-7145).
+ *
+ * @param {string} db           - Database name
+ * @param {string} templateFile - Template filename (e.g. "main.html")
+ * @param {string} [rootBlock=''] - Root block name
+ * @param {object} [params={}]  - Request parameters for FILE directive resolution
+ * @returns {Promise<object>}   - Flat block dictionary keyed by dot-paths
+ */
+async function makeTree(db, templateFile, rootBlock = '', params = {}) {
+  const text = await getFile(db, templateFile);
+  const blocks = {};
+  await makeTreeInner(blocks, text, rootBlock, db, params, 0);
+  return blocks;
+}
+
 const router = express.Router();
 
 // Apply PHP JSON key sorting middleware to achieve byte-for-byte parity (Issue #173)
