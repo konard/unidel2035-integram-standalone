@@ -609,6 +609,41 @@ function htmlEsc(str) {
     .replace(/"/g, '&quot;');
 }
 
+// ── BKI delimiter helpers (PHP index.php lines 1619-1634) ──────────────
+// MaskDelimiters:   escape  \  →  \\   then  :  →  \:   then  ;  →  \;
+function MaskDelimiters(v) {
+  if (!v && v !== 0) return '';
+  return String(v).replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/;/g, '\\;');
+}
+// HideDelimiters:   \\  →  %5C   \:  →  %3A   \;  →  %3B   \,  →  %2C
+function HideDelimiters(v) {
+  if (!v && v !== 0) return '';
+  return String(v).replace(/\\\\/g, '%5C').replace(/\\:/g, '%3A').replace(/\\;/g, '%3B').replace(/\\,/g, '%2C');
+}
+// UnHideDelimiters: reverse of HideDelimiters
+function UnHideDelimiters(v) {
+  if (!v && v !== 0) return '';
+  return String(v).replace(/%5C/g, '\\\\').replace(/%3A/g, '\\:').replace(/%3B/g, '\\;').replace(/%2C/g, '\\,');
+}
+// UnMaskDelimiters: unhide first, then unescape  \\  →  \   \:  →  :   \;  →  ;
+function UnMaskDelimiters(v) {
+  if (!v && v !== 0) return '';
+  const s = UnHideDelimiters(String(v));
+  return s.replace(/\\;/g, ';').replace(/\\:/g, ':').replace(/\\\\/g, '\\');
+}
+
+// ── Semicolon escaping helpers (PHP index.php lines 3940-3947) ─────────
+// Slash_semi:   \;  →  \$L3sH   (protect escaped semicolons before splitting)
+function Slash_semi(str) {
+  if (!str && str !== 0) return '';
+  return String(str).replace(/\\;/g, '\\$L3sH');
+}
+// UnSlash_semi: \$L3sH  →  ;   (restore semicolons after splitting)
+function UnSlash_semi(str) {
+  if (!str && str !== 0) return '';
+  return String(str).replace(/\\\$L3sH/g, ';');
+}
+
 // PHP GetSha(i) = sha1(Salt(z, i)) = sha1(SALT + z.toUpperCase() + z + i)
 function fileGetSha(db, i) {
   return crypto.createHash('sha1').update(phpSalt(db, String(i), db)).digest('hex');
