@@ -265,6 +265,26 @@ router.use((req, res, next) => {
 // This middleware ensures all JSON responses have keys sorted alphabetically.
 router.use(phpJsonMiddleware());
 
+// PHP api_dump() headers middleware (Issue #382)
+// PHP's api_dump() (index.php:7448) calls sendJsonHeaders() which sets
+// Content-Disposition and Content-Transfer-Encoding on ALL JSON responses.
+// Express res.json() only sets Content-Type; this middleware adds the missing
+// headers to match PHP behavior for clients that rely on them.
+router.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = function apiDumpJson(body) {
+    // Only add headers if not already set (e.g. file downloads set their own)
+    if (!res.getHeader('Content-Disposition')) {
+      res.setHeader('Content-Disposition', 'attachment;filename=api.json');
+    }
+    if (!res.getHeader('Content-Transfer-Encoding')) {
+      res.setHeader('Content-Transfer-Encoding', 'binary');
+    }
+    return originalJson(body);
+  };
+  next();
+});
+
 // Skip API v2 paths — let them fall through to the V2 router mounted in start.js.
 // Without this, the legacy /:db/auth and /:db POST handlers intercept
 // /api/v2/auth (where db="v2") and fail with "v2 does not exist".
