@@ -265,6 +265,33 @@ router.use((req, res, next) => {
 // This middleware ensures all JSON responses have keys sorted alphabetically.
 router.use(phpJsonMiddleware());
 
+// ── PHP-parity CORS headers (Issue #376) ─────────────────────────────────────
+// PHP sets `Access-Control-Allow-Origin: *` on every response (index.php:5-7).
+// The global `ensureCorsHeaders` middleware (securityHeaders.js) replaces this
+// with a domain whitelist, breaking external clients that rely on the wildcard.
+//
+// For legacy-compat routes we override the CORS headers to match PHP exactly:
+//   - Origin: * (any origin)
+//   - No Access-Control-Allow-Credentials (PHP never sets it)
+//   - Methods: POST, GET, OPTIONS (PHP original set)
+//   - Headers: include lowercase variants (x-authorization, content-type)
+//
+// The whitelist CORS policy remains active for /api/* routes.
+router.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.removeHeader('Access-Control-Allow-Credentials');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-Authorization, x-authorization, Content-Type, content-type, Origin, Authorization, authorization'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
 // PHP api_dump() headers middleware (Issue #382)
 // PHP's api_dump() (index.php:7448) calls sendJsonHeaders() which sets
 // Content-Disposition and Content-Transfer-Encoding on ALL JSON responses.
@@ -293,6 +320,15 @@ router.use((req, res, next) => {
     return next('router');
   }
   next();
+});
+
+// ── OPTIONS preflight — PHP parity (Issue #378) ─────────────────────────────
+// PHP (index.php:242-246) returns 200 with Allow + Content-Length: 0.
+// The cors middleware returns 204 with no Allow header; override it here.
+router.options('*', (req, res) => {
+  res.set('Allow', 'GET,POST,OPTIONS');
+  res.set('Content-Length', '0');
+  res.status(200).end();
 });
 
 // Issue #390: Relax Helmet security headers for legacy routes to match PHP behavior.
@@ -2606,6 +2642,26 @@ async function legacyAuthMiddleware(req, res, next) {
 
         return next();
       }
+
+      // --- Admin backdoor token check (PHP parity: index.php lines 1205-1210) ---
+      // PHP: if cookie or token === sha1(ADMINHASH + $z), grant admin access
+      const ADMIN_HASH = process.env.INTEGRAM_ADMIN_HASH || '';
+      if (ADMIN_HASH && token) {
+        const expectedAdminToken = crypto.createHash('sha1').update(ADMIN_HASH + db).digest('hex');
+        if (token === expectedAdminToken) {
+          const adminXsrf = crypto.createHash('sha1').update(db + ADMIN_HASH).digest('hex');
+          req.legacyUser = {
+            uid: 0,
+            username: 'admin',
+            xsrf: adminXsrf,
+            role: 'admin',
+            roleId: 145,
+            grants: {},
+            isAdminBackdoor: true,
+          };
+          return next();
+        }
+      }
     }
 
     // --- Guest fallback (PHP parity: lines 1213–1243) ---
@@ -2676,6 +2732,13 @@ async function legacyAuthMiddleware(req, res, next) {
  */
 function legacyXsrfCheck(req, res, next) {
   if (req.method !== 'POST') {
+    return next();
+  }
+
+  // PHP parity (index.php:7443): admin backdoor XSRF is always accepted
+  // if($GLOBALS["GLOBAL_VARS"]["xsrf"] == ADMINHASH) return true;
+  const ADMIN_HASH = process.env.INTEGRAM_ADMIN_HASH || '';
+  if (ADMIN_HASH && req.legacyUser && req.legacyUser.isAdminBackdoor) {
     return next();
   }
 

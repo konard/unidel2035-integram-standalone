@@ -1252,6 +1252,222 @@ describe('updateTokens activity timestamp format (#329)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CORS headers — PHP parity (Issue #376)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('CORS headers — PHP parity (#376)', () => {
+  const app = makeApp();
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('OPTIONS preflight returns 204 with wildcard origin', async () => {
+    const res = await request(app)
+      .options(`/${DB}/auth`)
+      .set('Origin', 'https://unknown-external-client.example.com');
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('OPTIONS preflight does not set Access-Control-Allow-Credentials', async () => {
+    const res = await request(app)
+      .options(`/${DB}/terms`);
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+  });
+
+  it('OPTIONS preflight sets Allow-Methods to POST, GET, OPTIONS', async () => {
+    const res = await request(app)
+      .options(`/${DB}/auth`);
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-methods']).toBe('POST, GET, OPTIONS');
+  });
+
+  it('OPTIONS preflight includes lowercase content-type and x-authorization in allowed headers', async () => {
+    const res = await request(app)
+      .options(`/${DB}/auth`);
+
+    expect(res.status).toBe(204);
+    const allowedHeaders = res.headers['access-control-allow-headers'];
+    expect(allowedHeaders).toContain('content-type');
+    expect(allowedHeaders).toContain('x-authorization');
+    expect(allowedHeaders).toContain('Content-Type');
+    expect(allowedHeaders).toContain('X-Authorization');
+  });
+
+  it('auth response includes wildcard origin even for unknown Origin', async () => {
+    const showTablesResp  = [[{ Tables_in_integram: DB }]];
+    mockQuery(showTablesResp, [[]]);
+
+    const res = await request(app)
+      .post(`/${DB}/auth?JSON`)
+      .set('Origin', 'https://unknown-external-client.example.com')
+      .send({ login: 'alice', pwd: 'x' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin backdoor authentication (PHP parity: index.php lines 1205-1210, 7443)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Admin backdoor token auth (#380)', () => {
+  const ADMIN_HASH = 'test-admin-hash-abc123';
+  const adminToken = crypto.createHash('sha1').update(ADMIN_HASH + DB).digest('hex');
+  const adminXsrf  = crypto.createHash('sha1').update(DB + ADMIN_HASH).digest('hex');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.INTEGRAM_ADMIN_HASH = ADMIN_HASH;
+  });
+
+  afterEach(() => {
+    delete process.env.INTEGRAM_ADMIN_HASH;
+  });
+
+  it('legacyAuthMiddleware accepts admin backdoor token and sets user properties', async () => {
+    // Token DB lookup returns no match — admin token is not stored in DB
+    const emptyResp = [[]];
+    mockQuery(emptyResp);
+
+    const req = {
+      params: { db: DB },
+      cookies: { [DB]: adminToken },
+      headers: {},
+    };
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+      cookie: vi.fn(),
+    };
+    const next = vi.fn();
+
+    await legacyAuthMiddleware(req, res, next);
+
+    // Should call next() — admin backdoor authenticated
+    expect(next).toHaveBeenCalled();
+    // Should NOT return 401
+    expect(res.status).not.toHaveBeenCalledWith(401);
+    // Should set correct admin user properties (PHP parity: index.php:1206-1209)
+    expect(req.legacyUser).toBeDefined();
+    expect(req.legacyUser.uid).toBe(0);
+    expect(req.legacyUser.username).toBe('admin');
+    expect(req.legacyUser.role).toBe('admin');
+    expect(req.legacyUser.roleId).toBe(145);
+    expect(req.legacyUser.xsrf).toBe(adminXsrf);
+    expect(req.legacyUser.isAdminBackdoor).toBe(true);
+  });
+
+  it('legacyAuthMiddleware rejects invalid admin token', async () => {
+    // Token DB lookup returns no match, guest lookup returns no match
+    const emptyResp = [[]];
+    mockQuery(emptyResp, emptyResp);
+
+    const req = {
+      params: { db: DB },
+      cookies: { [DB]: 'invalid-token' },
+      headers: {},
+    };
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+      cookie: vi.fn(),
+    };
+    const next = vi.fn();
+
+    await legacyAuthMiddleware(req, res, next);
+
+    // Should NOT call next() — invalid token, no guest
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('legacyAuthMiddleware does not accept admin token when INTEGRAM_ADMIN_HASH is unset', async () => {
+    delete process.env.INTEGRAM_ADMIN_HASH;
+
+    // Token DB lookup returns no match, guest lookup returns no match
+    const emptyResp = [[]];
+    mockQuery(emptyResp, emptyResp);
+
+    const req = {
+      params: { db: DB },
+      cookies: { [DB]: adminToken },
+      headers: {},
+    };
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+      cookie: vi.fn(),
+    };
+    const next = vi.fn();
+
+    await legacyAuthMiddleware(req, res, next);
+
+    // Without ADMIN_HASH env var, the admin backdoor should not work
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  it('legacyXsrfCheck bypasses XSRF for admin backdoor sessions', () => {
+    const req = {
+      method: 'POST',
+      params: { db: DB },
+      body: { val: 'test' },  // no _xsrf field
+      legacyUser: {
+        uid: 0,
+        username: 'admin',
+        xsrf: adminXsrf,
+        role: 'admin',
+        roleId: 145,
+        isAdminBackdoor: true,
+      },
+    };
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+    };
+    const next = vi.fn();
+
+    legacyXsrfCheck(req, res, next);
+
+    // Admin backdoor should bypass XSRF check
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('legacyXsrfCheck still enforces XSRF for non-admin users', () => {
+    const req = {
+      method: 'POST',
+      params: { db: DB },
+      body: { val: 'test' },  // no _xsrf field
+      legacyUser: {
+        uid: 5,
+        username: 'alice',
+        xsrf: 'some-xsrf-value',
+        role: 'user',
+        roleId: 10,
+      },
+    };
+    const res = {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn().mockReturnThis(),
+    };
+    const next = vi.fn();
+
+    legacyXsrfCheck(req, res, next);
+
+    // Non-admin user without matching _xsrf should get CSRF error
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // api_dump() headers (Issue #382)
 // ─────────────────────────────────────────────────────────────────────────────
 
