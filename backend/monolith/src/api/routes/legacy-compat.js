@@ -6858,6 +6858,12 @@ router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
       return res.status(404).json({ error: 'Requisite not found' });
     }
 
+    // PHP parity (lines 8604-8607): hierarchy check — parent (obj.t) must be metadata root (up=0)
+    const parent = await getObjectById(db, obj.t);
+    if (!parent || parent.up !== 0) {
+      return res.status(200).json({ error: 'Error in subordination of the link object' });
+    }
+
     // Parse existing modifiers
     const modifiers = parseModifiers(obj.val);
 
