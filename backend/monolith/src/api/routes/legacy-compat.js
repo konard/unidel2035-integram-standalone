@@ -18,6 +18,46 @@ import { isAbnPostProcessFunction, applyAbnFunction, isAbnFunction, ABN_SQL_FIEL
 import { t9n, getLocale } from '../../utils/t9n.js';
 import { execSql } from '../../utils/execSql.js';
 
+// ── SQL Injection Guards (Issue #308) ────────────────────────────────────────
+
+/**
+ * Validate and quote a SQL identifier (table name, column name).
+ * Rejects anything that is not a simple alphanumeric/underscore name.
+ * Returns the identifier wrapped in backticks for safe interpolation.
+ *
+ * @param {string} name - The identifier to validate
+ * @returns {string} Backtick-quoted identifier, e.g. `` `myTable` ``
+ * @throws {Error} If the identifier contains disallowed characters
+ */
+function sanitizeIdentifier(name) {
+  if (typeof name !== 'string' || !name) {
+    throw new Error('SQL identifier must be a non-empty string');
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(name)) {
+    throw new Error(`Invalid SQL identifier: "${name}" — only alphanumeric and underscore allowed`);
+  }
+  return `\`${name}\``;
+}
+
+/**
+ * Check user-supplied search values for SQL injection attempts.
+ * Port of PHP checkInjection() (index.php:617) with expanded keyword list.
+ *
+ * @param {string} value - The user-supplied value to check
+ * @returns {string} The original value if safe
+ * @throws {Error} If a SQL keyword is detected
+ */
+function checkInjection(value) {
+  if (typeof value !== 'string') return value;
+  // Match whole SQL keywords (word-boundary delimited, case-insensitive)
+  const SQL_KEYWORDS_RE = /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|UNION|FROM|TABLE|WHERE|INTO|EXEC|EXECUTE|CREATE|TRUNCATE)\b/i;
+  const match = value.match(SQL_KEYWORDS_RE);
+  if (match) {
+    throw new Error(`No SQL clause allowed in search fields. Found: ${match[0]}`);
+  }
+  return value;
+}
+
 const router = express.Router();
 
 // Apply PHP JSON key sorting middleware to achieve byte-for-byte parity (Issue #173)
@@ -728,6 +768,7 @@ const grantStore = new Map();
  */
 async function getGrants(pool, db, roleId, userCtx) {
   const grants = {};
+  const z = sanitizeIdentifier(db);
 
   try {
     const query = `
@@ -737,11 +778,11 @@ async function getGrants(pool, db, roleId, userCtx) {
         mask.val AS mask,
         exp.val AS exp,
         del.val AS del
-      FROM ${db} gr
-      LEFT JOIN (${db} lev CROSS JOIN ${db} def) ON lev.up = gr.id AND def.id = lev.t AND def.t = ${TYPE.LEVEL}
-      LEFT JOIN ${db} mask ON mask.up = gr.id AND mask.t = ${TYPE.MASK}
-      LEFT JOIN ${db} exp ON exp.up = gr.id AND exp.t = ${TYPE.EXPORT}
-      LEFT JOIN ${db} del ON del.up = gr.id AND del.t = ${TYPE.DELETE}
+      FROM ${z} gr
+      LEFT JOIN (${z} lev CROSS JOIN ${z} def) ON lev.up = gr.id AND def.id = lev.t AND def.t = ${TYPE.LEVEL}
+      LEFT JOIN ${z} mask ON mask.up = gr.id AND mask.t = ${TYPE.MASK}
+      LEFT JOIN ${z} exp ON exp.up = gr.id AND exp.t = ${TYPE.EXPORT}
+      LEFT JOIN ${z} del ON del.up = gr.id AND del.t = ${TYPE.DELETE}
       WHERE gr.up = ? AND gr.t = ${TYPE.ROLE_OBJECT}
     `;
 
@@ -980,6 +1021,7 @@ function constructWhereForMask(key, mask) {
   let NOT_EQ = '';
   let EQ = '=';
   let NOT_flag = false;
+  const params = [];
 
   // Handle ! prefix
   if (value.startsWith('!')) {
@@ -999,58 +1041,103 @@ function constructWhereForMask(key, mask) {
     NOT_EQ = '';
   }
 
-  // @ prefix — ID match
+  // @ prefix — ID match (parameterized)
   if (value.startsWith('@')) {
     const idVal = parseInt(value.substring(1).replace(/ /g, ''), 10);
-    return ` AND a${key}.id${NOT_EQ}${EQ}${idVal} `;
+    if (isNaN(idVal)) {
+      throw new Error(`Invalid ID in mask: ${value}`);
+    }
+    params.push(idVal);
+    return { sql: ` AND a${key}.id${NOT_EQ}${EQ}? `, params };
   }
 
   // % alone — NULL check
   if (value === '%') {
     const search_val = `IS ${NOT_flag ? '' : 'NOT '}NULL`;
-    return ` AND a${key}.val ${search_val} `;
+    return { sql: ` AND a${key}.val ${search_val} `, params };
   }
 
-  // Range: value1..value2
+  // Range: value1..value2 (parameterized)
   if (value.includes('..')) {
     const parts = value.split('..');
     const from = parseFloat(parts[0].replace(/ /g, ''));
     const to = parseFloat(parts[1].replace(/ /g, ''));
     if (!isNaN(from) && !isNaN(to)) {
-      return ` AND a${key}.val BETWEEN ${from} AND ${to} `;
+      params.push(from, to);
+      return { sql: ` AND a${key}.val BETWEEN ? AND ? `, params };
     }
   }
 
-  // Escape value for SQL
-  const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-
+  // Parameterized value comparison
   let search_val;
   if (!value.includes('%')) {
-    search_val = `${NOT_EQ}${EQ}'${escaped}' `;
+    search_val = `${NOT_EQ}${EQ}?`;
+    params.push(value);
   } else {
-    search_val = `${NOT} LIKE '${escaped}' `;
+    search_val = `${NOT} LIKE ?`;
+    params.push(value);
   }
 
   if (NOT_flag) {
-    return ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL) `;
+    return { sql: ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL) `, params };
   }
-  return ` AND a${key}.val ${search_val} `;
+  return { sql: ` AND a${key}.val ${search_val} `, params };
 }
 
 /**
- * Build SQL expression to test a value against a mask.
+ * Build a parameterized SQL expression to test a value against a mask.
  * Port of PHP Fetch_WHERE_for_mask() (index.php:888-893).
- * Returns a SQL expression suitable for SELECT — evaluates to 1 (match) or 0 (no match).
+ * Returns { sql, params } for use with pool.query(`SELECT ${sql}`, params).
+ *
+ * The SQL expression evaluates to 1 (match) or 0 (no match) when used in SELECT.
+ *
+ * @param {number} t - Type ID key
+ * @param {string|null} val - Value to test
+ * @param {string} mask - Mask pattern from grants
+ * @returns {{ sql: string, params: Array }}
  */
 function fetchWhereForMask(t, val, mask) {
-  const where = constructWhereForMask(t, mask);
-  // Strip leading " AND " (5 chars)
-  const stripped = where.substring(5);
-  // Replace a{t}.val and a{t}.id with the actual value (escaped)
-  const replacement = (val === null || val === undefined)
-    ? 'NULL'
-    : `'${String(val).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-  return stripped.replace(new RegExp(`a${t}\\.(val|id)`, 'g'), replacement);
+  const { sql: whereSql, params: maskParams } = constructWhereForMask(t, mask);
+  // Strip " AND " prefix (5 chars) to get a standalone expression
+  const stripped = whereSql.substring(5);
+
+  // The stripped SQL contains:
+  // 1. References like a{t}.val or a{t}.id — replaced with ? and val pushed to params
+  // 2. Existing ? placeholders from maskParams — interleaved in order
+  //
+  // We process left-to-right, building the final SQL and params array.
+  const aliasRe = new RegExp(`a${t}\\.(val|id)`, 'g');
+  const finalParams = [];
+  let result = '';
+  let cursor = 0;
+  let maskParamIdx = 0;
+  let aliasMatch;
+
+  while ((aliasMatch = aliasRe.exec(stripped)) !== null) {
+    // Segment between cursor and this alias may contain ? from maskParams
+    const segment = stripped.substring(cursor, aliasMatch.index);
+    for (const ch of segment) {
+      if (ch === '?') {
+        finalParams.push(maskParams[maskParamIdx++]);
+      }
+    }
+    result += segment;
+    // Replace alias reference with parameterized placeholder
+    result += '?';
+    finalParams.push(val === null || val === undefined ? null : String(val));
+    cursor = aliasMatch.index + aliasMatch[0].length;
+  }
+
+  // Handle remaining text after last alias match
+  const remaining = stripped.substring(cursor);
+  for (const ch of remaining) {
+    if (ch === '?') {
+      finalParams.push(maskParams[maskParamIdx++]);
+    }
+  }
+  result += remaining;
+
+  return { sql: result, params: finalParams };
 }
 
 /**
@@ -1100,12 +1187,12 @@ async function checkValGranted(pool, db, grants, t, val, id = 0) {
       continue;
     }
 
-    // SQL mask check via fetchWhereForMask
-    const sqlExpr = fetchWhereForMask(t, val, mask);
-    if (sqlExpr === '') return undefined;
+    // SQL mask check via fetchWhereForMask (parameterized)
+    const { sql: maskSql, params: maskParams } = fetchWhereForMask(t, val, mask);
+    if (maskSql === '') return undefined;
 
     try {
-      const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+      const [rows] = await pool.query(`SELECT ${maskSql}`, maskParams);
       if (rows.length > 0) {
         const firstVal = rows[0][Object.keys(rows[0])[0]];
         if (firstVal) {
@@ -1162,9 +1249,9 @@ async function valBarredByMask(pool, db, grants, t, val) {
     if (mask === '') {
       // No level defined — required mask: value must match at least one such pattern
       reqMask = true;
-      const sqlExpr = fetchWhereForMask(t, val, grant);
+      const { sql: grantSql, params: grantParams } = fetchWhereForMask(t, val, grant);
       try {
-        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        const [rows] = await pool.query(`SELECT ${grantSql}`, grantParams);
         if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
           return false; // Value matches required mask — not barred
         }
@@ -1173,9 +1260,9 @@ async function valBarredByMask(pool, db, grants, t, val) {
       }
     } else {
       // Level defined — check if value matches the level pattern
-      const sqlExpr = fetchWhereForMask(t, val, mask);
+      const { sql: lvlSql, params: lvlParams } = fetchWhereForMask(t, val, mask);
       try {
-        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        const [rows] = await pool.query(`SELECT ${lvlSql}`, lvlParams);
         if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
           return grant !== 'WRITE'; // Barred unless grant key is "WRITE"
         }
@@ -1479,7 +1566,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
   curTyp = String(curTyp);
   const join = joinReq && joinReq !== '0' && joinReq !== 0;
   const db = ctx.db || '';
-  const z = db ? `\`${db}\`` : 'db';
+  const z = db ? sanitizeIdentifier(db) : 'db';
   let whereStr = '';
   let joinStr = '';
   const params = [];
@@ -2307,7 +2394,7 @@ async function recursiveDelete(pool, db, id) {
   for (let i = 0; i < idsToDelete.length; i += BATCH_DELETE_THRESHOLD) {
     const batch = idsToDelete.slice(i, i + BATCH_DELETE_THRESHOLD);
     const placeholders = batch.map(() => '?').join(',');
-    await execSql(pool, `DELETE FROM ${db} WHERE id IN (${placeholders})`, batch, { label: 'batchDeleteObjects', db });
+    await execSql(pool, `DELETE FROM ${sanitizeIdentifier(db)} WHERE id IN (${placeholders})`, batch, { label: 'batchDeleteObjects', db });
   }
 }
 
@@ -2319,8 +2406,9 @@ async function recursiveDelete(pool, db, id) {
  * @param {number[]} acc - accumulator array, mutated in-place
  */
 async function _collectDescendants(pool, db, parentId, acc) {
+  const z = sanitizeIdentifier(db);
   const [children] = await pool.query(
-    `SELECT id FROM ${db} WHERE up = ?`,
+    `SELECT id FROM ${z} WHERE up = ?`,
     [parentId]
   );
   for (const child of children) {
@@ -2340,8 +2428,9 @@ async function _collectDescendants(pool, db, parentId, acc) {
  * @returns {boolean} true if duplicate existed (and was cleaned up)
  */
 async function checkDuplicatedReqs(pool, db, parentId, typeId) {
+  const z = sanitizeIdentifier(db);
   const [rows] = await pool.query(
-    `SELECT id FROM ${db} WHERE up = ? AND t = ? ORDER BY id DESC`,
+    `SELECT id FROM ${z} WHERE up = ? AND t = ? ORDER BY id DESC`,
     [parentId, typeId]
   );
 
@@ -2441,8 +2530,9 @@ function removeDir(dirPath) {
  * @returns {boolean} true if reference is valid
  */
 async function checkNewRef(pool, db, refTypeId, value) {
+  const z = sanitizeIdentifier(db);
   const [rows] = await pool.query(
-    `SELECT 1 FROM ${db} WHERE id = ? AND t = ? LIMIT 1`,
+    `SELECT 1 FROM ${z} WHERE id = ? AND t = ? LIMIT 1`,
     [value, refTypeId]
   );
   return rows.length > 0;
@@ -4283,17 +4373,17 @@ router.get('/:db/:page*', async (req, res, next) => {
           const fm = k.match(/^F_(\d+)$/);
           if (fm && String(fm[1]) !== String(subId)) {
             if (!colFilterDict[fm[1]]) colFilterDict[fm[1]] = {};
-            colFilterDict[fm[1]].F = String(v);
+            colFilterDict[fm[1]].F = checkInjection(String(v));
           }
           const frm = k.match(/^FR_(\d+)$/);
           if (frm) {
             if (!colFilterDict[frm[1]]) colFilterDict[frm[1]] = {};
-            colFilterDict[frm[1]].FR = String(v);
+            colFilterDict[frm[1]].FR = checkInjection(String(v));
           }
           const tom = k.match(/^TO_(\d+)$/);
           if (tom) {
             if (!colFilterDict[tom[1]]) colFilterDict[tom[1]] = {};
-            colFilterDict[tom[1]].TO = String(v);
+            colFilterDict[tom[1]].TO = checkInjection(String(v));
           }
         }
 
@@ -5557,11 +5647,12 @@ function extractAttributes(body) {
 async function getNextOrder(db, parentId, typeId = null) {
   try {
     const pool = getPool();
-    let query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${db} WHERE up = ?`;
+    const z = sanitizeIdentifier(db);
+    let query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ?`;
     const params = [parentId];
 
     if (typeId !== null) {
-      query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${db} WHERE up = ? AND t = ?`;
+      query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ? AND t = ?`;
       params.push(typeId);
     }
 
@@ -5577,7 +5668,7 @@ async function getNextOrder(db, parentId, typeId = null) {
  */
 async function insertRow(db, parentId, order, typeId, value) {
   const pool = getPool();
-  const query = `INSERT INTO ${db} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
+  const query = `INSERT INTO ${sanitizeIdentifier(db)} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
   const [result] = await pool.query(query, [parentId, order, typeId, value]);
   return result.insertId;
 }
@@ -5624,7 +5715,7 @@ async function insertBatch(pool, db, rows, options = {}) {
  */
 async function updateRowValue(db, id, value) {
   const pool = getPool();
-  const query = `UPDATE ${db} SET val = ? WHERE id = ?`;
+  const query = `UPDATE ${sanitizeIdentifier(db)} SET val = ? WHERE id = ?`;
   const [result] = await pool.query(query, [value, id]);
   return result.affectedRows > 0;
 }
@@ -5634,7 +5725,7 @@ async function updateRowValue(db, id, value) {
  */
 async function deleteRow(db, id) {
   const pool = getPool();
-  const query = `DELETE FROM ${db} WHERE id = ?`;
+  const query = `DELETE FROM ${sanitizeIdentifier(db)} WHERE id = ?`;
   const [result] = await pool.query(query, [id]);
   return result.affectedRows > 0;
 }
@@ -5644,7 +5735,7 @@ async function deleteRow(db, id) {
  */
 async function deleteChildren(db, parentId) {
   const pool = getPool();
-  const query = `DELETE FROM ${db} WHERE up = ?`;
+  const query = `DELETE FROM ${sanitizeIdentifier(db)} WHERE up = ?`;
   const [result] = await pool.query(query, [parentId]);
   return result.affectedRows;
 }
@@ -5654,7 +5745,7 @@ async function deleteChildren(db, parentId) {
  */
 async function getObjectById(db, id) {
   const pool = getPool();
-  const query = `SELECT id, up, ord, t, val FROM ${db} WHERE id = ?`;
+  const query = `SELECT id, up, ord, t, val FROM ${sanitizeIdentifier(db)} WHERE id = ?`;
   const [rows] = await pool.query(query, [id]);
   return rows.length > 0 ? rows[0] : null;
 }
@@ -5664,7 +5755,7 @@ async function getObjectById(db, id) {
  */
 async function getRequisiteByType(db, parentId, typeId) {
   const pool = getPool();
-  const query = `SELECT id, val FROM ${db} WHERE up = ? AND t = ? LIMIT 1`;
+  const query = `SELECT id, val FROM ${sanitizeIdentifier(db)} WHERE up = ? AND t = ? LIMIT 1`;
   const [rows] = await pool.query(query, [parentId, typeId]);
   return rows.length > 0 ? rows[0] : null;
 }
@@ -7405,18 +7496,21 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     const pool = getPool();
     const id = parseInt(refId, 10);
     const searchQuery = req.query.q || '';
+    // Guard search input against SQL injection (Issue #308)
+    if (searchQuery) checkInjection(searchQuery);
     const restrictParam = req.query.r || '';
     const limitParam = Math.min(parseInt(req.query.LIMIT || req.query.limit || '80', 10) || 80, 500);
+    const z = sanitizeIdentifier(db);
 
     // Get the reference type info and its requisites (children)
     // PHP: dic = row["dic"] from the reference definition
     const [refRows] = await pool.query(
       `SELECT r.t AS dic, r.val AS attr, def_reqs.t, req_orig.t AS base,
               CASE WHEN base.id != base.t THEN 1 ELSE 0 END AS is_ref, req.id AS req_id
-       FROM ${db} r
-       JOIN ${db} dic ON dic.id = r.t
-       JOIN ${db} par ON par.id = r.up AND par.up = 0
-       LEFT JOIN ${db} def_reqs ON def_reqs.up = r.t
+       FROM ${z} r
+       JOIN ${z} dic ON dic.id = r.t
+       JOIN ${z} par ON par.id = r.up AND par.up = 0
+       LEFT JOIN ${z} def_reqs ON def_reqs.up = r.t
        LEFT JOIN ${db} req_orig ON req_orig.id = def_reqs.t
        LEFT JOIN ${db} base ON base.id = req_orig.t
        LEFT JOIN ${db} req ON req.up = dic.t AND req.t = def_reqs.t
@@ -10362,11 +10456,12 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       const expr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
 
       // Use constructWhere for DSL-style filters (from/to/eq translated to F/FR/TO)
+      // Guard filter values against SQL injection (Issue #308)
       const cwFilter = {};
-      if (filter.from !== undefined && filter.from !== '') cwFilter.FR = String(filter.from);
-      if (filter.to   !== undefined && filter.to   !== '') cwFilter.TO = String(filter.to);
-      if (filter.eq   !== undefined && filter.eq   !== '') cwFilter.F  = String(filter.eq);
-      if (filter.like !== undefined && filter.like !== '') cwFilter.F  = `%${filter.like}%`;
+      if (filter.from !== undefined && filter.from !== '') cwFilter.FR = checkInjection(String(filter.from));
+      if (filter.to   !== undefined && filter.to   !== '') cwFilter.TO = checkInjection(String(filter.to));
+      if (filter.eq   !== undefined && filter.eq   !== '') cwFilter.F  = checkInjection(String(filter.eq));
+      if (filter.like !== undefined && filter.like !== '') cwFilter.F  = `%${checkInjection(String(filter.like))}%`;
       // If from has DSL syntax (%, !, @, etc.) and no TO, treat as F (exact/LIKE filter)
       if (cwFilter.FR && !cwFilter.TO && !cwFilter.F) {
         const fv = cwFilter.FR;
@@ -13263,6 +13358,8 @@ export {
   constructWhere,
   formatDateForStorage,
   sendMail,
+  sanitizeIdentifier,
+  checkInjection,
 };
 
 export default router;
