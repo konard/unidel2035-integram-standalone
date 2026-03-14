@@ -2699,10 +2699,11 @@ async function legacyAuthMiddleware(req, res, next) {
     // PHP parity: uses TYPE.SECRET (130) for secret auth, TYPE.TOKEN (125) for token/cookie/header
     if (token) {
       const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
-                role_def.val role_val, role_def.id roleId
+                role_def.val role_val, role_def.id roleId, act.id act_id
          FROM ${db} u
          JOIN ${db} tok ON tok.up=u.id AND tok.t=${tokenType} AND tok.val=?
          LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
+         LEFT JOIN ${db} act ON act.up=u.id AND act.t=${TYPE.ACTIVITY}
          LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
            ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
          WHERE u.t=${TYPE.USER}
@@ -2713,13 +2714,28 @@ async function legacyAuthMiddleware(req, res, next) {
         const xsrf = user.xsrf_val || generateXsrf(token, user.uname || '', db);
         const roleId = user.roleId || 0;
 
-        // PHP parity: secret auth sets a session-only cookie (index.php:1120)
-        if (tokenType === TYPE.SECRET) {
-          res.cookie(db, token, { path: '/' }); // session cookie (no maxAge)
+        // PHP parity: if(!$row["r"]) my_die("No role assigned to user ...") — index.php:1187
+        if (!roleId) {
+          const locale = getLocale(req, db);
+          return res.status(200).json([{ error: t9n('[RU]Пользователю ' + (user.uname || '') + ' не задана роль[EN]No role assigned to user ' + (user.uname || ''), locale) }]);
         }
-        const grants = roleId ? await getGrants(pool, db, roleId, {
+
+        // PHP parity: update ACTIVITY timestamp on every authenticated request (index.php:1190-1193)
+        const actNow = String(Date.now() / 1000);
+        if (user.act_id) {
+          execSql(pool, `UPDATE \`${db}\` SET val = ? WHERE id = ?`, [actNow, user.act_id], { label: 'middleware_activity_update' }).catch(() => {});
+        } else {
+          execSql(pool, `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, 0, ${TYPE.ACTIVITY}, ?)`, [user.uid, actNow], { label: 'middleware_activity_insert' }).catch(() => {});
+        }
+
+        // PHP parity: secret auth — delete the cookie after validation (index.php:1194-1195)
+        // PHP: setcookie($z, "", time() - 3600, "/") — removes the password cookie
+        if (tokenType === TYPE.SECRET) {
+          res.clearCookie(db, { path: '/' });
+        }
+        const grants = await getGrants(pool, db, roleId, {
           username: user.uname, uid: user.uid, role: (user.role_val || '').toLowerCase(), roleId,
-        }) : {};
+        });
 
         req.legacyUser = {
           uid: user.uid,
