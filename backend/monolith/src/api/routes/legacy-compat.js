@@ -2182,24 +2182,65 @@ function legacyXsrfCheck(req, res, next) {
 }
 
 /**
+ * Check Types Grant — authorization gate for type/metadata operations.
+ * Port of PHP Check_Types_Grant() (index.php:967).
+ *
+ * Admin users always get 'WRITE'. Otherwise, checks grants[0] (the type-system
+ * grant at ID 0) for 'READ' or 'WRITE'. When fatal is true and the user lacks
+ * access, throws an object with status 403 so callers can translate it into an
+ * HTTP response.
+ *
+ * @param {Object} grants   - Loaded grants object (from loadGrants)
+ * @param {string} username - Current username
+ * @param {boolean} [fatal=true] - If true, throw on insufficient grant
+ * @returns {string|undefined} 'READ' or 'WRITE', or undefined when non-fatal and no grant
+ */
+function checkTypesGrant(grants, username, fatal = true) {
+  // Admin always has WRITE access — mirrors PHP: if($GLOBALS["GLOBAL_VARS"]["user"] == "admin") return "WRITE"
+  if (username && username.toLowerCase() === 'admin') {
+    return 'WRITE';
+  }
+
+  // Check grant ID 0 (type-system grant) — mirrors PHP: if(isset($GLOBALS["GRANTS"][0]))
+  if (grants && grants[0] !== undefined) {
+    if (grants[0] === 'READ' || grants[0] === 'WRITE') {
+      return grants[0];
+    }
+  }
+
+  // No valid grant found
+  if (fatal) {
+    const err = new Error('You do not have the grant to view and edit the metadata');
+    err.status = 403;
+    throw err;
+  }
+
+  return undefined;
+}
+
+/**
  * Legacy DDL grant check middleware.
  * Checks WRITE grant on types (root level, id=0, t=0) before any type modification.
+ * Uses checkTypesGrant() for PHP-parity authorization.
  *
- * PHP parity: PHP checks DDL grant before any type modification.
+ * PHP parity: PHP calls Check_Types_Grant() before any type modification.
  */
 async function legacyDdlGrantCheck(req, res, next) {
   const db = req.params.db;
   const { grants, username } = req.legacyUser || {};
 
   try {
-    const pool = getPool();
-    const locale = getLocale(req, db);
-    const hasGrant = await checkGrant(pool, db, grants || {}, 0, 0, 'WRITE', username || '');
-    if (!hasGrant) {
-      return res.status(200).json({ error: t9n('insufficient_type_mod', locale) });
+    const grantLevel = checkTypesGrant(grants || {}, username || '', true);
+    if (grantLevel !== 'WRITE') {
+      const locale = getLocale(req, db);
+      return res.status(403).json({ error: t9n('insufficient_type_mod', locale) });
     }
     next();
   } catch (error) {
+    if (error.status === 403) {
+      const locale = getLocale(req, db);
+      return res.status(403).json({ error: error.message });
+    }
     logger.error({ error: error.message, db }, '[legacyDdlGrantCheck] Error');
     const locale = getLocale(req, db);
     return res.status(200).json({ error: t9n('grant_check_failed', locale) });
@@ -13342,6 +13383,7 @@ router.post('/:db/:action', async (req, res) => {
 export {
   legacyAuthMiddleware,
   legacyXsrfCheck,
+  checkTypesGrant,
   legacyDdlGrantCheck,
   resolveBuiltIn,
   recursiveDelete,
