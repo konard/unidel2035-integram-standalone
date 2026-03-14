@@ -8422,6 +8422,12 @@ router.get('/:db/dir_admin', async (req, res) => {
  *     Defines an additional join expression
  */
 async function compileReport(pool, db, reportId) {
+  // PHP REP_COL_* sub-row type constants (children of each REP_COLS row)
+  const REP_COL_FUNC    = 63;   // aggregate / wrapper function (SUM, AVG, COUNT, etc.)
+  const REP_COL_TOTAL   = 65;   // totals row function
+  const REP_COL_FORMULA = 101;  // calculatable formula expression
+  const REP_COL_HIDE    = 107;  // hidden column flag
+
   const report = {
     id: reportId,
     header: '',
@@ -8435,6 +8441,7 @@ async function compileReport(pool, db, reportId) {
     totals: {},
     rownum: 0,
     parentType: 0,
+    hasAggregates: false,       // true when at least one column uses an aggregate function
   };
 
   try {
@@ -8489,6 +8496,38 @@ async function compileReport(pool, db, reportId) {
       });
     }
 
+    // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_FORMULA, REP_COL_HIDE, REP_COL_TOTAL ──
+    // These are child rows of each REP_COLS row with specific `t` values.
+    // PHP stores them in $GLOBALS["STORED_REPS"][$id][REP_COL_FUNC][$key], etc.
+    const AGGR_FUNCS = new Set(['AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'GROUP_CONCAT']);
+    if (report.columns.length > 0) {
+      const colIds = report.columns.map(c => c.id);
+      const colPh  = colIds.map(() => '?').join(',');
+      const [subRows] = await pool.query(
+        `SELECT up, t, val FROM \`${db}\`
+         WHERE up IN (${colPh}) AND t IN (${REP_COL_FUNC}, ${REP_COL_FORMULA}, ${REP_COL_HIDE}, ${REP_COL_TOTAL})`,
+        colIds
+      );
+      for (const sr of subRows) {
+        const col = report.columns.find(c => c.id === sr.up);
+        if (!col) continue;
+        const tNum = parseInt(sr.t, 10);
+        if (tNum === REP_COL_FUNC && sr.val) {
+          col.func = sr.val.trim().toUpperCase();
+          if (AGGR_FUNCS.has(col.func)) {
+            col.isAggregate = true;
+            report.hasAggregates = true;
+          }
+        } else if (tNum === REP_COL_FORMULA && sr.val) {
+          col.formula = sr.val.trim();
+        } else if (tNum === REP_COL_HIDE) {
+          col.hidden = true;
+        } else if (tNum === REP_COL_TOTAL && sr.val) {
+          col.totalFunc = sr.val.trim().toUpperCase();
+        }
+      }
+    }
+
     // Get REP_JOIN rows (explicit additional joins)
     const [joinRows] = await pool.query(
       `SELECT id, val, t FROM \`${db}\` WHERE up = ? AND t = ${TYPE.REP_JOIN}`,
@@ -8508,6 +8547,7 @@ async function compileReport(pool, db, reportId) {
       parentType: report.parentType,
       columns: report.columns.length,
       joins: report.joins.length,
+      hasAggregates: report.hasAggregates,
     });
 
   } catch (error) {
@@ -8539,16 +8579,50 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     // Always include the main object id and val
     const selectParts = ['a.id', 'a.val AS main_val', 'a.up', 'a.ord'];
     const joinParts   = [];
+    // Track which columns have aggregate functions (for GROUP BY construction)
+    const AGGR_FUNCS  = new Set(['AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'GROUP_CONCAT']);
 
     for (const col of report.columns) {
       if (!col.reqTypeId || isNaN(col.reqTypeId)) continue;
 
+      // Raw field expression before any function wrapping
+      const rawExpr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
+
+      // Handle REP_COL_FORMULA: replace [THIS] with the raw field reference
+      let fieldExpr = rawExpr;
+      if (col.formula) {
+        if (col.formula.includes('[THIS]')) {
+          fieldExpr = col.formula.replace(/\[THIS\]/g, rawExpr);
+        } else {
+          // Pure formula (calculatable column) — use formula as-is
+          fieldExpr = col.formula;
+        }
+      }
+
+      // Wrap in aggregate / wrapper function if REP_COL_FUNC is set
+      // PHP: if func is in aggr_funcs → wrap + mark as aggregate; otherwise wrap but no grouping
+      if (col.func && AGGR_FUNCS.has(col.func)) {
+        const bt = REV_BASE_TYPE[col.baseType] || 'SHORT';
+        if (col.func === 'GROUP_CONCAT') {
+          fieldExpr = `GROUP_CONCAT(DISTINCT ${fieldExpr})`;
+        } else if (bt === 'NUMBER' || bt === 'SIGNED' || bt === 'DATETIME') {
+          fieldExpr = `${col.func}(CAST(${fieldExpr} AS DOUBLE))`;
+        } else {
+          fieldExpr = `${col.func}(${fieldExpr})`;
+        }
+      } else if (col.func) {
+        // Non-aggregate function (e.g. LENGTH, UPPER) — just wrap
+        fieldExpr = `${col.func}(${fieldExpr})`;
+      }
+
+      // Store resolved expression on column for ORDER BY / GROUP BY reference
+      col._resolvedExpr = fieldExpr;
+      col._rawExpr      = rawExpr;
+
       if (col.isMainCol) {
-        // This column IS the main type itself → map to a.val, no extra join
-        selectParts.push(`a.val AS \`${col.alias}\``);
+        selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
       } else {
-        // LEFT JOIN for each requisite column
-        selectParts.push(`\`${col.alias}\`.val AS \`${col.alias}\``);
+        selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
         joinParts.push(
           `LEFT JOIN \`${db}\` \`${col.alias}\`` +
           ` ON \`${col.alias}\`.up = a.id AND \`${col.alias}\`.t = ${col.reqTypeId}`
@@ -8640,20 +8714,51 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
         const colId = parseInt(desc ? part.trim().slice(1) : part.trim(), 10);
         const col   = report.columns.find(c => c.id === colId);
         if (!col) return null;
-        const expr  = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
+        // When column has an aggregate function, ORDER BY must use the aggregate
+        // expression (MySQL requirement: can't ORDER BY raw column not in GROUP BY)
+        const expr  = col._resolvedExpr || (col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`);
         return `${expr} ${desc ? 'DESC' : 'ASC'}`;
       }).filter(Boolean);
       if (orderParts.length > 0) orderClause = orderParts.join(', ');
     }
 
-    const sql = [
+    // ── GROUP BY (when report has aggregate functions) ──────────────────
+    // PHP: iterate all fields; those NOT aggregated and NOT hidden go into GROUP BY.
+    // Calculatable columns whose formula already contains an aggregate function
+    // (e.g. SUM(...), COUNT(...)) are also excluded from GROUP BY.
+    let groupByClause = '';
+    if (report.hasAggregates) {
+      const groupParts = [];
+      // Always group by the main object structural columns when aggregating
+      // (unless the report is purely aggregated — in that case we group by
+      // whichever non-aggregated columns exist)
+      for (const col of report.columns) {
+        if (col.hidden) continue;                              // hidden → skip
+        if (col.isAggregate) continue;                         // aggregate func → skip
+        // Calculatable column whose formula itself contains an aggregate call → skip
+        if (col.formula && /\b(SUM|AVG|COUNT|MIN|MAX|GROUP_CONCAT)\s*\(/i.test(col.formula)) continue;
+
+        // Use the raw (unwrapped) expression for GROUP BY
+        const expr = col._rawExpr || (col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`);
+        groupParts.push(expr);
+      }
+      if (groupParts.length > 0) {
+        groupByClause = `GROUP BY ${groupParts.join(', ')}`;
+      }
+      logger.debug('[Report] GROUP BY', { groupByClause });
+    }
+
+    const sqlParts = [
       `SELECT ${selectParts.join(', ')}`,
       `FROM \`${db}\` a`,
       ...joinParts,
       `WHERE ${whereParts.join(' AND ')}`,
-      `ORDER BY ${orderClause}`,
-      `LIMIT ${lim} OFFSET ${off}`,
-    ].join('\n');
+    ];
+    if (groupByClause) sqlParts.push(groupByClause);
+    sqlParts.push(`ORDER BY ${orderClause}`);
+    sqlParts.push(`LIMIT ${lim} OFFSET ${off}`);
+
+    const sql = sqlParts.join('\n');
 
     logger.debug('[Report] SQL', { sql });
 
@@ -8674,12 +8779,24 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     results.rownum = results.data.length;
 
     // ── Totals for numeric columns ─────────────────────────────────────────
+    // PHP supports per-column total functions via REP_COL_TOTAL (t=65).
+    // Default for numeric columns: SUM. If totalFunc is set, use that instead.
     for (const col of report.columns) {
       const bt = REV_BASE_TYPE[col.baseType];
-      if (bt === 'NUMBER' || bt === 'SIGNED') {
-        let total = 0;
-        for (const row of results.data) total += parseFloat(row[col.alias]) || 0;
-        results.totals[col.alias] = total;
+      const fn = col.totalFunc;  // explicit total function from report definition
+      if (fn || bt === 'NUMBER' || bt === 'SIGNED') {
+        const func = (fn || 'SUM').toUpperCase();
+        const vals = results.data.map(row => parseFloat(row[col.alias]) || 0);
+        if (vals.length === 0) { results.totals[col.alias] = 0; continue; }
+        switch (func) {
+          case 'SUM':           results.totals[col.alias] = vals.reduce((a, b) => a + b, 0); break;
+          case 'AVG':           results.totals[col.alias] = vals.reduce((a, b) => a + b, 0) / vals.length; break;
+          case 'MIN':           results.totals[col.alias] = Math.min(...vals); break;
+          case 'MAX':           results.totals[col.alias] = Math.max(...vals); break;
+          case 'COUNT':         results.totals[col.alias] = vals.length; break;
+          case 'GROUP_CONCAT':  results.totals[col.alias] = results.data.map(r => r[col.alias]).filter(Boolean).join(','); break;
+          default:              results.totals[col.alias] = vals.reduce((a, b) => a + b, 0); break;
+        }
       }
     }
 
@@ -8784,6 +8901,45 @@ router.all('/:db/report/:reportId?', async (req, res) => {
 
         if (Object.keys(filter).length > 0) {
           filters[col.alias] = filter;
+        }
+      }
+
+      // PHP parity: handle TOTALS request parameter (e.g. "colId:SUM,colId2:AVG")
+      // This overrides per-column total functions at runtime.
+      if (params.TOTALS) {
+        const AGGR_VALID = new Set(['AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'GROUP_CONCAT']);
+        for (const entry of String(params.TOTALS).split(',')) {
+          const [colRef, funcName] = entry.split(':');
+          if (!colRef || !funcName) continue;
+          const fn = funcName.trim().toUpperCase();
+          if (!AGGR_VALID.has(fn)) continue;
+          // colRef can be a column id or name
+          const col = report.columns.find(c =>
+            String(c.id) === colRef || c.name === colRef || c.alias === colRef
+          );
+          if (col) col.totalFunc = fn;
+        }
+      }
+
+      // PHP parity: handle SELECT request parameter with inline functions
+      // (e.g. "colId:SUM,colId2:AVG") — sets REP_COL_FUNC at runtime
+      if (params.SELECT) {
+        const AGGR_VALID = new Set(['AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'GROUP_CONCAT']);
+        for (const entry of String(params.SELECT).replace(/\\,/g, '\x00').split(',')) {
+          const parts = entry.replace(/\x00/g, ',').replace(/\\:/g, '\x01').split(':');
+          const colRef  = (parts[0] || '').replace(/\x01/g, ':').trim();
+          const funcStr = (parts[1] || '').replace(/\x01/g, ':').trim().toUpperCase();
+          if (!colRef || !funcStr) continue;
+          const col = report.columns.find(c =>
+            String(c.id) === colRef || c.name === colRef || c.alias === colRef
+          );
+          if (col) {
+            col.func = funcStr;
+            if (AGGR_VALID.has(funcStr)) {
+              col.isAggregate = true;
+              report.hasAggregates = true;
+            }
+          }
         }
       }
 
