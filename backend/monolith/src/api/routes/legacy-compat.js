@@ -2167,16 +2167,24 @@ async function checkNewRef(pool, db, refTypeId, value) {
  * @param {number} dstId - destination object ID
  */
 async function populateReqs(pool, db, srcId, dstId) {
+  // PHP parity: SELECT with sub-query to detect children (ch column)
+  // Reqs with children or FILE type need individual INSERT (for insertId),
+  // leaf reqs are batched via insertBatch() for performance.
   const [children] = await pool.query(
-    `SELECT r.id, r.t, r.val, r.ord, typ.t AS base_t FROM \`${db}\` r
+    `SELECT r.id, r.t, r.val, r.ord, typ.t AS base_t,
+            (SELECT 1 FROM \`${db}\` ch WHERE ch.up = r.id LIMIT 1) AS ch
+     FROM \`${db}\` r
      LEFT JOIN \`${db}\` typ ON typ.id = r.t
      WHERE r.up = ? ORDER BY r.ord`,
     [srcId]
   );
 
   const uploadDir = path.join(legacyPath, 'download', db);
+  const batchRows = []; // accumulate leaf reqs for batch insert
+
   for (const child of children) {
     let copiedVal = child.val;
+
     // For FILE-type requisites, physically copy the file to avoid shared reference
     if (child.base_t === TYPE.FILE && child.val && child.val.length > 0) {
       const srcFile = path.join(uploadDir, path.basename(child.val));
@@ -2192,13 +2200,28 @@ async function populateReqs(pool, db, srcId, dstId) {
           logger.warn('[Legacy populateReqs] File copy failed', { srcFile, error: copyErr.message });
         }
       }
+      // FILE reqs need insertId for file naming — individual INSERT
+      const [insertResult] = await pool.query(
+        `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
+        [dstId, child.ord, child.t, copiedVal]
+      );
+      await populateReqs(pool, db, child.id, insertResult.insertId);
+    } else if (child.ch === 1) {
+      // Req has children — need insertId for recursion, individual INSERT
+      const [insertResult] = await pool.query(
+        `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
+        [dstId, child.ord, child.t, copiedVal]
+      );
+      await populateReqs(pool, db, child.id, insertResult.insertId);
+    } else {
+      // Leaf req — accumulate for batch insert (PHP: Insert_batch)
+      batchRows.push([dstId, child.ord, child.t, copiedVal]);
     }
-    const [insertResult] = await pool.query(
-      `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
-      [dstId, child.ord, child.t, copiedVal]
-    );
-    // Recurse into children of this child
-    await populateReqs(pool, db, child.id, insertResult.insertId);
+  }
+
+  // Flush accumulated leaf reqs in one batch INSERT
+  if (batchRows.length > 0) {
+    await insertBatch(pool, db, batchRows);
   }
 }
 
@@ -5123,6 +5146,43 @@ async function insertRow(db, parentId, order, typeId, value) {
   const query = `INSERT INTO ${db} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
   const [result] = await pool.query(query, [parentId, order, typeId, value]);
   return result.insertId;
+}
+
+/**
+ * Batch INSERT for restore and bulk import — PHP parity: Insert_batch()
+ * PHP reference: index.php lines 7034–7052
+ *
+ * Accumulates rows and flushes them in a single multi-row INSERT statement
+ * for significantly better performance during restore/import/copy operations.
+ *
+ * @param {Object} pool    - MySQL connection pool
+ * @param {string} db      - database (table) name
+ * @param {Array<Array>} rows - array of [up, ord, t, val] tuples
+ * @param {Object} [options]
+ * @param {number} [options.batchSize=1000] - max rows per INSERT statement
+ * @param {string} [options.columns='up, ord, t, val'] - column list
+ * @param {boolean} [options.ignore=false] - use INSERT IGNORE
+ * @returns {Promise<number>} total number of inserted rows
+ */
+async function insertBatch(pool, db, rows, options = {}) {
+  if (!rows || rows.length === 0) return 0;
+  const {
+    batchSize = 1000,
+    columns = 'up, ord, t, val',
+    ignore = false,
+  } = options;
+  const ignoreKw = ignore ? ' IGNORE' : '';
+  let totalInserted = 0;
+
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+    const [result] = await pool.query(
+      `INSERT${ignoreKw} INTO \`${db}\` (${columns}) VALUES ?`,
+      [batch]
+    );
+    totalInserted += result.affectedRows;
+  }
+  return totalInserted;
 }
 
 /**
@@ -11558,15 +11618,11 @@ router.post('/:db/restore', (req, res, next) => {
       return res.send(sqlLines.join('\n\n'));
     }
 
-    // Execute in batches of 1000
-    const BATCH = 1000;
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH);
-      await pool.query(
-        `INSERT IGNORE INTO \`${db}\` (\`id\`, \`t\`, \`up\`, \`ord\`, \`val\`) VALUES ?`,
-        [batch]
-      );
-    }
+    // Execute in batches using insertBatch utility
+    await insertBatch(pool, db, rows, {
+      columns: '`id`, `t`, `up`, `ord`, `val`',
+      ignore: true,
+    });
 
     logger.info('[Legacy restore] Import completed', { db, rowCount: rows.length });
     res.json({ status: 'Ok', rows: rows.length });
