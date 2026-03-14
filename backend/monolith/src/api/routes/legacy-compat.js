@@ -8716,9 +8716,16 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     }
 
     // 4. Not duplicate — check if requisite of this type already exists
+    // PHP (index.php:8565-8569): when duplicate found, return existing id with warning, not error
     const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? LIMIT 1`, [parentId, reqType], { label: 'post_db_d_req_typeId_select' });
     if (dupeRows.length > 0) {
-      return res.status(200).json([{ error: `Requisite of type ${reqType} already exists on type ${parentId}` }]);
+      return legacyRespond(req, res, db, {
+        id: dupeRows[0].id,
+        obj: parentId,
+        next_act: 'edit_types',
+        args: 'ext',
+        warnings: 'Requisite already exists'
+      });
     }
 
     // 5. MULTI_MASK auto-application (PHP parity: index.php ~8575)
@@ -9469,7 +9476,7 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
 
     if (rows.length === 0) {
       // PHP returns HTTP 200 with error JSON, not 404
-      return res.status(200).json([{ error: 'not found' }]);
+      return res.status(200).json([{ error: 'Object not found' }]);
     }
 
     // Build response matching PHP format (line 8838-8857)
