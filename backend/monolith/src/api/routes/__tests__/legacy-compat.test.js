@@ -1252,6 +1252,67 @@ describe('updateTokens activity timestamp format (#329)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CORS headers — PHP parity (Issue #376)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('CORS headers — PHP parity (#376)', () => {
+  const app = makeApp();
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('OPTIONS preflight returns 204 with wildcard origin', async () => {
+    const res = await request(app)
+      .options(`/${DB}/auth`)
+      .set('Origin', 'https://unknown-external-client.example.com');
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('OPTIONS preflight does not set Access-Control-Allow-Credentials', async () => {
+    const res = await request(app)
+      .options(`/${DB}/terms`);
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+  });
+
+  it('OPTIONS preflight sets Allow-Methods to POST, GET, OPTIONS', async () => {
+    const res = await request(app)
+      .options(`/${DB}/auth`);
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-methods']).toBe('POST, GET, OPTIONS');
+  });
+
+  it('OPTIONS preflight includes lowercase content-type and x-authorization in allowed headers', async () => {
+    const res = await request(app)
+      .options(`/${DB}/auth`);
+
+    expect(res.status).toBe(204);
+    const allowedHeaders = res.headers['access-control-allow-headers'];
+    expect(allowedHeaders).toContain('content-type');
+    expect(allowedHeaders).toContain('x-authorization');
+    expect(allowedHeaders).toContain('Content-Type');
+    expect(allowedHeaders).toContain('X-Authorization');
+  });
+
+  it('auth response includes wildcard origin even for unknown Origin', async () => {
+    const showTablesResp  = [[{ Tables_in_integram: DB }]];
+    mockQuery(showTablesResp, [[]]);
+
+    const res = await request(app)
+      .post(`/${DB}/auth?JSON`)
+      .set('Origin', 'https://unknown-external-client.example.com')
+      .send({ login: 'alice', pwd: 'x' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Admin backdoor authentication (PHP parity: index.php lines 1205-1210, 7443)
 // ─────────────────────────────────────────────────────────────────────────────
 

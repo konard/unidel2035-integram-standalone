@@ -265,6 +265,33 @@ router.use((req, res, next) => {
 // This middleware ensures all JSON responses have keys sorted alphabetically.
 router.use(phpJsonMiddleware());
 
+// ── PHP-parity CORS headers (Issue #376) ─────────────────────────────────────
+// PHP sets `Access-Control-Allow-Origin: *` on every response (index.php:5-7).
+// The global `ensureCorsHeaders` middleware (securityHeaders.js) replaces this
+// with a domain whitelist, breaking external clients that rely on the wildcard.
+//
+// For legacy-compat routes we override the CORS headers to match PHP exactly:
+//   - Origin: * (any origin)
+//   - No Access-Control-Allow-Credentials (PHP never sets it)
+//   - Methods: POST, GET, OPTIONS (PHP original set)
+//   - Headers: include lowercase variants (x-authorization, content-type)
+//
+// The whitelist CORS policy remains active for /api/* routes.
+router.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.removeHeader('Access-Control-Allow-Credentials');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'X-Authorization, x-authorization, Content-Type, content-type, Origin, Authorization, authorization'
+  );
+
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
 // PHP api_dump() headers middleware (Issue #382)
 // PHP's api_dump() (index.php:7448) calls sendJsonHeaders() which sets
 // Content-Disposition and Content-Transfer-Encoding on ALL JSON responses.
