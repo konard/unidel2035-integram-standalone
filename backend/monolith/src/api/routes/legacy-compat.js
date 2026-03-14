@@ -14,6 +14,7 @@ import cookieParser from 'cookie-parser';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { phpJsonMiddleware } from '../../utils/jsonSortKeys.js';
+import { isAbnPostProcessFunction, applyAbnFunction, isAbnFunction, ABN_SQL_FIELD_FUNCS } from '../utils/report-functions.js';
 
 const router = express.Router();
 
@@ -8447,8 +8448,16 @@ async function buildReportSubquerySQL(pool, db, report, depth = 0) {
       } else {
         fieldExpr = `${col.func}(${fieldExpr})`;
       }
-    } else if (col.func) {
+    } else if (col.func && !isAbnFunction(col.func)) {
+      // Skip abn_* functions — they are post-processing, not SQL functions
       fieldExpr = `${col.func}(${fieldExpr})`;
+    } else if (col.func && ABN_SQL_FIELD_FUNCS.has(col.func.toUpperCase())) {
+      // SQL-level abn_* functions that change which column is selected
+      const upper = col.func.toUpperCase();
+      if (upper === 'ABN_ID')       fieldExpr = col.isMainCol ? 'a.id'  : `\`${col.alias}\`.id`;
+      else if (upper === 'ABN_UP')  fieldExpr = col.isMainCol ? 'a.up'  : `\`${col.alias}\`.up`;
+      else if (upper === 'ABN_TYP') fieldExpr = col.isMainCol ? 'a.t'   : `\`${col.alias}\`.t`;
+      else if (upper === 'ABN_ORD') fieldExpr = col.isMainCol ? 'a.ord' : `\`${col.alias}\`.ord`;
     }
 
     selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
@@ -8766,9 +8775,17 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
         } else {
           fieldExpr = `${col.func}(${fieldExpr})`;
         }
-      } else if (col.func) {
+      } else if (col.func && !isAbnFunction(col.func)) {
         // Non-aggregate function (e.g. LENGTH, UPPER) — just wrap
+        // Skip abn_* functions — they are post-processing, not SQL functions
         fieldExpr = `${col.func}(${fieldExpr})`;
+      } else if (col.func && ABN_SQL_FIELD_FUNCS.has(col.func.toUpperCase())) {
+        // SQL-level abn_* functions that change which column is selected
+        const upper = col.func.toUpperCase();
+        if (upper === 'ABN_ID')       fieldExpr = col.isMainCol ? 'a.id'  : `\`${col.alias}\`.id`;
+        else if (upper === 'ABN_UP')  fieldExpr = col.isMainCol ? 'a.up'  : `\`${col.alias}\`.up`;
+        else if (upper === 'ABN_TYP') fieldExpr = col.isMainCol ? 'a.t'   : `\`${col.alias}\`.t`;
+        else if (upper === 'ABN_ORD') fieldExpr = col.isMainCol ? 'a.ord' : `\`${col.alias}\`.ord`;
       }
 
       // Store resolved expression on column for ORDER BY / GROUP BY reference
@@ -8926,13 +8943,25 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     const [rows] = await pool.query(sql, whereParams);
 
     // ── Map rows → named output ───────────────────────────────────────────
+    // Collect columns that need abn_* post-processing (PHP parity: index.php:3364)
+    const abnPostCols = report.columns.filter(c => c.func && isAbnPostProcessFunction(c.func));
+    let rownum = 1;
     results.data = rows.map(row => {
       const out = { id: row.id, val: row.main_val };
       for (const col of report.columns) {
-        out[col.alias] = row[col.alias] ?? '';
+        let cellVal = row[col.alias] ?? '';
+        // abn_ROWNUM: sequential row number (not from DB)
+        if (col.func && col.func.toUpperCase() === 'ABN_ROWNUM') {
+          cellVal = rownum++;
+        }
+        out[col.alias] = cellVal;
         // Companion ID value for {name}ID columns (used by smartq.js for obj-id / ref-id attributes)
         if (col.isMainCol)      out[col.alias + '_id'] = row.id;
         else if (col.isRef)     out[col.alias + '_id'] = row[col.alias] ?? '';
+      }
+      // Apply abn_* post-processing functions (abn_DATE2STR, abn_NUM2STR, etc.)
+      for (const col of abnPostCols) {
+        out[col.alias] = applyAbnFunction(col.func, out[col.alias]);
       }
       return out;
     });
