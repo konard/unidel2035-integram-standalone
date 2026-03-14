@@ -295,6 +295,15 @@ router.use((req, res, next) => {
   next();
 });
 
+// ── OPTIONS preflight — PHP parity (Issue #378) ─────────────────────────────
+// PHP (index.php:242-246) returns 200 with Allow + Content-Length: 0.
+// The cors middleware returns 204 with no Allow header; override it here.
+router.options('*', (req, res) => {
+  res.set('Allow', 'GET,POST,OPTIONS');
+  res.set('Content-Length', '0');
+  res.status(200).end();
+});
+
 // Issue #390: Relax Helmet security headers for legacy routes to match PHP behavior.
 // PHP set no security headers at all, so clients may embed the application in iframes.
 // Helmet sets X-Frame-Options: DENY globally, which breaks iframe embedding.
