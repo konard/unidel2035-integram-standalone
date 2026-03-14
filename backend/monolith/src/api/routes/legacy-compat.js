@@ -490,6 +490,14 @@ const TYPE = {
   TOKEN: 125,
   SECRET: 130,
 
+  REP_HREFS: 95,
+  REP_URL: 97,
+  REP_IFNULL: 113,
+  REP_LIMIT: 134,
+  REP_WHERE: 262,
+  REP_ALIAS: 265,
+  REP_JOIN_ON: 266,
+
   CONNECT: 226,
   SETTINGS: 269,
   DATABASE: 271,
@@ -1872,6 +1880,28 @@ function resolveMaskBuiltIn(val, userCtx) {
   }
 
   return val.replace(/(\[.+\])/, resolved);
+}
+
+/**
+ * Resolve ALL bracket-syntax BuiltIn placeholders in a string.
+ * Unlike resolveMaskBuiltIn (which handles a single placeholder for mask values),
+ * this handles multiple [PLACEHOLDER] occurrences in SQL or filter strings.
+ * PHP parity: index.php:2727-2751 uses preg_match_all + loop.
+ *
+ * @param {string} val - String with potential [PLACEHOLDER] patterns
+ * @param {Object} userCtx - User context { username, uid, role, roleId, tzone, ip }
+ * @returns {string} String with all known placeholders resolved
+ */
+function resolveAllBracketBuiltIns(val, userCtx) {
+  if (!val || typeof val !== 'string') return val || '';
+
+  // Match individual [WORD] patterns (PHP: /(\[[0-9a-zA-Z\_]+\])/ims)
+  return val.replace(/\[([0-9a-zA-Z_]+)\]/g, (match) => {
+    // Try resolving via resolveMaskBuiltIn (handles known placeholders)
+    const resolved = resolveMaskBuiltIn(match, userCtx);
+    // If it resolved (changed), return the resolved value; otherwise keep original
+    return resolved !== match ? resolved : match;
+  });
 }
 
 /**
@@ -8601,6 +8631,8 @@ async function compileReport(pool, db, reportId) {
     rownum: 0,
     parentType: 0,
     hasAggregates: false,       // true when at least one column uses an aggregate function
+    params: {},                 // PHP: $GLOBALS["STORED_REPS"][$id]["params"] — keyed by type id (e.g. 262 = REP_WHERE)
+    repParams: {},              // PHP: $GLOBALS["STORED_REPS"][$id]["rep_params"] — keyed by param name
   };
 
   try {
@@ -8753,6 +8785,54 @@ async function compileReport(pool, db, reportId) {
       });
     }
 
+    // ── Load stored report parameters (REP_WHERE, REP_IFNULL, REP_LIMIT, etc.) ──
+    // PHP: sub-rows of the report with t values like 262 (REP_WHERE), 113 (REP_IFNULL), etc.
+    // These are child rows where col/t is NOT REP_COLS (28) and NOT REP_JOIN (44),
+    // and the row has no base type (not a column definition).
+    // PHP query at index.php:1784 loads everything under rep.up=$id, then categorizes:
+    //   - if jn == REP_JOIN → join
+    //   - if base || id → column
+    //   - else → param (keyed by col = the type id, e.g. 262)
+    // We load param-type rows: children of the report whose t is one of the known param types.
+    const PARAM_TYPES = [
+      TYPE.REP_WHERE,    // 262
+      TYPE.REP_IFNULL,   // 113
+      TYPE.REP_LIMIT,    // 134
+      TYPE.REP_HREFS,    // 95
+      TYPE.REP_URL,      // 97
+      TYPE.REP_ALIAS,    // 265
+      TYPE.REP_JOIN_ON,  // 266
+    ];
+    const paramPh = PARAM_TYPES.map(() => '?').join(',');
+    const [paramRows] = await pool.query(
+      `SELECT r.t, r.val, r.ord,
+              COALESCE(def_orig.val, def.val) AS param_name
+       FROM \`${db}\` r
+       LEFT JOIN \`${db}\` def ON def.id = r.t AND r.t != ${TYPE.REP_COLS}
+       LEFT JOIN \`${db}\` def_orig ON def_orig.id = def.t
+       WHERE r.up = ? AND r.t IN (${paramPh})
+       ORDER BY r.ord`,
+      [reportId, ...PARAM_TYPES]
+    );
+    for (const pr of paramRows) {
+      const typeId = parseInt(pr.t, 10);
+      const val = pr.val || '';
+      // PHP concatenates values for the same param type (multi-row params / tail rows)
+      if (report.params[typeId] !== undefined) {
+        report.params[typeId] += val;
+      } else {
+        report.params[typeId] = val;
+      }
+      // Also store by param name (PHP: rep_params keyed by resolved type name)
+      if (pr.param_name) {
+        if (report.repParams[pr.param_name] !== undefined) {
+          report.repParams[pr.param_name] += val;
+        } else {
+          report.repParams[pr.param_name] = val;
+        }
+      }
+    }
+
     logger.debug('[Report] Compiled report', {
       db, reportId,
       parentType: report.parentType,
@@ -8760,6 +8840,8 @@ async function compileReport(pool, db, reportId) {
       joins: report.joins.length,
       hasAggregates: report.hasAggregates,
       multiColumns: report.columns.filter(c => c.isMulti).map(c => c.alias),
+      storedWhere: report.params[TYPE.REP_WHERE] || null,
+      storedParams: Object.keys(report.repParams),
     });
 
   } catch (error) {
@@ -8778,7 +8860,7 @@ async function compileReport(pool, db, reportId) {
  *
  * Filters: keys are column aliases or names; values are {from, to, eq, like}.
  */
-async function executeReport(pool, db, report, filters = {}, limit = 100, offset = 0, orderParam = null, _subqueryDepth = 0) {
+async function executeReport(pool, db, report, filters = {}, limit = 100, offset = 0, orderParam = null, _subqueryDepth = 0, userCtx = null) {
   const results = { data: [], totals: {}, rownum: 0 };
 
   try {
@@ -8940,6 +9022,31 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       }
     }
 
+    // ── Stored WHERE filter (REP_WHERE) — PHP parity (index.php:2723-2725) ──
+    // PHP: if request WHERE param is set, use it; otherwise use stored REP_WHERE from report metadata.
+    // The WHERE clause is also run through BuiltIn placeholder substitution.
+    {
+      const requestWhere = filters._where || null;  // allow caller to pass explicit WHERE
+      const storedWhere  = report.params[TYPE.REP_WHERE] || null;
+      let rawWhere = requestWhere || storedWhere;
+      if (rawWhere && typeof rawWhere === 'string' && rawWhere.trim().length > 0) {
+        rawWhere = rawWhere.trim();
+        // Resolve BuiltIn placeholders: [TODAY], [USER], %USER%, %DATE%, etc.
+        // PHP resolves both bracket syntax ([TODAY]) and percent syntax (%USER%) in filters
+        if (userCtx) {
+          rawWhere = resolveAllBracketBuiltIns(rawWhere, userCtx);
+          rawWhere = resolveBuiltIn(rawWhere, userCtx, db, userCtx.tzone || 0, userCtx.ip || '');
+        }
+        // PHP: prepend "AND" if the stored WHERE doesn't already start with AND
+        if (rawWhere.substring(0, 3).toUpperCase() === 'AND') {
+          whereParts.push(rawWhere.substring(3).trim());
+        } else {
+          whereParts.push(rawWhere);
+        }
+        logger.debug('[Report] Applied stored/request WHERE', { reportId: report.id, rawWhere });
+      }
+    }
+
     const lim = Math.min(parseInt(limit, 10)  || 100, 10000);
     const off = Math.max(parseInt(offset, 10) || 0,   0);
 
@@ -9002,6 +9109,14 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     // PHP lines 2941-3021: scan all SQL parts for [report_name] patterns,
     // compile the referenced report, and replace with (subquery_sql).
     sql = await resolveReportSubqueries(pool, db, sql, _subqueryDepth);
+
+    // ── BuiltIn placeholder substitution in full SQL (PHP parity: index.php:2727-2751) ──
+    // PHP resolves [PLACEHOLDER] bracket-syntax and %PLACEHOLDER% percent-syntax in
+    // both SELECT fields and WHERE filter after assembly.
+    if (userCtx) {
+      sql = resolveAllBracketBuiltIns(sql, userCtx);
+      sql = resolveBuiltIn(sql, userCtx, db, userCtx.tzone || 0, userCtx.ip || '');
+    }
 
     logger.debug('[Report] SQL', { sql });
 
@@ -9229,8 +9344,23 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         offset = parseInt(params.F || params.offset || 0, 10);
       }
 
+      // PHP parity: ?WHERE= request parameter overrides stored REP_WHERE
+      if (params.WHERE) {
+        filters._where = params.WHERE;
+      }
+
+      // Build user context for BuiltIn placeholder substitution in stored WHERE
+      const reportUserCtx = req.legacyUser ? {
+        username: req.legacyUser.username || username || '',
+        uid: req.legacyUser.uid || '',
+        role: req.legacyUser.role || '',
+        roleId: req.legacyUser.roleId || '',
+        tzone: req.legacyUser.tzone || 0,
+        ip: req.ip || '',
+      } : null;
+
       const orderParam = params.ORDER || params.order || null;
-      const results = await executeReport(pool, db, report, filters, limit, offset, orderParam);
+      const results = await executeReport(pool, db, report, filters, limit, offset, orderParam, 0, reportUserCtx);
 
       // Format data for display
       const formattedData = results.data.map(row => {
@@ -9248,7 +9378,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       // RECORD_COUNT: smartq.js calls ?JSON&RECORD_COUNT → {count: N}
       if (req.query.RECORD_COUNT !== undefined) {
         // Fetch all matching rows to get true count (no LIMIT)
-        const cntResults = await executeReport(pool, db, report, filters, 999999, 0, null);
+        const cntResults = await executeReport(pool, db, report, filters, 999999, 0, null, 0, reportUserCtx);
         return res.json({ count: cntResults.rownum });
       }
 
@@ -10484,13 +10614,27 @@ router.post('/:db', async (req, res, next) => {
       offset = parseInt(params.F || params.offset || 0, 10);
     }
 
-    const results = await executeReport(pool, db, report, filters, limit, offset);
+    // PHP parity: ?WHERE= request parameter overrides stored REP_WHERE
+    if (params.WHERE) {
+      filters._where = params.WHERE;
+    }
+    // Build user context for BuiltIn placeholder substitution in stored WHERE
+    const reportUserCtx = req.legacyUser ? {
+      username: req.legacyUser.username || '',
+      uid: req.legacyUser.uid || '',
+      role: req.legacyUser.role || '',
+      roleId: req.legacyUser.roleId || '',
+      tzone: req.legacyUser.tzone || 0,
+      ip: req.ip || '',
+    } : null;
+
+    const results = await executeReport(pool, db, report, filters, limit, offset, null, 0, reportUserCtx);
 
     const q = req.query;
 
     // RECORD_COUNT: smartq.js calls ?JSON&RECORD_COUNT → {count: N}
     if (q.RECORD_COUNT !== undefined) {
-      const cntResults = await executeReport(pool, db, report, filters, 999999, 0);
+      const cntResults = await executeReport(pool, db, report, filters, 999999, 0, null, 0, reportUserCtx);
       return res.json({ count: cntResults.rownum });
     }
 
