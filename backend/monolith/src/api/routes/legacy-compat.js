@@ -6762,7 +6762,8 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     const name = req.body.val || req.body.name || '';
     const alias = req.body.alias || null;
     const required = req.body.required === '1' || req.body.required === true;
-    const multi = req.body.multi === '1' || req.body.multi === true;
+    let multi = req.body.multi === '1' || req.body.multi === true;
+    const multiselect = req.body.multiselect !== undefined;
     const pool = getPool();
 
     if (!name) {
@@ -6795,6 +6796,19 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     );
     if (dupeRows.length > 0) {
       return res.status(200).json({ error: `Requisite of type ${reqType} already exists on type ${parentId}` });
+    }
+
+    // 5. MULTI_MASK auto-application (PHP parity: index.php ~8575)
+    // If the requisite type is a reference (its own t is not a basic type)
+    // and the multiselect parameter is set, auto-apply :MULTI: flag.
+    if (!multi && multiselect) {
+      const [reqTypeRows] = await pool.query(
+        `SELECT t FROM \`${db}\` WHERE id = ? LIMIT 1`, [reqType]
+      );
+      if (reqTypeRows.length > 0 && REV_BASE_TYPE[reqTypeRows[0].t] === undefined) {
+        multi = true;
+        logger.info('[Legacy _d_req] MULTI_MASK auto-applied for reference type', { db, reqType });
+      }
     }
 
     // Build value with modifiers
