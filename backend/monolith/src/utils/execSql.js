@@ -2,6 +2,7 @@
 // Wraps pool.query() with error handling, timing, audit logging, and query counting.
 
 import { performance } from 'node:perf_hooks';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createLogger } from './logger.js';
 import { wlog, trace } from './wlog.js';
 
@@ -15,9 +16,16 @@ const sqlLogger = createLogger('sql');
 const MUTATING_SQL_RE = /^\s*(INSERT|UPDATE|DELETE|REPLACE|ALTER|DROP|CREATE|TRUNCATE)\b/i;
 
 /**
- * Per-request query statistics.
- * In a real per-request lifecycle these would live on req/res locals;
- * for now we expose a simple counter object that callers can reset per request.
+ * AsyncLocalStorage instance for request-scoped query statistics.
+ * Each HTTP request runs inside its own storage context so counters
+ * are isolated and never interleave between concurrent requests.
+ */
+export const queryStatsStorage = new AsyncLocalStorage();
+
+/**
+ * Module-level fallback query statistics for non-request contexts
+ * (e.g. CLI scripts, tests that don't use runWithQueryStats).
+ * Kept for backwards compatibility.
  */
 export const queryStats = {
   count: 0,
@@ -28,6 +36,30 @@ export const queryStats = {
     this.totalTime = 0;
   },
 };
+
+/**
+ * Run a function within an isolated query-stats context.
+ * All execSql() calls inside `fn` will accumulate stats in a
+ * fresh per-invocation object instead of the shared module-level one.
+ *
+ * @param {function} fn - Async (or sync) function to run in the scoped context
+ * @returns {Promise<*>} The return value of `fn`
+ */
+export function runWithQueryStats(fn) {
+  const store = { count: 0, totalTime: 0 };
+  return queryStatsStorage.run(store, fn);
+}
+
+/**
+ * Retrieve the current request's query statistics.
+ * Returns the AsyncLocalStorage store if running inside runWithQueryStats(),
+ * otherwise falls back to the module-level queryStats singleton.
+ *
+ * @returns {{ count: number, totalTime: number }}
+ */
+export function getQueryStats() {
+  return queryStatsStorage.getStore() ?? queryStats;
+}
 
 /**
  * Execute a SQL query with PHP Exec_sql-equivalent behaviour.
@@ -82,8 +114,10 @@ export async function execSql(pool, sql, params = [], options = {}) {
   const timing = performance.now() - t0;
 
   // Query counting (PHP: $GLOBALS["sqls"]++ / $GLOBALS["sql_time"])
-  queryStats.count += 1;
-  queryStats.totalTime += timing;
+  // Prefer request-scoped store; fall back to module-level singleton.
+  const stats = queryStatsStorage.getStore() ?? queryStats;
+  stats.count += 1;
+  stats.totalTime += timing;
 
   // Determine insertId for INSERT statements
   const insertId = rawResult?.insertId ?? null;
