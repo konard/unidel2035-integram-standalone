@@ -1132,12 +1132,16 @@ function formatVal(typeId, val, tzone = 0) {
       }
       break;
 
-    case 'NUMBER':
-      const numVal = parseInt(String(val).replace(/,/g, '.').replace(/ /g, ''));
-      if (numVal !== 0) {
+    case 'NUMBER': {
+      // PHP: if ($val != 0) $val = (int)$val;
+      // PHP loose comparison: "" == 0, "abc" == 0, so only truly numeric non-zero values get cast.
+      // NaN must not leak through — treat NaN and non-numeric input like PHP does (fall through).
+      const numVal = parseInt(String(val).replace(/,/g, '.').replace(/ /g, ''), 10);
+      if (!isNaN(numVal) && numVal !== 0) {
         return numVal;
       }
       break;
+    }
 
     case 'BOOLEAN':
       if (val === '' || String(val).toLowerCase() === 'false' || val === '-1' || val === ' ') {
@@ -1145,12 +1149,15 @@ function formatVal(typeId, val, tzone = 0) {
       }
       return '1';
 
-    case 'SIGNED':
+    case 'SIGNED': {
+      // PHP: if ($val != 0) $val = (double)str_replace(",",".",$val);
+      // Same NaN guard as NUMBER — non-numeric / empty strings fall through.
       const signedVal = parseFloat(String(val).replace(/,/g, '.').replace(/ /g, '').replace(/\u00A0/g, ''));
-      if (signedVal !== 0) {
+      if (!isNaN(signedVal) && signedVal !== 0) {
         return signedVal;
       }
       break;
+    }
 
     case 'DATETIME':
       if (val && !String(val).startsWith('[')) {
@@ -1219,6 +1226,42 @@ function formatValView(typeId, val, tzone = 0) {
         return String(parseFloat(val));
       }
       break;
+
+    case 'FILE': {
+      // PHP: if val contains ":", format is "id:filename" — extract filename for display.
+      // Actual link wrapping is done at call sites via buildObjFileLink().
+      const valStr = String(val);
+      if (valStr.includes(':')) {
+        return valStr.slice(valStr.indexOf(':') + 1);
+      }
+      return valStr;
+    }
+
+    case 'PATH': {
+      // PHP: val format is "id:filename.ext" — extract filename portion.
+      // Full path construction (with getSubdir/getFilename) is handled at call sites.
+      const valStr = String(val);
+      if (valStr.includes(':')) {
+        return valStr.slice(valStr.indexOf(':') + 1);
+      }
+      return valStr;
+    }
+
+    case 'GRANT':
+      // PHP: 0 → TYPE_EDITOR, 1 → ALL_OBJECTS, 10 → FILES
+      if (val == 0) return '*** Type editor ***';
+      if (val == 1) return '*** All objects ***';
+      if (val == 10) return '*** Files ***';
+      return String(val);
+
+    case 'REPORT_COLUMN':
+      // PHP: "0" → CUSTOM_REP_COL ("Calculatable"); full DB lookup handled at call sites.
+      if (val === '0' || val === 0) return 'Calculatable';
+      return String(val);
+
+    case 'PWD':
+      // PHP: strlen($val) ? PASSWORDSTARS : ""
+      return String(val).length > 0 ? '******' : '';
   }
 
   return val;
@@ -4776,6 +4819,53 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 
     value = String(formatVal(baseType, value, tzone));
 
+    // ── PHP parity: macro defaults & MULTI_MASK auto-detection (index.php:8328-8360) ──
+    // Fetch all requisites defined on the type (children of typeId).
+    // Each requisite's `val` may contain masks like :MULTI::!NULL:[TODAY] etc.
+    const multiMap = {};   // reqId → reqType  (for multi-ref insertion later)
+    const defValSet = {};  // reqId → true     (marks default-populated reqs)
+    const [reqDefs] = await pool.query(
+      `SELECT r.id, r.t AS reqt, r.val, def.t AS base
+       FROM \`${db}\` r LEFT JOIN \`${db}\` def ON def.id = r.t
+       WHERE r.up = ?`,
+      [typeId]
+    );
+    for (const rd of reqDefs) {
+      const reqId = String(rd.id);
+      const reqVal = rd.val != null ? String(rd.val) : '';
+      const reqBase = rd.base;
+
+      // Skip if the client already submitted a value for this requisite
+      if (req.body['t' + reqId] !== undefined) continue;
+      // Skip BUTTON-type requisites (PHP: $GLOBALS["basics"][$row["base"]] !== "BUTTON")
+      if (reqBase === TYPE.BUTTON) continue;
+      // Skip if NEW_{id} was submitted for a reference
+      if (req.body['NEW_' + reqId] !== undefined && !REV_BASE_TYPE[reqBase]) continue;
+
+      // MULTI_MASK auto-detection: if val contains :MULTI:, register for multi-ref
+      if (reqVal.includes(':MULTI:')) {
+        multiMap[reqId] = rd.reqt;
+      }
+
+      // removeMasks: strip :!NULL:, :MULTI:, :ALIAS=...:
+      let stripped = reqVal
+        .replace(/:!NULL:/g, '')
+        .replace(/:MULTI:/g, '')
+        .replace(/:ALIAS=.*?:/g, '');
+
+      if (stripped === '') continue;
+
+      // Resolve built-in macros ([TODAY], [USER], etc.)
+      let resolved = resolveBuiltIn(stripped, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
+
+      // If resolveBuiltIn returned unchanged, the value is a literal default (not a macro)
+      // PHP also tries calculatables (Get_block_data) here, but those are not yet ported.
+      // For now, use the resolved value as-is.
+
+      defValSet[reqId] = true;
+      req.body['t' + reqId] = resolved;
+    }
+
     // Get next order
     const order = await getNextOrder(db, parentId, typeId);
 
@@ -4851,12 +4941,16 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         finalValue = String(formatVal(attrBaseType, finalValue, tzone));
       }
 
-      // Multiselect: split comma values for multi fields
-      const [attrAttrs] = await pool.query(
-        `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [attrTypeIdNum]
-      );
-      const attrAttrsStr = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
-      if (attrAttrsStr.includes(':MULTI:') && finalValue.includes(',')) {
+      // Multiselect: check multiMap (from MULTI_MASK auto-detection) and CHARS-child attrs
+      let isMulti = !!multiMap[attrTypeId];
+      if (!isMulti) {
+        const [attrAttrs] = await pool.query(
+          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [attrTypeIdNum]
+        );
+        const attrAttrsStr = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
+        if (attrAttrsStr.includes(':MULTI:')) isMulti = true;
+      }
+      if (isMulti && finalValue.includes(',')) {
         const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
         for (const mv of values) {
           const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
@@ -4867,20 +4961,26 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 
       // Reference storage: if not a base type, store as reference (in t column)
       if (!REV_BASE_TYPE[attrBaseType]) {
-        const refVal = parseInt(finalValue, 10);
-        if (refVal > 0) {
-          // PHP parity: Check_Val_granted for ref values (index.php:8493-8495)
-          const [refCheck] = await pool.query(
-            `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [refVal, attrTypeIdNum]
-          );
-          if (refCheck.length > 0) {
-            const valGrantResult = await checkValGranted(pool, db, grants || {}, attrTypeIdNum, refCheck[0].val, refVal);
-            if (valGrantResult === 'BARRED') {
-              return res.status(200).json({ error: `You do not have this object granted (${refCheck[0].val}) (${attrTypeIdNum})` });
+        // PHP parity: multi-ref support — split comma-separated ref IDs
+        const refs = finalValue.split(',').map(v => parseInt(v.trim(), 10)).filter(v => v > 0);
+        if (refs.length > 0) {
+          for (const rv of refs) {
+            const [refCheck] = await pool.query(
+              `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [rv, attrTypeIdNum]
+            );
+            if (refCheck.length > 0) {
+              // PHP parity: skip Check_Val_granted for default-value refs (index.php:8494)
+              if (!defValSet[attrTypeId]) {
+                const valGrantResult = await checkValGranted(pool, db, grants || {}, attrTypeIdNum, refCheck[0].val, rv);
+                if (valGrantResult === 'BARRED') {
+                  return res.status(200).json({ error: `You do not have this object granted (${refCheck[0].val}) (${attrTypeIdNum})` });
+                }
+              }
+              const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+              await insertRow(db, id, attrOrder, rv, String(attrTypeIdNum));
+              if (!isMulti) break; // single-ref: only first value
             }
           }
-          const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
-          await insertRow(db, id, attrOrder, refVal, '');
           continue;
         }
       }
@@ -5553,7 +5653,11 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       }
 
       // Apply resolveBuiltIn then formatVal before storage
-      finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
+      // PHP line 7923: skip BuiltIn() resolution for system type IDs (101=activity_type, 102=role_link, 103=level, 132=xsrf_token, 49=mask)
+      const BUILTIN_SKIP_IDS = [101, 102, 103, 132, 49];
+      if (!BUILTIN_SKIP_IDS.includes(typeIdNum)) {
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
+      }
       if (meta) {
         finalValue = String(formatVal(meta.base_type, finalValue, tzone));
       }
