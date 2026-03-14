@@ -8687,6 +8687,58 @@ async function compileReport(pool, db, reportId) {
       }
     }
 
+    // ── Detect array-type (multi) requisites — PHP parity (index.php:1917-1939) ──
+    // Query all requisites of object types referenced by report columns.
+    // If a requisite's val attribute contains ':MULTI:', the column produces
+    // one-to-many rows and needs GROUP_CONCAT or DISTINCT handling.
+    if (report.columns.length > 0) {
+      const colReqTypeIds = [...new Set(report.columns.filter(c => c.reqTypeId).map(c => c.reqTypeId))];
+      if (colReqTypeIds.length > 0) {
+        const reqPh = colReqTypeIds.map(() => '?').join(',');
+        // PHP: SELECT ... col_def.up=0 ? col_def.id : col_def.up → the parent type
+        // We find requisites of each column's parent type and check for :MULTI: in val
+        const [multiRows] = await pool.query(
+          `SELECT DISTINCT
+             CASE WHEN col_def.up = 0 THEN col_def.id ELSE col_def.up END AS typ,
+             reqs.id AS req,
+             reqs.val AS attr,
+             reqs.t AS req_t
+           FROM \`${db}\` col_def
+           LEFT JOIN \`${db}\` reqs ON reqs.up = CASE WHEN col_def.up = 0 THEN col_def.id ELSE col_def.up END
+           WHERE col_def.id IN (${reqPh})
+             AND reqs.val LIKE '%:MULTI:%'`,
+          colReqTypeIds
+        );
+        // Build a set of parent type IDs that have multi-valued requisites
+        const multiParentTypes = new Set();
+        for (const mr of multiRows) {
+          if (mr.typ) multiParentTypes.add(parseInt(mr.typ, 10));
+        }
+        // Mark columns whose parent type has at least one multi requisite
+        // PHP: when :MULTI: is detected, $distinct = "DISTINCT" is set for the whole query
+        // and the column can produce multiple rows per main object.
+        // We mark the column so executeReport can auto-apply GROUP_CONCAT.
+        for (const col of report.columns) {
+          const parentType = col.reqTypeId;
+          if (parentType && multiParentTypes.has(parentType)) {
+            col.isMulti = true;
+          }
+        }
+        // Also check if any column's reqTypeId itself is a multi-valued requisite
+        // (the requisite row's own val contains :MULTI:)
+        const [directMultiRows] = await pool.query(
+          `SELECT id, val FROM \`${db}\` WHERE id IN (${reqPh}) AND val LIKE '%:MULTI:%'`,
+          colReqTypeIds
+        );
+        for (const dm of directMultiRows) {
+          const dmId = parseInt(dm.id, 10);
+          for (const col of report.columns) {
+            if (col.reqTypeId === dmId) col.isMulti = true;
+          }
+        }
+      }
+    }
+
     // Get REP_JOIN rows (explicit additional joins)
     const [joinRows] = await pool.query(
       `SELECT id, val, t FROM \`${db}\` WHERE up = ? AND t = ${TYPE.REP_JOIN}`,
@@ -8707,6 +8759,7 @@ async function compileReport(pool, db, reportId) {
       columns: report.columns.length,
       joins: report.joins.length,
       hasAggregates: report.hasAggregates,
+      multiColumns: report.columns.filter(c => c.isMulti).map(c => c.alias),
     });
 
   } catch (error) {
@@ -8786,6 +8839,18 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
         else if (upper === 'ABN_UP')  fieldExpr = col.isMainCol ? 'a.up'  : `\`${col.alias}\`.up`;
         else if (upper === 'ABN_TYP') fieldExpr = col.isMainCol ? 'a.t'   : `\`${col.alias}\`.t`;
         else if (upper === 'ABN_ORD') fieldExpr = col.isMainCol ? 'a.ord' : `\`${col.alias}\`.ord`;
+      }
+
+      // ── Auto GROUP_CONCAT for array-type (multi) requisites (#233) ─────
+      // PHP parity: when a column references a multi-valued requisite (one-to-many)
+      // and has no explicit aggregate function, auto-wrap with GROUP_CONCAT to
+      // flatten multiple values into a comma-separated string.
+      // This prevents row multiplication and matches PHP Compile_Report behavior.
+      if (col.isMulti && !col.isAggregate && !col.func) {
+        fieldExpr = `GROUP_CONCAT(DISTINCT ${fieldExpr} SEPARATOR ', ')`;
+        col.isAggregate = true;
+        col._autoGroupConcat = true;   // mark for debugging / GROUP BY logic
+        report.hasAggregates = true;
       }
 
       // Store resolved expression on column for ORDER BY / GROUP BY reference
