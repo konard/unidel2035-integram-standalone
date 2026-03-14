@@ -1328,7 +1328,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
 
     // resolveBuiltIn substitution (needs user context; skip if unavailable)
     if (ctx.user) {
-      value = resolveBuiltIn(value, ctx.user, db, ctx.tzone || 0, '');
+      value = resolveBuiltIn(value, ctx.user, db, ctx.tzone || 0, '', ctx.reqHeaders || {});
     }
 
     let search_val = '';
@@ -1816,16 +1816,25 @@ async function legacyDdlGrantCheck(req, res, next) {
  * @param {string} ip     - client IP address
  * @returns {string} resolved value
  */
-function resolveBuiltIn(val, user, db, tzone = 0, ip = '') {
+function resolveBuiltIn(val, user, db, tzone = 0, ip = '', reqHeaders = {}) {
   if (!val || typeof val !== 'string') return val;
 
   const now = new Date(Date.now() + tzone * 1000);
   const pad = (n) => String(n).padStart(2, '0');
-  const dateStr = `${pad(now.getUTCDate())}.${pad(now.getUTCMonth() + 1)}.${now.getUTCFullYear()}`;
+  const fmtDate = (d) => `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`;
+  const dateStr = fmtDate(now);
   const timeStr = `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())}`;
   const datetimeStr = `${dateStr} ${timeStr}`;
 
-  return val
+  // Date-relative helpers (PHP parity: index.php:1584-1593)
+  const yesterday = fmtDate(new Date(now.getTime() - 86400000));
+  const tomorrow  = fmtDate(new Date(now.getTime() + 86400000));
+  const weekAgo   = fmtDate(new Date(now.getTime() - 7 * 86400000));
+  const monthAgo  = (() => { const d = new Date(now); d.setUTCMonth(d.getUTCMonth() - 1); return fmtDate(d); })();
+  const monthPlus = (() => { const d = new Date(now); d.setUTCMonth(d.getUTCMonth() + 1); return fmtDate(d); })();
+
+  // Existing %X% percent-syntax placeholders
+  let result = val
     .replace(/%USER%/g, user.username || '')
     .replace(/%USERID%/g, String(user.uid || ''))
     .replace(/%DB%/g, db || '')
@@ -1833,6 +1842,22 @@ function resolveBuiltIn(val, user, db, tzone = 0, ip = '') {
     .replace(/%DATE%/g, dateStr)
     .replace(/%DATETIME%/g, datetimeStr)
     .replace(/%TIME%/g, timeStr);
+
+  // [X] bracket-syntax placeholders (PHP parity: index.php:1576-1618)
+  result = result
+    .replace(/\[YESTERDAY\]/g, yesterday)
+    .replace(/\[TOMORROW\]/g, tomorrow)
+    .replace(/\[MONTH_AGO\]/g, monthAgo)
+    .replace(/\[WEEK_AGO\]/g, weekAgo)
+    .replace(/\[MONTH_PLUS\]/g, monthPlus)
+    .replace(/\[ROLE\]/g, user.role || '')
+    .replace(/\[ROLE_ID\]/g, String(user.roleId || ''))
+    .replace(/\[TSHIFT\]/g, String(tzone))
+    .replace(/\[REMOTE_HOST\]/g, reqHeaders['x-forwarded-host'] || reqHeaders['host'] || '')
+    .replace(/\[HTTP_USER_AGENT\]/g, reqHeaders['user-agent'] || '')
+    .replace(/\[HTTP_REFERER\]/g, reqHeaders['referer'] || '');
+
+  return result;
 }
 
 /**
@@ -1876,6 +1901,9 @@ function resolveMaskBuiltIn(val, userCtx) {
     case '[ROLE_ID]':     resolved = String(userCtx.roleId || ''); break;
     case '[TSHIFT]':      resolved = String(userCtx.tzone || 0); break;
     case '[REMOTE_ADDR]': resolved = userCtx.ip || ''; break;
+    case '[REMOTE_HOST]': resolved = userCtx.remoteHost || ''; break;
+    case '[HTTP_USER_AGENT]': resolved = userCtx.userAgent || ''; break;
+    case '[HTTP_REFERER]':    resolved = userCtx.referer || ''; break;
     default:              return val; // Unresolved — return as-is
   }
 
@@ -4706,7 +4734,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     }
 
     // Apply resolveBuiltIn + formatVal to the main value
-    value = resolveBuiltIn(value, req.legacyUser || {}, db, tzone, clientIp);
+    value = resolveBuiltIn(value, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
 
     // Fetch type's base type for formatVal
     const [typeMeta] = await pool.query(
@@ -4819,7 +4847,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         logger.info('[Legacy _m_new] File saved for requisite', { db, attrTypeId, safeName });
       } else {
         // Apply resolveBuiltIn + formatVal
-        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
         finalValue = String(formatVal(attrBaseType, finalValue, tzone));
       }
 
@@ -5166,7 +5194,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
 
         // Apply resolveBuiltIn then formatVal before storage
-        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
         if (meta) {
           finalValue = String(formatVal(baseType, finalValue, tzone));
         }
@@ -5525,7 +5553,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       }
 
       // Apply resolveBuiltIn then formatVal before storage
-      finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+      finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
       if (meta) {
         finalValue = String(formatVal(meta.base_type, finalValue, tzone));
       }
@@ -9145,7 +9173,7 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
         // PHP resolves both bracket syntax ([TODAY]) and percent syntax (%USER%) in filters
         if (userCtx) {
           rawWhere = resolveAllBracketBuiltIns(rawWhere, userCtx);
-          rawWhere = resolveBuiltIn(rawWhere, userCtx, db, userCtx.tzone || 0, userCtx.ip || '');
+          rawWhere = resolveBuiltIn(rawWhere, userCtx, db, userCtx.tzone || 0, userCtx.ip || '', userCtx.reqHeaders || {});
         }
         // PHP: prepend "AND" if the stored WHERE doesn't already start with AND
         if (rawWhere.substring(0, 3).toUpperCase() === 'AND') {
@@ -9225,7 +9253,7 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     // both SELECT fields and WHERE filter after assembly.
     if (userCtx) {
       sql = resolveAllBracketBuiltIns(sql, userCtx);
-      sql = resolveBuiltIn(sql, userCtx, db, userCtx.tzone || 0, userCtx.ip || '');
+      sql = resolveBuiltIn(sql, userCtx, db, userCtx.tzone || 0, userCtx.ip || '', userCtx.reqHeaders || {});
     }
 
     logger.debug('[Report] SQL', { sql });
@@ -9470,6 +9498,10 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         roleId: req.legacyUser.roleId || '',
         tzone: req.legacyUser.tzone || 0,
         ip: req.ip || '',
+        reqHeaders: req.headers || {},
+        remoteHost: req.headers['x-forwarded-host'] || req.headers['host'] || '',
+        userAgent: req.headers['user-agent'] || '',
+        referer: req.headers['referer'] || '',
       } : null;
 
       const orderParam = params.ORDER || params.order || null;
@@ -10785,6 +10817,10 @@ router.post('/:db', async (req, res, next) => {
       roleId: req.legacyUser.roleId || '',
       tzone: req.legacyUser.tzone || 0,
       ip: req.ip || '',
+      reqHeaders: req.headers || {},
+      remoteHost: req.headers['x-forwarded-host'] || req.headers['host'] || '',
+      userAgent: req.headers['user-agent'] || '',
+      referer: req.headers['referer'] || '',
     } : null;
 
     const q = req.query;
