@@ -40,19 +40,48 @@ function sanitizeIdentifier(name) {
   return `\`${name}\``;
 }
 
+// PHP's original checkInjection (index.php:617) blocks only 3 keywords:
+//   FROM, SELECT, TABLE
+// The Node port intentionally expands this to 15 keywords as defense-in-depth
+// security hardening. The broader list protects against a wider range of SQL
+// injection patterns (e.g. UNION-based, stacked queries, DDL attacks).
+//
+// Tradeoff: the expanded list increases false-positive risk for legitimate
+// search values that happen to contain whole words like "where", "union",
+// "create", etc. Word-boundary matching (\b) mitigates this — substrings
+// inside longer words (e.g. "timetable", "autoupdate") are NOT flagged.
+// If false positives arise, callers can pass strictMode=true to fall back
+// to the original PHP 3-keyword list.
+
+/** @type {RegExp} Expanded 15-keyword SQL injection pattern (Node hardening) */
+const SQL_KEYWORDS_EXPANDED_RE = /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|UNION|FROM|TABLE|WHERE|INTO|EXEC|EXECUTE|CREATE|TRUNCATE)\b/i;
+
+/** @type {RegExp} Original PHP 3-keyword SQL injection pattern */
+const SQL_KEYWORDS_STRICT_RE = /\b(FROM|SELECT|TABLE)\b/i;
+
 /**
  * Check user-supplied search values for SQL injection attempts.
  * Port of PHP checkInjection() (index.php:617) with expanded keyword list.
  *
+ * The PHP original checks only 3 SQL keywords: `FROM`, `SELECT`, `TABLE`.
+ * This Node port intentionally expands the list to 15 keywords for broader
+ * defense-in-depth protection. All matching is word-boundary delimited to
+ * avoid false positives on substrings (e.g. "information" won't match "from").
+ *
  * @param {string} value - The user-supplied value to check
+ * @param {object} [options] - Optional configuration
+ * @param {boolean} [options.strictMode=false] - When true, use the original
+ *   PHP 3-keyword list (FROM, SELECT, TABLE) for backward compatibility.
+ *   Useful when the expanded list causes false positives on legitimate values.
  * @returns {string} The original value if safe
  * @throws {Error} If a SQL keyword is detected
  */
-function checkInjection(value) {
+function checkInjection(value, options) {
   if (typeof value !== 'string') return value;
-  // Match whole SQL keywords (word-boundary delimited, case-insensitive)
-  const SQL_KEYWORDS_RE = /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|UNION|FROM|TABLE|WHERE|INTO|EXEC|EXECUTE|CREATE|TRUNCATE)\b/i;
-  const match = value.match(SQL_KEYWORDS_RE);
+  const re = options && options.strictMode
+    ? SQL_KEYWORDS_STRICT_RE
+    : SQL_KEYWORDS_EXPANDED_RE;
+  const match = value.match(re);
   if (match) {
     throw new Error(`No SQL clause allowed in search fields. Found: ${match[0]}`);
   }

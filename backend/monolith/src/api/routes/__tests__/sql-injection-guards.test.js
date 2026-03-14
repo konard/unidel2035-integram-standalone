@@ -122,7 +122,7 @@ describe('checkInjection', () => {
     expect(() => checkInjection('DROP table')).toThrow('No SQL clause allowed');
   });
 
-  it('requires word boundaries (no false positives)', () => {
+  it('requires word boundaries (no false positives on substrings)', () => {
     // "from" inside a word should not trigger
     expect(checkInjection('information')).toBe('information');
     // "select" inside a word should not trigger
@@ -131,6 +131,73 @@ describe('checkInjection', () => {
     expect(checkInjection('timetable')).toBe('timetable');
     // "update" inside a word
     expect(checkInjection('autoupdate')).toBe('autoupdate');
+    // "where" inside a word
+    expect(checkInjection('somewhere')).toBe('somewhere');
+    expect(checkInjection('anywhere')).toBe('anywhere');
+    // "union" inside a word
+    expect(checkInjection('reunion')).toBe('reunion');
+    expect(checkInjection('communion')).toBe('communion');
+    // "create" inside a word
+    expect(checkInjection('recreate')).toBe('recreate');
+    // "delete" inside a word
+    expect(checkInjection('undelete')).toBe('undelete');
+    // "into" inside a word
+    expect(checkInjection('Manitowoc')).toBe('Manitowoc');
+    // "drop" inside a word
+    expect(checkInjection('raindrop')).toBe('raindrop');
+    expect(checkInjection('droplet')).toBe('droplet');
+    // "alter" inside a word
+    expect(checkInjection('alternatively')).toBe('alternatively');
+    // "exec" inside a word
+    expect(checkInjection('executor')).toBe('executor');
+    // "insert" inside a word
+    expect(checkInjection('reinserted')).toBe('reinserted');
+    // "truncate" inside a word
+    expect(checkInjection('untruncated')).toBe('untruncated');
+  });
+
+  it('detects all 15 expanded keywords as whole words', () => {
+    const keywords = [
+      'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DROP',
+      'ALTER', 'UNION', 'FROM', 'TABLE', 'WHERE',
+      'INTO', 'EXEC', 'EXECUTE', 'CREATE', 'TRUNCATE',
+    ];
+    for (const kw of keywords) {
+      expect(() => checkInjection(`test ${kw} something`)).toThrow('No SQL clause allowed');
+    }
+  });
+
+  it('is case-insensitive for all keywords', () => {
+    const keywords = [
+      'select', 'INSERT', 'UpDaTe', 'dElEtE', 'Drop',
+      'aLtEr', 'Union', 'from', 'TABLE', 'Where',
+      'iNtO', 'exec', 'Execute', 'CREATE', 'truncate',
+    ];
+    for (const kw of keywords) {
+      expect(() => checkInjection(kw)).toThrow('No SQL clause allowed');
+    }
+  });
+
+  describe('strictMode (PHP-compatible 3-keyword list)', () => {
+    it('blocks the original PHP keywords: FROM, SELECT, TABLE', () => {
+      expect(() => checkInjection('FROM users', { strictMode: true })).toThrow('No SQL clause allowed');
+      expect(() => checkInjection('SELECT *', { strictMode: true })).toThrow('No SQL clause allowed');
+      expect(() => checkInjection('TABLE foo', { strictMode: true })).toThrow('No SQL clause allowed');
+    });
+
+    it('allows keywords not in the PHP 3-keyword list', () => {
+      expect(checkInjection('DELETE something', { strictMode: true })).toBe('DELETE something');
+      expect(checkInjection('DROP something', { strictMode: true })).toBe('DROP something');
+      expect(checkInjection('UNION something', { strictMode: true })).toBe('UNION something');
+      expect(checkInjection('WHERE something', { strictMode: true })).toBe('WHERE something');
+      expect(checkInjection('INSERT something', { strictMode: true })).toBe('INSERT something');
+      expect(checkInjection('UPDATE something', { strictMode: true })).toBe('UPDATE something');
+    });
+
+    it('defaults to expanded list when strictMode is not set', () => {
+      expect(() => checkInjection('DELETE something')).toThrow('No SQL clause allowed');
+      expect(() => checkInjection('UNION something')).toThrow('No SQL clause allowed');
+    });
   });
 
   it('returns non-string values unchanged', () => {
