@@ -52,8 +52,9 @@ vi.mock('../../../utils/t9n.js', () => ({
   getLocale: () => 'en',
 }));
 
-// ─── import getCurrentValues AFTER mocks ─────────────────────────────────────
+// ─── import getCurrentValues and logger AFTER mocks ──────────────────────────
 const { getCurrentValues } = await import('../legacy-compat.js');
+const logger = (await import('../../../utils/logger.js')).default;
 
 // Build a fake pool that delegates to mockQueryFn
 function fakePool() {
@@ -237,6 +238,78 @@ describe('getCurrentValues', () => {
     expect(result.reqTyps).toEqual({});
     expect(result.notNull).toEqual({});
     expect(result.booleans).toEqual({});
+  });
+
+  it('uses simpler Query 2 (no GROUP BY) when no array types exist', async () => {
+    const queries = [];
+    let callIdx = 0;
+    mockQueryFn.mockImplementation(async (sql, ...rest) => {
+      callIdx++;
+      queries.push(sql);
+      if (callIdx === 1) {
+        // No arr_id — no array types
+        return [[
+          { req_id: 200, ref_id: null, attrs: '', ord: 1, base_typ: 3, type_val: 'Name', arr_id: null },
+        ], []];
+      }
+      return [[
+        { id: 500, val: 'Hello', ord: 1, t: 200, arr_num: 1, bt: 3, ref_val: null },
+      ], []];
+    });
+
+    await getCurrentValues(fakePool(), 'testdb', 50, 100, {}, {}, {}, {});
+
+    // Query 2 should NOT contain GROUP BY when no array types exist
+    expect(queries).toHaveLength(2);
+    expect(queries[1]).not.toMatch(/GROUP BY/i);
+  });
+
+  it('uses GROUP BY in Query 2 when array types exist', async () => {
+    const queries = [];
+    let callIdx = 0;
+    mockQueryFn.mockImplementation(async (sql, ...rest) => {
+      callIdx++;
+      queries.push(sql);
+      if (callIdx === 1) {
+        // arr_id=99 means this is an array/multiselect field
+        return [[
+          { req_id: 600, ref_id: null, attrs: ':MULTI:', ord: 1, base_typ: 3, type_val: 'Tags', arr_id: 99 },
+        ], []];
+      }
+      return [[
+        { id: 900, val: 'tag1', ord: 1, t: 99, arr_num: 3, bt: 3, ref_val: null },
+      ], []];
+    });
+
+    await getCurrentValues(fakePool(), 'testdb', 50, 100, {}, {}, {}, {});
+
+    // Query 2 should contain GROUP BY when array types exist
+    expect(queries).toHaveLength(2);
+    expect(queries[1]).toMatch(/GROUP BY/i);
+  });
+
+  it('logs a warning when base type mapping falls back to empty string', async () => {
+    logger.warn.mockClear();
+    let callIdx = 0;
+    mockQueryFn.mockImplementation(async () => {
+      callIdx++;
+      if (callIdx === 1) {
+        // base_typ: 9999 — not in REV_BASE_TYPE, will fall back to ''
+        return [[
+          { req_id: 999, ref_id: null, attrs: '', ord: 1, base_typ: 9999, type_val: 'Unknown', arr_id: null },
+        ], []];
+      }
+      return [[], []];
+    });
+
+    const revBt = {};
+    await getCurrentValues(fakePool(), 'testdb', 50, 100, {}, {}, {}, revBt);
+
+    expect(revBt['999']).toBe('');
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[getCurrentValues] Unknown base type mapping — falling back to empty string',
+      expect.objectContaining({ db: 'testdb', reqKey: '999', baseTypId: 9999 }),
+    );
   });
 
   it('mutates passed-in refTyps, arrTyps, and revBt objects', async () => {
