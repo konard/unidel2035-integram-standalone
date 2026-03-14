@@ -5733,6 +5733,34 @@ async function getRefOrd(pool, db, parent, typ) {
 }
 
 /**
+ * Calculate the next sort order for a new object.
+ * Direct port of PHP Calc_Order (index.php:6931).
+ *
+ * Returns COALESCE(MAX(ord)+1, 1) for the given parent and type,
+ * i.e. the next sequential order value.
+ *
+ * @param {import('mysql2/promise').Pool} pool - MySQL connection pool
+ * @param {string} db   - Database (table) name
+ * @param {number} up   - Parent object ID
+ * @param {number} t    - Type ID
+ * @returns {Promise<number>} Next order value (>= 1)
+ * @throws {Error} If the query fails
+ */
+async function calcOrder(pool, db, up, t) {
+  const z = sanitizeIdentifier(db);
+  const result = await execSql(
+    pool,
+    `SELECT COALESCE(MAX(ord)+1, 1) AS next_ord FROM ${z} WHERE t = ? AND up = ?`,
+    [t, up],
+    { label: 'Calc_Order', db }
+  );
+  if (result.rows && result.rows.length > 0) {
+    return result.rows[0].next_ord;
+  }
+  throw new Error(t9n('Cannot Calc the Order'));
+}
+
+/**
  * Insert a new row into the database
  */
 async function insertRow(db, parentId, order, typeId, value) {
@@ -5994,8 +6022,8 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       req.body['t' + reqId] = resolved;
     }
 
-    // Get next order
-    const order = await getNextOrder(db, parentId, typeId);
+    // Get next order (PHP: Calc_Order)
+    const order = await calcOrder(pool, db, parentId, typeId);
 
     // Uniqueness check: if ord=1 (unique), check if same val+type already exists
     if (parseInt(order, 10) === 1 || order === 1) {
@@ -6081,7 +6109,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       if (isMulti && finalValue.includes(',')) {
         const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
         for (const mv of values) {
-          const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+          const attrOrder = await calcOrder(pool, db, id, attrTypeIdNum);
           await insertRow(db, id, attrOrder, attrTypeIdNum, mv);
         }
         continue;
@@ -6113,7 +6141,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
       }
 
-      const attrOrder = await getNextOrder(db, id, attrTypeIdNum);
+      const attrOrder = await calcOrder(pool, db, id, attrTypeIdNum);
       await insertRow(db, id, attrOrder, attrTypeIdNum, finalValue);
     }
 
@@ -6141,7 +6169,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
 
         // Store the reference as a child of the new object
-        const attrOrder = await getNextOrder(db, id, refTypeId);
+        const attrOrder = await calcOrder(pool, db, id, refTypeId);
         await insertRow(db, id, attrOrder, refId, '');
       }
     }
@@ -6452,7 +6480,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         if (attrs.includes(':MULTI:') && finalValue.includes(',')) {
           const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
           for (const mv of values) {
-            const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+            const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
             await insertRow(db, objectId, attrOrder, typeIdNum, mv);
           }
           await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
@@ -6492,7 +6520,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         if (existing) {
           await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
         } else {
-          const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+          const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
           await insertRow(db, objectId, attrOrder, refVal, '');
         }
         await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
@@ -6521,7 +6549,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         await updateRowValue(db, existing.id, finalValue);
       } else {
         // Create new requisite
-        const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+        const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
         await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
       }
 
@@ -6810,7 +6838,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
           await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
           lastReqId = String(existing.id);
         } else {
-          const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+          const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
           const newId = await insertRow(db, objectId, attrOrder, refVal, '');
           lastReqId = String(newId);
         }
@@ -6827,7 +6855,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
         if (attrs.includes(':MULTI:') && finalValue.includes(',')) {
           const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
           for (const mv of values) {
-            const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+            const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
             await insertRow(db, objectId, attrOrder, typeIdNum, mv);
           }
           await checkDuplicatedReqs(pool, db, objectId, typeIdNum);
@@ -6841,7 +6869,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
         await updateRowValue(db, existing.id, finalValue);
         lastReqId = String(existing.id);
       } else {
-        const attrOrder = await getNextOrder(db, objectId, typeIdNum);
+        const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
         const newId = await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
         lastReqId = String(newId);
       }
@@ -6942,7 +6970,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
       [oldParentId, objType, oldOrd]
     );
 
-    const newOrder = await getNextOrder(db, newParentId, objType);
+    const newOrder = await calcOrder(pool, db, newParentId, objType);
     await pool.query(`UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
@@ -13431,6 +13459,7 @@ export {
   sanitizeIdentifier,
   checkInjection,
   getRefOrd,
+  calcOrder,
 };
 
 export default router;
