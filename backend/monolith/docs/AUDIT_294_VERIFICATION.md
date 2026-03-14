@@ -13,8 +13,8 @@
 | Tier 2 — Reports | #230–#236 (7) | **7** | 0 | 0 | 0 |
 | Tier 2b — Feature Completeness | #237–#243 (7) | **7** | 0 | 0 | 0 |
 | Tier 3 — Export/Import | #244–#247 (4) | **4** | 0 | 0 | 0 |
-| Tier 4 — Performance & Minor | #248–#257 (10) | **9** | 1 | 0 | 0 |
-| **Total** | **37** | **36** | **1** | **0** | **0** |
+| Tier 4 — Performance & Minor | #248–#257 (10) | **10** | 0 | 0 | 0 |
+| **Total** | **37** | **37** | **0** | **0** | **0** |
 
 ---
 
@@ -78,21 +78,9 @@
 | #252 | `repoGrant` | **DONE** | `legacy-compat.js:865–876,9330,9412,9452` | Grant check TYPE.FILE=10 on upload/download/dir_admin. |
 | #253 | `t9n` | **DONE** | `utils/t9n.js:1–125`, `legacy-compat.js:18` | 78-entry RU/EN dictionary + inline `[RU]...[EN]...` mode. 20+ call sites. |
 | #254 | `normalSize` | **DONE** | `legacy-compat.js:2360–2366,9509` | B/KB/MB/GB/TB formatting with 2-decimal precision. Used in dir_admin. |
-| #255 | `checkSubst`/`checkObjSubst` | **PARTIAL** | `legacy-compat.js:11680–11704` | Functions **defined** with correct logic but **never called**. Dead code — BKI import does not wire up substitution helpers. See [Gap Analysis](#gap-255) below. |
+| #255 | `checkSubst`/`checkObjSubst` | **DONE** | `legacy-compat.js:11680–11704` (def), `:12161–12525` (11 call sites) | Both functions wired into BKI import pipeline: `checkSubst` at 7 call sites, `checkObjSubst` at 4 call sites. |
 | #256 | `buildPostFields` | **DONE** | `legacy-compat.js:1807–1881,7649` | FormData from URL-encoded string, handles `@/download/...` files + `@http...` remote. Node 20+ FormData. |
 | #257 | `getJsonVal`/`checkJson` | **DONE** | `report-functions.js:228–280,293–333`, `legacy-compat.js:10327` | Recursive JSON key extraction. `checkJson` integrated in executeReport. 18 unit tests. |
-
----
-
-## Gap Analysis
-
-### <a name="gap-255"></a> #255 — `checkSubst`/`checkObjSubst` (PARTIAL)
-
-**Problem:** Both functions are properly implemented at `legacy-compat.js:11680–11704` with correct lookup logic (`ctx.localStruct.subst[i]` and `ctx.objSubst[i]`), but they are **never invoked** from the BKI import path or anywhere else. In the PHP original, these are called during CSV/BKI import row processing to remap colliding type/object IDs.
-
-**Impact:** BKI import will fail silently when ID collisions occur between the importing backup and the target database. The functions exist but the import route at line 11802+ does not call them.
-
-**Recommendation:** Wire `checkSubst()` and `checkObjSubst()` into the BKI import row-processing loop. This is a functional gap that should be addressed in a follow-up issue.
 
 ---
 
@@ -135,12 +123,11 @@ The 27 failures in `legacy-compat.test.js` and `php-compat-gaps-http.test.js` ar
 
 ## Conclusion
 
-**36 of 37 issues are fully implemented (DONE).** One issue (#255 — `checkSubst`/`checkObjSubst`) is **PARTIAL** — the functions exist but are dead code not wired into the BKI import pipeline.
+**All 37 of 37 issues are fully implemented (DONE).** No gaps remain.
 
 ### Recommendations
 
-1. **Create follow-up issue** to wire `checkSubst()`/`checkObjSubst()` into BKI import row processing
-2. **Fix pre-existing test failures** in `legacy-compat.test.js` (21 failures) and `php-compat-gaps-http.test.js` (6 failures) — these are auth mock setup issues, not parity-related
+1. **Fix pre-existing test failures** in `legacy-compat.test.js` (21 failures) and `php-compat-gaps-http.test.js` (6 failures) — these are auth mock setup issues, not parity-related
 
 ---
 

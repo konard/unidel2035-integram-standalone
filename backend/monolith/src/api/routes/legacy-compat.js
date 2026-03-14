@@ -3275,6 +3275,116 @@ router.post('/:db/auth', async (req, res, next) => {
 });
 
 // ============================================================================
+// createUserDb() — shared DB creation for registration + Google OAuth
+// PHP parity: createDb() → mail2DB() → newDb() (index.php lines 350–421)
+// ============================================================================
+
+/**
+ * Create a user database from template.
+ * Derives DB name from email (mail2DB), creates table, copies template data,
+ * registers the DB in the user management table.
+ *
+ * @param {object} pool       - MySQL connection pool
+ * @param {string} z          - user management table name (e.g. 'my')
+ * @param {number} userId     - user ID in the management table
+ * @param {string} email      - user email (used to derive DB name)
+ * @param {string} locale     - 'RU' or 'EN'
+ * @param {string} [prefix]   - fallback prefix for DB name ('u' for email reg, 'g' for Google)
+ * @returns {string}          - created database name, or empty string on failure
+ */
+async function createUserDb(pool, z, userId, email, locale, prefix = 'u') {
+  const USER_DB_MASK = /^[a-z][a-z0-9]{2,14}$/i;
+
+  // mail2DB: derive DB name from email
+  let newDbName = '';
+  if (email) {
+    const emailPrefix = email.split('@')[0].replace(/[^A-Za-z0-9]/g, '').toLowerCase().substring(0, 15);
+    if (USER_DB_MASK.test(emailPrefix)) {
+      const [existsCheck] = await pool.query(`SHOW TABLES LIKE ?`, [emailPrefix]);
+      if (existsCheck.length === 0) {
+        newDbName = emailPrefix;
+      }
+    }
+    if (!newDbName) {
+      newDbName = `${prefix}${userId}`;
+    }
+  } else {
+    newDbName = `${prefix}${userId}`;
+  }
+
+  const template = locale === 'EN' ? 'en' : 'ru';
+
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`${newDbName}\` (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        up BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        ord INT UNSIGNED NOT NULL DEFAULT 1,
+        t BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        val TEXT,
+        INDEX idx_up (up),
+        INDEX idx_t (t),
+        INDEX idx_up_t (up, t)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    // Try to copy from template
+    let copiedFromTemplate = false;
+    if (isValidDbName(template)) {
+      const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
+      if (tmplExists.length > 0) {
+        await pool.query(`INSERT INTO \`${newDbName}\` (id, up, ord, t, val) SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0`);
+        await pool.query(`
+          INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
+          SELECT child.id, child.up, child.ord, child.t, child.val
+          FROM \`${template}\` child
+          JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
+          WHERE child.up != 0
+        `);
+        copiedFromTemplate = true;
+      }
+    }
+
+    if (!copiedFromTemplate) {
+      const initQueries = [
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (1, 0, 1, 1, 'Объект')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (8, 0, 2, 8, 'Строка')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (12, 0, 3, 12, 'Текст')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (13, 0, 4, 13, 'Число')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (9, 0, 5, 9, 'Дата')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (4, 0, 6, 4, 'Дата и время')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (11, 0, 7, 11, 'Да/Нет')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (18, 0, 10, 8, 'Пользователь')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (20, 18, 1, 6, ':!NULL:Пароль')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (30, 18, 2, 8, 'Телефон')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (41, 18, 3, 8, 'Email')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (42, 0, 11, 8, 'Роль')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (125, 0, 12, 8, 'Токен')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
+      ];
+      for (const q of initQueries) {
+        try { await pool.query(q); } catch (e) { /* ignore duplicates */ }
+      }
+    }
+
+    // Register the DB in the management table
+    const today = new Date();
+    const dateYmd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+    const dbRecordId = await insertRow(z, userId, 1, TYPE.DATABASE, newDbName);
+    await insertRow(z, dbRecordId, 1, 275, dateYmd);
+    await insertRow(z, dbRecordId, 1, 283, template);
+    await insertRow(z, dbRecordId, 1, 276, locale === 'EN'
+      ? 'Test one, created upon registration'
+      : 'Тестовая база, создана при регистрации');
+
+    return newDbName;
+  } catch (dbErr) {
+    logger.error('[createUserDb] Failed', { error: dbErr.message, newDbName });
+    return '';
+  }
+}
+
+// ============================================================================
 // Google OAuth — PHP parity (index.php lines 35–36, 161–240)
 // ============================================================================
 
@@ -3496,95 +3606,13 @@ router.get('/auth.asp', async (req, res) => {
       res.cookie(z, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
 
       // Create user's database (PHP: createDb -> mail2DB -> newDb)
-      // mail2DB: derive DB name from email, fall back to "g" + userId
-      let newDbName = '';
-      if (info.email) {
-        const emailPrefix = info.email.split('@')[0].replace(/[^A-Za-z0-9]/g, '').toLowerCase().substring(0, 15);
-        if (USER_DB_MASK.test(emailPrefix)) {
-          // Check vacancy
-          const [existsCheck] = await pool.query(`SHOW TABLES LIKE ?`, [emailPrefix]);
-          if (existsCheck.length === 0) {
-            newDbName = emailPrefix;
-          }
-        }
-        if (!newDbName) {
-          newDbName = `g${userId}`;
-        }
-      } else {
-        newDbName = `g${userId}`;
-      }
-
-      // Create the DB table (similar to /my/_new_db logic)
       const locale = req.cookies[z + '_locale'] || req.cookies.my_locale || 'RU';
-      const template = locale === 'EN' ? 'en' : 'ru';
-
-      try {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS \`${newDbName}\` (
-            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-            up BIGINT UNSIGNED NOT NULL DEFAULT 0,
-            ord INT UNSIGNED NOT NULL DEFAULT 1,
-            t BIGINT UNSIGNED NOT NULL DEFAULT 0,
-            val TEXT,
-            INDEX idx_up (up),
-            INDEX idx_t (t),
-            INDEX idx_up_t (up, t)
-          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        `);
-
-        // Try to copy from template
-        let copiedFromTemplate = false;
-        if (isValidDbName(template)) {
-          const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
-          if (tmplExists.length > 0) {
-            await pool.query(`INSERT INTO \`${newDbName}\` (id, up, ord, t, val) SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0`);
-            await pool.query(`
-              INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
-              SELECT child.id, child.up, child.ord, child.t, child.val
-              FROM \`${template}\` child
-              JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
-              WHERE child.up != 0
-            `);
-            copiedFromTemplate = true;
-          }
-        }
-
-        if (!copiedFromTemplate) {
-          // Initialize with basic types
-          const initQueries = [
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (1, 0, 1, 1, 'Объект')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (8, 0, 2, 8, 'Строка')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (12, 0, 3, 12, 'Текст')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (13, 0, 4, 13, 'Число')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (9, 0, 5, 9, 'Дата')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (4, 0, 6, 4, 'Дата и время')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (11, 0, 7, 11, 'Да/Нет')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (18, 0, 10, 8, 'Пользователь')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (20, 18, 1, 6, ':!NULL:Пароль')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (30, 18, 2, 8, 'Телефон')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (41, 18, 3, 8, 'Email')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (42, 0, 11, 8, 'Роль')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (125, 0, 12, 8, 'Токен')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
-          ];
-          for (const q of initQueries) {
-            try { await pool.query(q); } catch (e) { /* ignore duplicates */ }
-          }
-        }
-
-        // Register the DB in the my table (PHP: createDb)
-        const dbRecordId = await insertRow(z, userId, 1, TYPE.DATABASE, newDbName);
-        await insertRow(z, dbRecordId, 1, 275, dateYmd);
-        await insertRow(z, dbRecordId, 1, 283, template);
-        await insertRow(z, dbRecordId, 1, 276, locale === 'EN'
-          ? 'Test one, created upon registration'
-          : 'Тестовая база, создана при регистрации');
-
+      const newDbName = await createUserDb(pool, z, userId, info.email, locale, 'g');
+      if (newDbName) {
         finalDb = newDbName;
         res.cookie(finalDb, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
         logger.info('[Google OAuth] New user + DB created', { userId, email: info.email, db: finalDb });
-      } catch (dbErr) {
-        logger.error('[Google OAuth] Failed to create user DB', { error: dbErr.message, newDbName });
+      } else {
         // Still let them in to /my even if DB creation failed
         finalDb = z;
       }
@@ -3596,6 +3624,107 @@ router.get('/auth.asp', async (req, res) => {
   } catch (err) {
     logger.error('[Google OAuth] Error', { error: err.message, stack: err.stack });
     return res.status(500).json({ error: 'Google authentication failed', details: err.message });
+  }
+});
+
+/**
+ * Email confirmation handler (my/register GET)
+ * GET /my/register?u={userId}&c={confirmToken}
+ * GET /my/register?optout={userId}
+ *
+ * PHP parity: index.php lines 83–104 (confirm), 156–157 (optout)
+ */
+router.get('/my/register', async (req, res) => {
+  // Optout handler (PHP line 156-157)
+  if (req.query.optout) {
+    const locale = getLocale(req, 'my');
+    return res.send(t9n('optout_message', locale)
+      || 'You have cancelled the email subscription');
+  }
+
+  const { u, c } = req.query;
+  if (!u || !c) {
+    return res.redirect('/my');
+  }
+
+  const userId = parseInt(u, 10);
+  if (!userId) {
+    return res.redirect('/my');
+  }
+
+  try {
+    const pool = getPool();
+
+    // PHP lines 86-93: SELECT with JOINs
+    const [rows] = await pool.query(`
+      SELECT user.val AS user, user.id AS uid,
+             token.id AS tok, token.val AS token,
+             xsrf.id AS xsrf, act.id AS act,
+             pwd.val AS pwd, pwd.id AS pid,
+             email.val AS email
+      FROM my user
+      LEFT JOIN my token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
+      LEFT JOIN my xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
+      LEFT JOIN my pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
+      LEFT JOIN my act ON act.up = user.id AND act.t = ${TYPE.ACTIVITY}
+      LEFT JOIN my email ON email.up = user.id AND email.t = ${TYPE.EMAIL}
+      WHERE user.id = ? AND user.t = ${TYPE.USER}
+    `, [userId]);
+
+    if (!rows.length || !rows[0].uid) {
+      return res.json({ error: 'EXPIRED' });
+    }
+
+    const row = rows[0];
+
+    // Validate confirmation token
+    if (row.token !== c) {
+      return res.json({ error: 'EXPIRED' });
+    }
+
+    // PHP line 97: Hash plaintext password — sha1(Salt(username, plaintext_pwd))
+    const hashedPwd = phpCompatibleHash(row.user, row.pwd, 'my');
+    await pool.query('UPDATE my SET val = ? WHERE id = ?', [hashedPwd, row.pid]);
+
+    // PHP line 98: updateTokens(row) — create/update token, xsrf, activity + set cookie
+    let token;
+    if (row.tok) {
+      token = row.token;
+    } else {
+      token = generateToken();
+      await insertRow('my', row.uid, 1, TYPE.TOKEN, token);
+    }
+
+    const xsrfVal = generateXsrf(token, 'my', 'my');
+    if (row.xsrf) {
+      await pool.query('UPDATE my SET val = ? WHERE id = ?', [xsrfVal, row.xsrf]);
+    } else {
+      await insertRow('my', row.uid, 1, TYPE.XSRF, xsrfVal);
+    }
+
+    const nowSec = String(Math.floor(Date.now() / 1000));
+    if (row.act) {
+      await pool.query('UPDATE my SET val = ? WHERE id = ?', [nowSec, row.act]);
+    } else {
+      await insertRow('my', row.uid, 1, TYPE.ACTIVITY, nowSec);
+    }
+
+    res.cookie('my', token, { maxAge: 2592000 * 12 * 1000, path: '/' });
+
+    // PHP line 99: createDb(uid, "", email, pwd)
+    const locale = getLocale(req, 'my');
+    const emailAddr = row.email || row.user;
+    const newDbName = await createUserDb(pool, 'my', row.uid, emailAddr, locale, 'u');
+    if (newDbName) {
+      res.cookie(newDbName, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
+      logger.info('[Legacy Register] Confirmation: user + DB created', { userId: row.uid, db: newDbName });
+    }
+
+    // PHP line 100: redirect
+    return res.redirect('/my');
+  } catch (err) {
+    logger.error('[Legacy Register] Confirmation error', { error: err.message, userId });
+    return res.status(500).json({ error: 'Confirmation failed' });
   }
 });
 
@@ -3683,7 +3812,7 @@ router.post('/my/register', async (req, res) => {
 
       // Send confirmation email (PHP parity: mail() with confirmation link)
       const host = req.get('host') || 'localhost';
-      const confirmUrl = `https://${host}/my/register?confirm=${confirmToken}`;
+      const confirmUrl = `https://${host}/my/register?u=${userId}&c=${confirmToken}`;
       await sendMail({
         to: email,
         subject: `Подтверждение регистрации ${email}`,
@@ -9792,6 +9921,7 @@ async function compileReport(pool, db, reportId) {
     hasAggregates: false,       // true when at least one column uses an aggregate function
     params: {},                 // PHP: $GLOBALS["STORED_REPS"][$id]["params"] — keyed by type id (e.g. 262 = REP_WHERE)
     repParams: {},              // PHP: $GLOBALS["STORED_REPS"][$id]["rep_params"] — keyed by param name
+    refTyp: {},                 // PHP: $GLOBALS["STORED_REPS"][$id]["ref_typ"] — { [reqTypeId]: baseType } for ref columns
   };
 
   try {
@@ -9834,6 +9964,8 @@ async function compileReport(pool, db, reportId) {
       report.types[report.head.length - 1]   = reqTypeId;
       report.baseOut[report.head.length - 1] = col.col_base_t || TYPE.CHARS;
 
+      const colIsRef = !REV_BASE_TYPE[col.col_base_t] && (col.col_base_t || 0) > 0;
+
       report.columns.push({
         id:         col.id,
         name:       colLabel,
@@ -9841,9 +9973,14 @@ async function compileReport(pool, db, reportId) {
         reqTypeId,          // ← which type to LEFT JOIN on
         isMainCol:  reqTypeId === report.parentType,  // main object's own val
         baseType:   col.col_base_t || TYPE.CHARS,
-        isRef:      !REV_BASE_TYPE[col.col_base_t] && (col.col_base_t || 0) > 0,
+        isRef:      colIsRef,
         order:      col.ord,
       });
+
+      // PHP: $GLOBALS["STORED_REPS"][$id]["ref_typ"][$reqTypeId] = col_base_t
+      if (colIsRef) {
+        report.refTyp[String(reqTypeId)] = col.col_base_t;
+      }
     }
 
     // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_NAME, REP_COL_FORMULA, REP_COL_FROM, REP_COL_TO, REP_COL_HIDE, REP_COL_TOTAL ──
@@ -10015,6 +10152,28 @@ async function compileReport(pool, db, reportId) {
   }
 
   return report;
+}
+
+/**
+ * Check whether a given type is a reference type within a compiled report.
+ *
+ * PHP equivalent (index.php:1750):
+ *   function isRef($id, $par, $typ) {
+ *     if(isset($GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ]))
+ *       return $GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ];
+ *     return false;
+ *   }
+ *
+ * @param {object} report - compiled report object (from compileReport)
+ * @param {number|string} typ - type ID to check
+ * @returns {number|false} the reference target type ID, or false
+ */
+function isRef(report, typ) {
+  const key = String(typ);
+  if (report && report.refTyp && report.refTyp[key] !== undefined) {
+    return report.refTyp[key];
+  }
+  return false;
 }
 
 /**
@@ -13054,6 +13213,7 @@ export {
   getFilename,
   normalSize,
   checkNewRef,
+  isRef,
   checkValGranted,
   checkRepColGranted,
   constructWhere,
