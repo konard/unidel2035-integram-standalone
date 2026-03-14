@@ -53,3 +53,6 @@ backend/monolith/data/
 **/token_registry.json
 # Modern-CLI project directory
 .modern/
+
+# Playwright MCP cache
+.playwright-mcp/
