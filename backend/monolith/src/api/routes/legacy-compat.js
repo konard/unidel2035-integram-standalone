@@ -10858,16 +10858,38 @@ async function compileReport(pool, db, reportId) {
 /**
  * Check whether a given type is a reference type within a compiled report.
  *
- * PHP equivalent (index.php:1750):
- *   function isRef($id, $par, $typ) {
- *     if(isset($GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ]))
- *       return $GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ];
- *     return false;
- *   }
+ * ### Signature mapping (PHP 3-param → Node 2-param)
  *
- * @param {object} report - compiled report object (from compileReport)
- * @param {number|string} typ - type ID to check
- * @returns {number|false} the reference target type ID, or false
+ * PHP signature (index.php:1750):
+ * ```php
+ * function isRef($id, $par, $typ) {
+ *   if(isset($GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ]))
+ *     return $GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ];
+ *   return false;
+ * }
+ * ```
+ *
+ * | PHP param | Node equivalent           | Notes                                    |
+ * |-----------|---------------------------|------------------------------------------|
+ * | `$id`     | `report.id`               | Report ID, embedded in the report object |
+ * | `$par`    | `report.parentType`       | Parent type, embedded in the report obj  |
+ * | `$typ`    | `typ` (2nd param)         | Type ID to look up — kept as-is          |
+ *
+ * **Why the signature changed:** In PHP, `$id` is used to index into the
+ * global `$GLOBALS["STORED_REPS"]` array, and `$par` is available on that
+ * same stored entry but is never used inside the function body. In the Node
+ * port, `compileReport()` returns a self-contained report object that already
+ * carries `id`, `parentType`, and `refTyp` — so the caller passes the report
+ * object directly instead of a bare ID. This collapses the first two PHP
+ * parameters into a single `report` object, reducing the arity from 3 to 2.
+ *
+ * @see {@link https://github.com/unidel2035/integram-standalone/issues/336}
+ *
+ * @param {object} report - Compiled report object (from compileReport).
+ *   Must contain `report.refTyp` — a map of type-ID → reference-target-type.
+ * @param {number|string} typ - Type ID to check for reference status.
+ * @returns {number|false} The reference target type ID, or `false` if `typ`
+ *   is not a reference type in this report.
  */
 function isRef(report, typ) {
   const key = String(typ);
