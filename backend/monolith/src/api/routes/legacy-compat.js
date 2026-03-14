@@ -1328,7 +1328,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
 
     // resolveBuiltIn substitution (needs user context; skip if unavailable)
     if (ctx.user) {
-      value = resolveBuiltIn(value, ctx.user, db, ctx.tzone || 0, '');
+      value = resolveBuiltIn(value, ctx.user, db, ctx.tzone || 0, '', ctx.reqHeaders || {});
     }
 
     let search_val = '';
@@ -1816,16 +1816,25 @@ async function legacyDdlGrantCheck(req, res, next) {
  * @param {string} ip     - client IP address
  * @returns {string} resolved value
  */
-function resolveBuiltIn(val, user, db, tzone = 0, ip = '') {
+function resolveBuiltIn(val, user, db, tzone = 0, ip = '', reqHeaders = {}) {
   if (!val || typeof val !== 'string') return val;
 
   const now = new Date(Date.now() + tzone * 1000);
   const pad = (n) => String(n).padStart(2, '0');
-  const dateStr = `${pad(now.getUTCDate())}.${pad(now.getUTCMonth() + 1)}.${now.getUTCFullYear()}`;
+  const fmtDate = (d) => `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`;
+  const dateStr = fmtDate(now);
   const timeStr = `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())}`;
   const datetimeStr = `${dateStr} ${timeStr}`;
 
-  return val
+  // Date-relative helpers (PHP parity: index.php:1584-1593)
+  const yesterday = fmtDate(new Date(now.getTime() - 86400000));
+  const tomorrow  = fmtDate(new Date(now.getTime() + 86400000));
+  const weekAgo   = fmtDate(new Date(now.getTime() - 7 * 86400000));
+  const monthAgo  = (() => { const d = new Date(now); d.setUTCMonth(d.getUTCMonth() - 1); return fmtDate(d); })();
+  const monthPlus = (() => { const d = new Date(now); d.setUTCMonth(d.getUTCMonth() + 1); return fmtDate(d); })();
+
+  // Existing %X% percent-syntax placeholders
+  let result = val
     .replace(/%USER%/g, user.username || '')
     .replace(/%USERID%/g, String(user.uid || ''))
     .replace(/%DB%/g, db || '')
@@ -1833,6 +1842,22 @@ function resolveBuiltIn(val, user, db, tzone = 0, ip = '') {
     .replace(/%DATE%/g, dateStr)
     .replace(/%DATETIME%/g, datetimeStr)
     .replace(/%TIME%/g, timeStr);
+
+  // [X] bracket-syntax placeholders (PHP parity: index.php:1576-1618)
+  result = result
+    .replace(/\[YESTERDAY\]/g, yesterday)
+    .replace(/\[TOMORROW\]/g, tomorrow)
+    .replace(/\[MONTH_AGO\]/g, monthAgo)
+    .replace(/\[WEEK_AGO\]/g, weekAgo)
+    .replace(/\[MONTH_PLUS\]/g, monthPlus)
+    .replace(/\[ROLE\]/g, user.role || '')
+    .replace(/\[ROLE_ID\]/g, String(user.roleId || ''))
+    .replace(/\[TSHIFT\]/g, String(tzone))
+    .replace(/\[REMOTE_HOST\]/g, reqHeaders['x-forwarded-host'] || reqHeaders['host'] || '')
+    .replace(/\[HTTP_USER_AGENT\]/g, reqHeaders['user-agent'] || '')
+    .replace(/\[HTTP_REFERER\]/g, reqHeaders['referer'] || '');
+
+  return result;
 }
 
 /**
@@ -1876,6 +1901,9 @@ function resolveMaskBuiltIn(val, userCtx) {
     case '[ROLE_ID]':     resolved = String(userCtx.roleId || ''); break;
     case '[TSHIFT]':      resolved = String(userCtx.tzone || 0); break;
     case '[REMOTE_ADDR]': resolved = userCtx.ip || ''; break;
+    case '[REMOTE_HOST]': resolved = userCtx.remoteHost || ''; break;
+    case '[HTTP_USER_AGENT]': resolved = userCtx.userAgent || ''; break;
+    case '[HTTP_REFERER]':    resolved = userCtx.referer || ''; break;
     default:              return val; // Unresolved — return as-is
   }
 
@@ -4706,7 +4734,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     }
 
     // Apply resolveBuiltIn + formatVal to the main value
-    value = resolveBuiltIn(value, req.legacyUser || {}, db, tzone, clientIp);
+    value = resolveBuiltIn(value, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
 
     // Fetch type's base type for formatVal
     const [typeMeta] = await pool.query(
@@ -4819,7 +4847,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         logger.info('[Legacy _m_new] File saved for requisite', { db, attrTypeId, safeName });
       } else {
         // Apply resolveBuiltIn + formatVal
-        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
         finalValue = String(formatVal(attrBaseType, finalValue, tzone));
       }
 
@@ -5166,7 +5194,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
 
         // Apply resolveBuiltIn then formatVal before storage
-        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
         if (meta) {
           finalValue = String(formatVal(baseType, finalValue, tzone));
         }
@@ -5525,7 +5553,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       }
 
       // Apply resolveBuiltIn then formatVal before storage
-      finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
+      finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
       if (meta) {
         finalValue = String(formatVal(meta.base_type, finalValue, tzone));
       }
@@ -6383,12 +6411,122 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       .trim();
 
     if (attrsFormula.startsWith('&')) {
-      // Real PHP block reference — requires PHP template engine, not available in Node.js.
-      // Return a simple fallback list using just the dictionary type.
-      logger.warn('[Legacy _ref_reqs] Dynamic formula not supported, using simple fallback', {
-        db, id, formula: attrsFormula
+      // Dynamic formula: the attr value is a report block reference (e.g. "&my_dropdown_report").
+      // PHP: Get_block_data($attrs) — default case resolves block name to a report,
+      //      calls Compile_Report + Execute, then reads ids/vals/alts columns from $blocks.
+      // PHP also sets REQREF["1"] (ID filter) or REQREF["2"] (value LIKE filter) from ?q=.
+      //
+      // Node.js: look up the report by name, compile, build filters from ?q=, execute,
+      // and map the first two visible columns to {id: display_value}.
+      const blockName = attrsFormula; // e.g. "&my_report"
+      logger.info('[Legacy _ref_reqs] Evaluating dynamic formula via report', {
+        db, id, formula: blockName
       });
-      // Simple fallback: return all objects of dic type
+
+      try {
+        // Resolve the report: lookup by block name (strip leading '&')
+        const reportName = blockName.startsWith('&') ? blockName.slice(1) : blockName;
+        const [repRows] = await pool.query(
+          `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+          [reportName]
+        );
+
+        // Also try the full block name (with '&') if bare name not found
+        let reportId = repRows.length > 0 ? repRows[0].id : null;
+        if (!reportId) {
+          const [repRows2] = await pool.query(
+            `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+            [blockName]
+          );
+          reportId = repRows2.length > 0 ? repRows2[0].id : null;
+        }
+        // Also try numeric block name (direct report ID)
+        if (!reportId && /^\d+$/.test(reportName)) {
+          const numId = parseInt(reportName, 10);
+          const [repRows3] = await pool.query(
+            `SELECT id FROM \`${db}\` WHERE id = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+            [numId]
+          );
+          reportId = repRows3.length > 0 ? numId : null;
+        }
+
+        if (reportId) {
+          const report = await compileReport(pool, db, reportId);
+          if (report) {
+            // Build filters from ?q= parameter — PHP REQREF logic:
+            //   REQREF["1"] = @<id>  → filter on first visible column by ID
+            //   REQREF["2"] = %<search>% → filter on second visible column by LIKE
+            const filters = {};
+            if (searchQuery) {
+              // Find first two visible (non-hidden) columns
+              const visibleCols = report.columns.filter(c => !c.hidden);
+              if (searchQuery.startsWith('@')) {
+                // ID-based search: apply to first visible column
+                if (visibleCols.length > 0) {
+                  filters[visibleCols[0].alias] = { from: searchQuery };
+                }
+              } else {
+                // Value search: apply LIKE to second visible column (or first if only one)
+                const searchVal = searchQuery.includes('%') ? searchQuery : `%${searchQuery}%`;
+                const targetCol = visibleCols.length > 1 ? visibleCols[1] : visibleCols[0];
+                if (targetCol) {
+                  filters[targetCol.alias] = { like: searchQuery.includes('%') ? undefined : searchQuery };
+                  if (searchQuery.includes('%')) {
+                    filters[targetCol.alias] = { from: searchQuery };
+                  }
+                }
+              }
+            }
+
+            const results = await executeReport(pool, db, report, filters, limitParam, 0);
+
+            // Map results to dropdown: PHP reads $blocks[$attrs] which has id[], val[], alt[] arrays.
+            // The first column is IDs, second is display values, third is alt values.
+            // In Node.js report results, each row has { id, val, <alias1>, <alias2>, ... }.
+            // The row.id is the main object ID (first column), and subsequent columns provide display values.
+            const formulaResult = {};
+            const resultVisibleCols = report.columns.filter(c => !c.hidden);
+
+            for (const row of results.data) {
+              // PHP: ids = first column, vals = second column, alts = third column
+              // The row.id from report execution is the main object ID
+              const rowId = row.id;
+              if (rowId === undefined || rowId === null) continue;
+              if (!(/^\d+$/.test(String(rowId)))) continue; // PHP: die if non-numeric id
+
+              // Display value: prefer second visible column (val), fall back to third (alt), then main_val
+              let displayVal = '';
+              if (resultVisibleCols.length > 0) {
+                displayVal = row[resultVisibleCols[0].alias] || '';
+              }
+              // If first visible column gave nothing, try main_val
+              if (!displayVal) {
+                displayVal = row.val || row.main_val || '';
+              }
+
+              if (!formulaResult[rowId]) {
+                formulaResult[rowId] = displayVal || '--';
+              }
+            }
+
+            logger.info('[Legacy _ref_reqs] Formula evaluation returned results', {
+              db, id, reportId, count: Object.keys(formulaResult).length
+            });
+            return res.json(formulaResult);
+          }
+        }
+
+        // Report not found — fall back to simple dictionary query
+        logger.warn('[Legacy _ref_reqs] Report not found for formula, using simple fallback', {
+          db, id, formula: blockName, reportName
+        });
+      } catch (formulaError) {
+        logger.warn('[Legacy _ref_reqs] Formula evaluation failed, using simple fallback', {
+          db, id, formula: blockName, error: formulaError.message
+        });
+      }
+
+      // Fallback: return all objects of dic type (when report not found or errors)
       const searchQ = searchQuery.startsWith('@')
         ? null : (searchQuery ? `%${searchQuery.replace(/'/g, "''")}%` : null);
       const searchId = searchQuery.startsWith('@') ? parseInt(searchQuery.slice(1), 10) : null;
@@ -9035,7 +9173,7 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
         // PHP resolves both bracket syntax ([TODAY]) and percent syntax (%USER%) in filters
         if (userCtx) {
           rawWhere = resolveAllBracketBuiltIns(rawWhere, userCtx);
-          rawWhere = resolveBuiltIn(rawWhere, userCtx, db, userCtx.tzone || 0, userCtx.ip || '');
+          rawWhere = resolveBuiltIn(rawWhere, userCtx, db, userCtx.tzone || 0, userCtx.ip || '', userCtx.reqHeaders || {});
         }
         // PHP: prepend "AND" if the stored WHERE doesn't already start with AND
         if (rawWhere.substring(0, 3).toUpperCase() === 'AND') {
@@ -9115,7 +9253,7 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     // both SELECT fields and WHERE filter after assembly.
     if (userCtx) {
       sql = resolveAllBracketBuiltIns(sql, userCtx);
-      sql = resolveBuiltIn(sql, userCtx, db, userCtx.tzone || 0, userCtx.ip || '');
+      sql = resolveBuiltIn(sql, userCtx, db, userCtx.tzone || 0, userCtx.ip || '', userCtx.reqHeaders || {});
     }
 
     logger.debug('[Report] SQL', { sql });
@@ -9249,10 +9387,13 @@ router.all('/:db/report/:reportId?', async (req, res) => {
     // PHP also executes for JSON_KV, JSON_CR, JSON_HR, JSON_DATA flags (they select output format, not trigger)
     const q = req.query;
     // PHP executes the report for all JSON flags including plain ?JSON
+    // CSV export (?csv or ?format=csv) also triggers execution
+    const wantCsv = q.csv !== undefined || format === 'csv';
     const shouldExecute = execute || req.method === 'POST' ||
       q.JSON !== undefined || q.json !== undefined ||
       q.JSON_KV !== undefined || q.JSON_CR !== undefined || q.JSON_HR !== undefined ||
-      q.JSON_DATA !== undefined || q.RECORD_COUNT !== undefined;
+      q.JSON_DATA !== undefined || q.RECORD_COUNT !== undefined ||
+      wantCsv;
 
     if (shouldExecute) {
       // Parse filters from request
@@ -9357,6 +9498,10 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         roleId: req.legacyUser.roleId || '',
         tzone: req.legacyUser.tzone || 0,
         ip: req.ip || '',
+        reqHeaders: req.headers || {},
+        remoteHost: req.headers['x-forwarded-host'] || req.headers['host'] || '',
+        userAgent: req.headers['user-agent'] || '',
+        referer: req.headers['referer'] || '',
       } : null;
 
       const orderParam = params.ORDER || params.order || null;
@@ -9382,16 +9527,20 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         return res.json({ count: cntResults.rownum });
       }
 
-      // CSV export (?format=csv)
-      if (format === 'csv') {
-        const headers = report.columns.map(c => c.name).join(',');
-        const csvRows = results.data.map(row =>
-          report.columns.map(c => `"${(row[c.alias] || '').toString().replace(/"/g, '""')}"`).join(',')
-        ).join('\n');
+      // CSV export (?csv or ?format=csv)
+      // PHP behaviour: when ?csv is set, LIMIT is removed so all matching rows are exported.
+      // Re-fetch without LIMIT to ensure complete export.
+      if (wantCsv) {
+        let csvData = results.data;
+        if (limit < 99999) {
+          const allResults = await executeReport(pool, db, report, filters, 999999, 0, orderParam, 0, reportUserCtx);
+          csvData = allResults.data;
+        }
 
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename=report_${id}.csv`);
-        return res.send(headers + '\n' + csvRows);
+        const { csv, filename } = formatReportCsv(report, csvData, id);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(csv);
       }
 
       // PHP-compatible JSON output formats
@@ -9990,6 +10139,48 @@ function maskCsvDelimiters(val) {
   const str = String(val);
   // Escape semicolons and newlines for CSV
   return str.replace(/;/g, '\\;').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+/**
+ * Format report results as CSV for download.
+ * Matches PHP Compile_Report CSV export behavior:
+ *   - Semicolon delimiter (fputcsv($handle, $data, ';'))
+ *   - UTF-8 BOM prefix for Excel compatibility
+ *   - Values containing semicolons, quotes, or newlines are quoted
+ *   - Double-quotes inside values are escaped as ""
+ *
+ * @param {object}   report  - compiled report with .columns[]
+ * @param {object[]} rows    - result data array
+ * @param {number}   reportId - report ID for filename
+ * @returns {{ csv: string, filename: string }}
+ */
+function formatReportCsv(report, rows, reportId) {
+  const BOM = '\ufeff';
+  const DELIM = ';';
+
+  /** Escape a single cell value for semicolon-delimited CSV */
+  function escapeCell(val) {
+    if (val === null || val === undefined) return '';
+    const str = String(val);
+    // If the value contains the delimiter, quotes, or newlines — wrap in quotes
+    if (str.includes(DELIM) || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }
+
+  // Header row: column display names
+  const headerLine = report.columns.map(c => escapeCell(c.name)).join(DELIM);
+
+  // Data rows
+  const dataLines = rows.map(row =>
+    report.columns.map(c => escapeCell(row[c.alias])).join(DELIM)
+  );
+
+  const csv = BOM + headerLine + '\n' + dataLines.join('\n');
+  const filename = `report_${reportId}.csv`;
+
+  return { csv, filename };
 }
 
 // ============================================================================
@@ -10626,16 +10817,35 @@ router.post('/:db', async (req, res, next) => {
       roleId: req.legacyUser.roleId || '',
       tzone: req.legacyUser.tzone || 0,
       ip: req.ip || '',
+      reqHeaders: req.headers || {},
+      remoteHost: req.headers['x-forwarded-host'] || req.headers['host'] || '',
+      userAgent: req.headers['user-agent'] || '',
+      referer: req.headers['referer'] || '',
     } : null;
 
-    const results = await executeReport(pool, db, report, filters, limit, offset, null, 0, reportUserCtx);
-
     const q = req.query;
+
+    // CSV export: fetch all rows (no LIMIT) to match PHP behaviour
+    const wantCsv = q.csv !== undefined || q.format === 'csv';
+    if (wantCsv) {
+      limit = 999999;
+      offset = 0;
+    }
+
+    const results = await executeReport(pool, db, report, filters, limit, offset, null, 0, reportUserCtx);
 
     // RECORD_COUNT: smartq.js calls ?JSON&RECORD_COUNT → {count: N}
     if (q.RECORD_COUNT !== undefined) {
       const cntResults = await executeReport(pool, db, report, filters, 999999, 0, null, 0, reportUserCtx);
       return res.json({ count: cntResults.rownum });
+    }
+
+    // CSV export (?csv or ?format=csv)
+    if (wantCsv) {
+      const { csv, filename } = formatReportCsv(report, results.data, reportId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(csv);
     }
 
     // JSON_KV format: [{col_name: val, ...}, ...]
