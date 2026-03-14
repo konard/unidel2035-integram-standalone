@@ -1226,3 +1226,52 @@ describe('updateTokens activity timestamp format (#329)', () => {
     expect(actTimestamp).toMatch(/\./);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// api_dump() headers (Issue #382)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('api_dump() headers (Issue #382)', () => {
+  const app = makeApp();
+  const token = 'test-token-abc';
+  const xsrf  = generateXsrf(token, DB, DB);
+  const pwdHash = phpCompatibleHash('alice', 'Password1!', DB);
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('JSON responses include Content-Disposition and Content-Transfer-Encoding', async () => {
+    const showTablesResp = [[{ Tables_in_integram: DB }]];
+    const userRow = { uid: 5, username: 'alice', password_hash: pwdHash, pwd_id: 6, token, token_id: 7, xsrf, xsrf_id: 8 };
+    const userResp = [[userRow]];
+    const updateResp = [{ affectedRows: 1 }];
+
+    mockQuery(showTablesResp, userResp, updateResp, updateResp);
+
+    const res = await request(app)
+      .post(`/${DB}/auth?JSON`)
+      .send({ login: 'alice', pwd: 'Password1!' });
+
+    expect(res.status).toBe(200);
+    // PHP api_dump() sets Content-Disposition: attachment;filename=api.json
+    expect(res.headers['content-disposition']).toBe('attachment;filename=api.json');
+    // PHP api_dump() sets Content-Transfer-Encoding: binary
+    expect(res.headers['content-transfer-encoding']).toBe('binary');
+  });
+
+  it('non-JSON requests do not get api_dump headers', async () => {
+    const showTablesResp = [[{ Tables_in_integram: DB }]];
+    const userRow = { uid: 5, username: 'alice', password_hash: pwdHash, pwd_id: 6, token, token_id: 7, xsrf, xsrf_id: 8 };
+    const userResp = [[userRow]];
+    const updateResp = [{ affectedRows: 1 }];
+
+    mockQuery(showTablesResp, userResp, updateResp, updateResp);
+
+    // POST without ?JSON → redirect (non-JSON response)
+    const res = await request(app)
+      .post(`/${DB}/auth`)
+      .send({ login: 'alice', pwd: 'Password1!' });
+
+    // Redirect responses should NOT have api_dump headers
+    expect(res.headers['content-transfer-encoding']).toBeUndefined();
+  });
+});
