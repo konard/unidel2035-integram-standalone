@@ -6913,6 +6913,9 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         const bTypeId = parseInt(bMatch[1], 10);
         // If the corresponding t{id} was NOT submitted, the checkbox was unchecked
         if (!processedTypeIds.has(bTypeId)) {
+          // PHP parity (index.php:8164-8166): check WRITE grant before deleting unchecked boolean
+          const hasGrant = await checkGrant(pool, db, req.legacyUser.grants, objectId, bTypeId, 'WRITE', req.legacyUser.username);
+          if (!hasGrant) continue;
           const existing = await getRequisiteByType(db, objectId, bTypeId);
           if (existing) {
             await deleteRow(db, existing.id);
