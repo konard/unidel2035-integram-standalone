@@ -208,6 +208,130 @@ function abn_Translit(s) {
   return result;
 }
 
+// ── JSON utilities (PHP parity: index.php:3912-3939) ──────────────────────
+
+/**
+ * getJsonVal(jsonKey, val) — extract a value from a JSON string by key name.
+ *
+ * PHP behavior (index.php:3912-3931):
+ * 1. If jsonKey is empty or not found (case-insensitive) in val, return val as-is.
+ * 2. First try json_decode as object: if the key exists as a direct property
+ *    and its value is an array, return JSON-encoded array.
+ * 3. Then json_decode as associative array and walk recursively:
+ *    return the first value whose key matches jsonKey (exact, case-sensitive).
+ * 4. If nothing matched, return the original val.
+ *
+ * @param {string} jsonKey - the key to search for
+ * @param {string} val     - JSON string to search in
+ * @returns {*} extracted value or original val
+ */
+function getJsonVal(jsonKey, val) {
+  if (!jsonKey || typeof jsonKey !== 'string' || jsonKey.length === 0) return val;
+  if (typeof val !== 'string') return val;
+
+  // PHP: mb_strpos(strtoupper($val), strtoupper($jsonKey)) !== FALSE
+  if (val.toUpperCase().indexOf(jsonKey.toUpperCase()) === -1) return val;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(val);
+  } catch {
+    return val;
+  }
+
+  if (parsed === null || typeof parsed !== 'object') return val;
+
+  // Step 1: direct property check (PHP: $tmp->$jsonKey)
+  if (jsonKey in parsed) {
+    if (Array.isArray(parsed[jsonKey])) {
+      return JSON.stringify(parsed[jsonKey]);
+    }
+  }
+
+  // Step 2: recursive walk — find first matching key (PHP: array_walk_recursive)
+  let found = false;
+  let result = val;
+
+  function walkRecursive(obj) {
+    if (found) return;
+    if (obj === null || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        walkRecursive(item);
+        if (found) return;
+      }
+    } else {
+      for (const [k, v] of Object.entries(obj)) {
+        if (found) return;
+        if (k === jsonKey) {
+          found = true;
+          result = v;
+          return;
+        }
+        if (v !== null && typeof v === 'object') {
+          walkRecursive(v);
+        }
+      }
+    }
+  }
+
+  walkRecursive(parsed);
+  return result;
+}
+
+/**
+ * checkJson(jsonKey, val) — extract a value from a JSON string by key name.
+ *
+ * PHP behavior (index.php:3932-3939):
+ * Parses val as JSON associative array, walks recursively to find the first
+ * key matching jsonKey, returns that value. If not found, returns original val.
+ *
+ * @param {string} jsonKey - the key to search for
+ * @param {string} val     - JSON string to search in
+ * @returns {*} extracted value or original val
+ */
+function checkJson(jsonKey, val) {
+  if (!jsonKey || typeof val !== 'string') return val;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(val);
+  } catch {
+    return val;
+  }
+
+  if (parsed === null || typeof parsed !== 'object') return val;
+
+  let found = false;
+  let result = val;
+
+  function walkRecursive(obj) {
+    if (found) return;
+    if (obj === null || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        walkRecursive(item);
+        if (found) return;
+      }
+    } else {
+      for (const [k, v] of Object.entries(obj)) {
+        if (found) return;
+        if (k === jsonKey) {
+          found = true;
+          result = v;
+          return;
+        }
+        if (v !== null && typeof v === 'object') {
+          walkRecursive(v);
+        }
+      }
+    }
+  }
+
+  walkRecursive(parsed);
+  return result;
+}
+
 // ── Registry: map function name → implementation ─────────────────────────
 
 const ABN_POST_PROCESS_FUNCTIONS = {
@@ -262,6 +386,8 @@ export {
   isAbnFunction,
   isAbnPostProcessFunction,
   applyAbnFunction,
+  getJsonVal,
+  checkJson,
   ABN_POST_PROCESS_FUNCTIONS,
   ABN_SQL_FIELD_FUNCS,
 };
