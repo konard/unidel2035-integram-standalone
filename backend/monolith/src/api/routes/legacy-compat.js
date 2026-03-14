@@ -1132,12 +1132,16 @@ function formatVal(typeId, val, tzone = 0) {
       }
       break;
 
-    case 'NUMBER':
-      const numVal = parseInt(String(val).replace(/,/g, '.').replace(/ /g, ''));
-      if (numVal !== 0) {
+    case 'NUMBER': {
+      // PHP: if ($val != 0) $val = (int)$val;
+      // PHP loose comparison: "" == 0, "abc" == 0, so only truly numeric non-zero values get cast.
+      // NaN must not leak through — treat NaN and non-numeric input like PHP does (fall through).
+      const numVal = parseInt(String(val).replace(/,/g, '.').replace(/ /g, ''), 10);
+      if (!isNaN(numVal) && numVal !== 0) {
         return numVal;
       }
       break;
+    }
 
     case 'BOOLEAN':
       if (val === '' || String(val).toLowerCase() === 'false' || val === '-1' || val === ' ') {
@@ -1145,12 +1149,15 @@ function formatVal(typeId, val, tzone = 0) {
       }
       return '1';
 
-    case 'SIGNED':
+    case 'SIGNED': {
+      // PHP: if ($val != 0) $val = (double)str_replace(",",".",$val);
+      // Same NaN guard as NUMBER — non-numeric / empty strings fall through.
       const signedVal = parseFloat(String(val).replace(/,/g, '.').replace(/ /g, '').replace(/\u00A0/g, ''));
-      if (signedVal !== 0) {
+      if (!isNaN(signedVal) && signedVal !== 0) {
         return signedVal;
       }
       break;
+    }
 
     case 'DATETIME':
       if (val && !String(val).startsWith('[')) {
@@ -5646,7 +5653,11 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       }
 
       // Apply resolveBuiltIn then formatVal before storage
-      finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
+      // PHP line 7923: skip BuiltIn() resolution for system type IDs (101=activity_type, 102=role_link, 103=level, 132=xsrf_token, 49=mask)
+      const BUILTIN_SKIP_IDS = [101, 102, 103, 132, 49];
+      if (!BUILTIN_SKIP_IDS.includes(typeIdNum)) {
+        finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
+      }
       if (meta) {
         finalValue = String(formatVal(meta.base_type, finalValue, tzone));
       }
