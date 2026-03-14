@@ -525,7 +525,7 @@ describe('legacyAuthMiddleware', () => {
     await legacyAuthMiddleware(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Authentication required' });
+    expect(res.json).toHaveBeenCalledWith([{ error: 'Authentication required' }]);
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -537,7 +537,7 @@ describe('legacyAuthMiddleware', () => {
     await legacyAuthMiddleware(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid database' });
+    expect(res.json).toHaveBeenCalledWith([{ error: 'Invalid database' }]);
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -553,7 +553,7 @@ describe('legacyAuthMiddleware', () => {
     await legacyAuthMiddleware(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid or expired token' });
+    expect(res.json).toHaveBeenCalledWith([{ error: 'Invalid or expired token' }]);
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -605,7 +605,7 @@ describe('legacyXsrfCheck', () => {
     legacyXsrfCheck(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid or expired CSRF token' });
+    expect(res.json).toHaveBeenCalledWith([{ error: 'Invalid or expired CSRF token' }]);
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -874,7 +874,7 @@ describe('Phase 2: middleware wiring', () => {
           .post(`/${DB}/${route}`)
           .send({ _xsrf: 'fake' });
         expect(res.status).toBe(401);
-        expect(res.body.error).toBeDefined();
+        expect(res.body[0].error).toBeDefined();
       });
     }
   });
@@ -896,7 +896,7 @@ describe('Phase 2: middleware wiring', () => {
         .send({ _xsrf: 'wrong-xsrf', val: 'test' });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ error: 'Invalid or expired CSRF token' });
+      expect(res.body).toEqual([{ error: 'Invalid or expired CSRF token' }]);
     });
   });
 
@@ -913,7 +913,7 @@ describe('Phase 2: middleware wiring', () => {
           .post(`/${DB}/${route}`)
           .send({ _xsrf: 'fake' });
         expect(res.status).toBe(401);
-        expect(res.body.error).toBeDefined();
+        expect(res.body[0].error).toBeDefined();
       });
     }
   });
@@ -932,7 +932,7 @@ describe('Phase 2: middleware wiring', () => {
         const res = await request(app)
           .get(`/${DB}/${route}`);
         expect(res.status).toBe(401);
-        expect(res.body.error).toBeDefined();
+        expect(res.body[0].error).toBeDefined();
       });
     }
   });
