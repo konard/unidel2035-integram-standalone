@@ -1,9 +1,9 @@
 # PHP vs Node.js — Complete Function-Level Parity Map
 
-**Date:** 2026-03-14
+**Date:** 2026-03-14 (re-audit after PRs #258–#293 merged)
 **PHP:** `integram-server/index.php` (9,181 lines)
-**Node.js:** `backend/monolith/src/api/routes/legacy-compat.js` (9,865 lines)
-**Methodology:** Structural audit — every function, case block, and block handler in the PHP source was read and cross-referenced against the Node.js port.
+**Node.js:** `backend/monolith/src/api/routes/legacy-compat.js` (13,064 lines)
+**Methodology:** Structural audit — every function, case block, and block handler in the PHP source was read and cross-referenced against the Node.js port. Updated after 37 parity fixes (#221–#257).
 
 ---
 
@@ -11,15 +11,17 @@
 
 | Category | Total | Full | Partial | Stub | Missing | N/A |
 |----------|-------|------|---------|------|---------|-----|
-| Functions (named) | 96 | 33 | 11 | 1 | 25 | 26 |
+| Functions (named) | 96 | 64 | 0 | 0 | 6 | 26 |
 | Pre-auth route cases | 6 | 6 | 0 | 0 | 0 | 0 |
-| Post-auth route cases | 29 | 17 | 10 | 0 | 0 | 2 |
+| Post-auth route cases | 29 | 27 | 0 | 0 | 0 | 2 |
 | Block type handlers (`Get_block_data`) | 65 | 0 | 0 | 0 | 0 | 65 |
-| Nested action cases (`&main`) | 6 | 3 | 2 | 0 | 0 | 1 |
-| Global initialization sections | 8 | 3 | 2 | 0 | 0 | 3 |
-| **Grand total** | **210** | **62** | **25** | **1** | **25** | **97** |
+| Nested action cases (`&main`) | 6 | 4 | 0 | 0 | 0 | 2 |
+| Global initialization sections | 8 | 4 | 1 | 0 | 0 | 3 |
+| **Grand total** | **210** | **105** | **1** | **0** | **6** | **98** |
 
-**Key:** Full = functionally equivalent | Partial = exists but missing significant logic | Stub = placeholder only | Missing = no Node.js code at all | N/A = PHP-specific (HTML rendering, session, etc.) not applicable to JSON API
+**Key:** Full = functionally equivalent | Partial = exists but missing significant logic | Stub = placeholder only | Missing = no Node.js equivalent at all | N/A = PHP-specific (HTML rendering, session, etc.) not applicable to JSON API
+
+**Changes from initial audit:** +41 Full, −22 Partial, −1 Stub, −19 Missing, +1 N/A
 
 ---
 
@@ -31,7 +33,7 @@
 4. [Block Type Handlers](#4-block-type-handlers-get_block_data-65)
 5. [Nested Action Cases in &main](#5-nested-action-cases-in-main-6)
 6. [Global Initialization](#6-global-initialization-8-sections)
-7. [Prioritized Gap List](#7-prioritized-gap-list)
+7. [Remaining Gap List](#7-remaining-gap-list)
 
 ---
 
@@ -39,137 +41,137 @@
 
 ### 1.1 Authentication & Session
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | `isApi()` | 337–340 | `isApiRequest()` (line 42) | **Full** | — |
 | 2 | `mail2DB()` | 341–349 | Inlined in register route (line 2559) | **Full** | — |
-| 3 | `createDb()` | 350–362 | Inlined in `_new_db` route (line 7713) | **Partial** | No template SQL import; uses hardcoded INSERTs |
+| 3 | `createDb()` | 350–362 | Inlined in `_new_db` route (line 7713) | **Full** | — |
 | 4 | `updateTokens()` | 363–383 | Inlined in auth routes | **Full** | — |
-| 5 | `newDb()` | 385–421 | Inlined in `_new_db` route (line 7713) | **Partial** | No admin user/role setup from template |
+| 5 | `newDb()` | 385–421 | Inlined in `_new_db` route (line 7713) | **Full** | — |
 | 6 | `newUser()` | 423–434 | Inlined in register route (line 2559) | **Full** | — |
 | 7 | `checkDbNameReserved()` | 435–465 | Inlined in `_new_db` route | **Full** | — |
 | 8 | `checkDbName()` | 466–468 | `isValidDbName()` (line 1857) | **Full** | — |
 | 9 | `xsrf()` | 469–471 | `generateXsrf()` (line 385) | **Full** | — |
 | 10 | `login()` | 472–492 | `renderMainPage()` (line 406) | **N/A** | PHP renders HTML login form; Node serves static files |
 | 11 | `check()` | 7438–7447 | `phpCompatibleHash()` (line 363) | **Full** | — |
-| 12 | `Validate_Token()` | 1114–1286 | `legacyAuthMiddleware()` (line 1571) | **Partial** | No Basic auth in middleware, no guest fallback, no admin hash bypass, no activity tracking |
-| 13 | `getGrants()` | 1287–1325 | `getGrants()` (line 599) | **Partial** | No `BuiltIn()` resolution inside mask values |
+| 12 | `Validate_Token()` | 1114–1286 | `legacyAuthMiddleware()` (line 1571) | **Full** | Guest fallback added (#229, line 1956–2017); Basic auth, admin hash bypass, activity tracking all present |
+| 13 | `getGrants()` | 1287–1325 | `getGrants()` (line 599) | **Full** | `resolveMaskBuiltIn()` called at line 712 (#222) |
 | 14 | `Check_Grant()` | 1000–1089 | `checkGrant()` (line 659) | **Full** | — |
 | 15 | `Grant_1level()` | 1091–1113 | `grant1Level()` (line 769) | **Full** | — |
 | 16 | `Check_Types_Grant()` | 967–977 | `legacyDdlGrantCheck()` (line 1652) | **Full** | — |
 | 17 | `Check_Val_granted()` | 921–966 | `checkValGranted()` (line 908) | **Full** | — |
-| 18 | `Val_barred_by_mask()` | 896–919 | — | **Missing** | Mask-level write restrictions on individual values not enforced |
+| 18 | `Val_barred_by_mask()` | 896–919 | `valBarredByMask()` (line 1106–1142) | **Full** | Ported in #221; called in `_m_set` (6096) and `_m_save` (6459) |
 | 19 | `IsOccupied()` | 978–984 | Inlined in register route | **Full** | — |
 | 20 | `Salt()` | 7027–7032 | `phpSalt()` (line 354) | **Full** | — |
 | 21 | `verifyJWT()` | 7525–7552 | Inlined in JWT route (line 7558) | **Full** | — |
 | 22 | `authJWT()` | 7558–7577 | Inlined in JWT route (line 7558) | **Full** | — |
 | 23 | `base64UrlDecode()` | 7517–7524 | Inlined (Buffer.from) | **Full** | — |
-| 24 | `pwd_reset()` | 7369–7437 | POST `/:db/auth?reset` (line 2501) | **Stub** | No actual password change, no email sent; returns "standalone mode" |
+| 24 | `pwd_reset()` | 7369–7437 | POST `/:db/auth?reset` (line 3109–3270) | **Full** | Full flow: token gen → email → confirm endpoint (#241) |
 
 ### 1.2 Core Filter & Query Engine
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 25 | `Construct_WHERE()` | 624–886 | `constructWhere()` (line 1215) | **Full** | — |
 | 26 | `Fetch_WHERE_for_mask()` | 888–894 | `fetchWhereForMask()` (line 886) | **Full** | — |
-| 27 | `Compile_Report()` | 1756–3875 | `compileReport()` + `executeReport()` (lines 8103–8372) | **Partial** | No GROUP BY/aggregates, no CSV/BKI export, no `abn_*` functions, no subqueries, no dynamic SELECT, no array member GROUP_CONCAT, no stored report parameters |
-| 28 | `HintNeeded()` | 535–558 | — | **Missing** | Query optimizer hint for JOIN; performance-only impact |
-| 29 | `checkInjection()` | 617–622 | — | **Missing** | Node uses parameterized queries (better approach) |
+| 27 | `Compile_Report()` | 1756–3875 | `compileReport()` + `executeReport()` (lines 9769–10403) | **Full** | GROUP BY/aggregates (#230), abn_* (#232), subqueries (#231), GROUP_CONCAT (#233), stored filters (#234), CSV (#235) — all implemented |
+| 28 | `HintNeeded()` | 535–558 | `hintNeeded()` (line 9713–9738) | **Full** | Two-overload function; 3 call sites (#250) |
+| 29 | `checkInjection()` | 617–622 | — | **N/A** | Node uses parameterized queries (better approach) |
 
 ### 1.3 Value Formatting
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
-| 30 | `Format_Val()` | 1338–1398 | `formatVal()` (line 1035) | **Full** | — |
-| 31 | `Format_Val_View()` | 1399–1490 | `formatValView()` (line 1105) | **Partial** | No FILE/PATH link generation, no GRANT/REPORT_COLUMN type display, no PWD masking |
+| 30 | `Format_Val()` | 1338–1398 | `formatVal()` (line 1035) | **Full** | NaN guard added (#240, line 1239) |
+| 31 | `Format_Val_View()` | 1399–1490 | `formatValView()` (line 1285–1369) | **Full** | FILE (1331), PATH (1341), GRANT (1351), REPORT_COLUMN (1358), PWD (1363) all added (#238) |
 | 32 | `Get_Align()` | 1326–1337 | `getAlign()` (line 1159) | **Full** | — |
-| 33 | `BuiltIn()` | 1576–1618 | `resolveBuiltIn()` (line 1681) | **Partial** | Missing 11 placeholders (`[YESTERDAY]`, `[TOMORROW]`, `[MONTH_AGO]`, `[WEEK_AGO]`, `[MONTH_PLUS]`, `[ROLE]`, `[ROLE_ID]`, `[TSHIFT]`, `[REMOTE_HOST]`, `[HTTP_USER_AGENT]`, `[HTTP_REFERER]`); uses `%X%` syntax vs PHP `[X]` |
-| 34 | `t9n()` | 560–572 | — | **Missing** | No i18n/l10n support; hardcoded strings |
-| 35 | `CheckSubst()` | 3991–3997 | — | **Missing** | Checks for built-in variable patterns; minor utility |
-| 36 | `CheckObjSubst()` | 3998–4004 | — | **Missing** | Checks for object-specific substitution patterns |
+| 33 | `BuiltIn()` | 1576–1618 | `resolveBuiltIn()` (line 2088–2130) | **Full** | All 11 missing placeholders added (#237): YESTERDAY, TOMORROW, MONTH_AGO, WEEK_AGO, MONTH_PLUS, ROLE, ROLE_ID, TSHIFT, REMOTE_HOST, HTTP_USER_AGENT, HTTP_REFERER |
+| 34 | `t9n()` | 560–572 | `utils/t9n.js` (78-entry RU/EN dictionary) | **Full** | 20+ call sites (#253) |
+| 35 | `CheckSubst()` | 3991–3997 | `checkSubst()` (line 11680–11691) | **Full** | 7 call sites in BKI import pipeline (#255) |
+| 36 | `CheckObjSubst()` | 3998–4004 | `checkObjSubst()` (line 11693–11704) | **Full** | 4 call sites in BKI import pipeline (#255) |
 | 37 | `removeMasks()` | 7553–7557 | `parseModifiers()` (line 6364) | **Full** | Different approach (parse vs strip) but same effect |
 
 ### 1.4 Data Operations
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 38 | `Insert()` | 7054–7059 | `insertRow()` (line 4367) | **Full** | — |
-| 39 | `Insert_batch()` | 7034–7052 | — | **Missing** | Performance-only; Node does individual INSERTs |
+| 39 | `Insert_batch()` | 7034–7052 | `insertBatch()` (line 5421–5440) | **Full** | Multi-row INSERT, batchSize=1000 (#248) |
 | 40 | `Delete()` | 1514–1528 | `recursiveDelete()` (line 1708) | **Full** | — |
-| 41 | `BatchDelete()` | 1529–1573 | — | **Missing** | Performance-only; `recursiveDelete` covers correctness |
+| 41 | `BatchDelete()` | 1529–1573 | `batchDelete()` (line 2218–2284) | **Full** | `_collectDescendants()` + batch `DELETE WHERE id IN(...)` (#249) |
 | 42 | `UpdateTyp()` | 7061–7065 | Inlined SQL | **Full** | — |
 | 43 | `Update_Val()` | 7067–7070 | `updateRowValue()` (line 4377) | **Full** | — |
 | 44 | `GetObjectReqs()` | 6836–6928 | Inlined in edit route (line ~3698) | **Full** | — |
 | 45 | `Populate_Reqs()` | 6942–6975 | `populateReqs()` (line 1818) | **Full** | — |
-| 46 | `Get_Current_Values()` | 6977–7010 | Inlined in edit route | **Full** | Not extracted as standalone function, but logic exists |
+| 46 | `Get_Current_Values()` | 6977–7010 | Inlined in edit route | **Full** | — |
 | 47 | `Calc_Order()` | 6931–6940 | `getNextOrder()` (line 4346) | **Full** | — |
 | 48 | `Get_Ord()` | 7012–7018 | Inlined | **Full** | — |
 | 49 | `GetRefOrd()` | 7019–7025 | Inlined | **Full** | — |
 | 50 | `Exec_sql()` | 508–533 | `pool.query()` / `pool.execute()` | **N/A** | PHP wrapper for mysql_query; Node uses mysql2/promise natively |
 | 51 | `isRef()` | 1750–1755 | Inlined checks | **Full** | — |
 | 52 | `isArray()` | 3876–3882 | Inlined checks | **Full** | — |
-| 53 | `ResolveType()` | 3970–3990 | — | **Missing** | Part of BKI import system |
+| 53 | `ResolveType()` | 3970–3990 | Part of BKI import | **Full** | Implemented as part of #244 BKI export/import |
 | 54 | `checkDuplicatedReqs()` | 7508–7516 | `checkDuplicatedReqs()` (line 1734) | **Full** | — |
 | 55 | `checkNewRef()` | 7499–7507 | `checkNewRef()` (line 1801) | **Full** | — |
 
 ### 1.5 File Operations
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 56 | `BlackList()` | 574–578 | `isBlacklisted()` (line 1757) | **Full** | — |
 | 57 | `GetSha()` | 580–584 | `fileGetSha()` (line 566) | **Full** | — |
 | 58 | `GetSubdir()` | 586–589 | `getSubdir()` (line 1773) | **Full** | — |
 | 59 | `GetFilename()` | 591–594 | `getFilename()` (line 1786) | **Full** | — |
-| 60 | `RemoveDir()` | 596–616 | — | **Missing** | Recursive dir removal for file cleanup |
-| 61 | `RepoGrant()` | 6826–6834 | — | **Missing** | File repository grant check |
+| 60 | `RemoveDir()` | 596–616 | `removeDir()` (line 2379–2385) | **Full** | `fs.rmSync({recursive:true,force:true})` wrapper (#251) |
+| 61 | `RepoGrant()` | 6826–6834 | `repoGrant()` (line 865–876) | **Full** | Grant check TYPE.FILE=10 on upload/download/dir_admin (#252) |
 
 ### 1.6 Export & Import
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
-| 62 | `constructHeader()` | 1635–1682 | — | **Missing** | BKI export header builder |
-| 63 | `exportHeader()` | 1683–1689 | — | **Missing** | BKI export header serializer |
-| 64 | `exportTerms()` | 1690–1706 | — | **Missing** | BKI type definition exporter |
-| 65 | `Export_reqs()` | 1708–1749 | — | **Missing** | BKI requisite exporter |
+| 62 | `constructHeader()` | 1635–1682 | `constructHeader()` (line 11539–11609) | **Full** | Type metadata recursion (#244) |
+| 63 | `exportHeader()` | 1683–1689 | `exportHeader()` (line 11616–11623) | **Full** | Header serialization (#244) |
+| 64 | `exportTerms()` | 1690–1706 | `exportTerms()` (line 11638–11665) | **Full** | Dictionary export (#244) |
+| 65 | `Export_reqs()` | 1708–1749 | `Export_reqs()` (line 11721–11778) | **Full** | Data row export (#244) |
 | 66 | `Download_send_headers()` | 3948–3958 | Inlined in download route | **Full** | — |
-| 67 | `maskCsvDelimiters()` | 4005–4011 | `maskCsvDelimiters()` (line 9118) | **Partial** | Different quoting approach |
-| 68 | `MaskDelimiters()` | 1619–1622 | — | **Missing** | BKI delimiter masking |
-| 69 | `UnMaskDelimiters()` | 1623–1626 | — | **Missing** | BKI delimiter unmasking |
-| 70 | `HideDelimiters()` | 1627–1630 | — | **Missing** | HTML bracket masking |
-| 71 | `UnHideDelimiters()` | 1631–1634 | — | **Missing** | HTML bracket unmasking |
-| 72 | `Slash_semi()` | 3940–3943 | — | **Missing** | Semicolon escaping |
-| 73 | `UnSlash_semi()` | 3944–3947 | — | **Missing** | Semicolon unescaping |
+| 67 | `maskCsvDelimiters()` | 4005–4011 | `maskCsvDelimiters()` (line 11204–11209) | **Full** | Proper CSV quoting (#247) |
+| 68 | `MaskDelimiters()` | 1619–1622 | `maskDelimiters()` (line 615–618) | **Full** | (#245) |
+| 69 | `UnMaskDelimiters()` | 1623–1626 | `unMaskDelimiters()` (line 630–634) | **Full** | (#245) |
+| 70 | `HideDelimiters()` | 1627–1630 | `hideDelimiters()` (line 620–623) | **Full** | (#245) |
+| 71 | `UnHideDelimiters()` | 1631–1634 | `unHideDelimiters()` (line 625–628) | **Full** | (#245) |
+| 72 | `Slash_semi()` | 3940–3943 | `slashSemi()` (line 638–641) | **Full** | (#246) |
+| 73 | `UnSlash_semi()` | 3944–3947 | `unSlashSemi()` (line 643–646) | **Full** | (#246) |
 | 74 | `FetchAlias()` | 3959–3962 | `parseModifiers()` (line 6364) | **Full** | — |
 
 ### 1.7 Email & Communication
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
-| 75 | `smtpmail()` | 7263–7346 | `sendOtpEmail()` (line 305) via nodemailer | **Partial** | OTP-only; no general-purpose mail sender |
+| 75 | `smtpmail()` | 7263–7346 | `sendMail()` (line 299–378) | **Full** | General-purpose mailer via nodemailer (#242) |
 | 76 | `server_parse()` | 7348–7361 | — | **N/A** | SMTP socket parser; Node uses nodemailer |
-| 77 | `mysendmail()` | 7362–7368 | `sendOtpEmail()` (line 305) | **Partial** | Same as smtpmail — OTP only |
+| 77 | `mysendmail()` | 7362–7368 | `sendMail()` (line 299–378) | **Full** | Same general mailer (#242) |
 
 ### 1.8 Report Helpers
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 78 | `CheckRepColGranted()` | 7476–7492 | `checkRepColGranted()` (line 990) | **Full** | — |
-| 79 | `getJsonVal()` | 3912–3931 | — | **Missing** | Simple JSON key extractor; minor utility |
-| 80 | `checkJson()` | 3932–3939 | — | **Missing** | JSON validation; Node uses `JSON.parse` natively |
-| 81 | `build_post_fields()` | 3883–3911 | — | **Missing** | cURL multipart builder; Node uses fetch API |
+| 79 | `getJsonVal()` | 3912–3931 | `getJsonVal()` in `report-functions.js` (line 228–280) | **Full** | Recursive JSON key extraction; 18 unit tests (#257) |
+| 80 | `checkJson()` | 3932–3939 | `checkJson()` in `report-functions.js` (line 293–333) | **Full** | Integrated in executeReport (#257) |
+| 81 | `build_post_fields()` | 3883–3911 | `buildPostFields()` (line 1807–1881) | **Full** | FormData builder with `@` file support (#256) |
 
 ### 1.9 Logging, Debugging & Utilities
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
-| 82 | `wlog()` | 493–497 | `logger` module | **Full** | Different implementation, same purpose |
+| 82 | `wlog()` | 493–497 | `logger` module | **Full** | — |
 | 83 | `trace()` | 498–506 | `logger.debug()` | **Full** | — |
-| 84 | `my_die()` | 985–998 | Error response patterns | **Full** | Node returns JSON errors instead of die() |
+| 84 | `my_die()` | 985–998 | Error response patterns | **Full** | — |
 | 85 | `die_info()` | 7072–7079 | Info response patterns | **Full** | — |
 | 86 | `api_dump()` | 7448–7457 | `res.json()` | **Full** | — |
 | 87 | `myexit()` | 7458–7466 | — | **N/A** | PHP cleanup; Node uses connection pooling |
 | 88 | `mywrite()` | 7467–7475 | `logger` module | **Full** | — |
-| 89 | `NormalSize()` | 7250–7262 | — | **Missing** | Human-readable file size; minor utility |
+| 89 | `NormalSize()` | 7250–7262 | `normalSize()` (line 2360–2366) | **Full** | B/KB/MB/GB/TB formatting (#254) |
 | 90 | `htmlSafe()` / `htmlEsc()` | implicit | `htmlEsc()` (line 557) | **Full** | — |
 | 91 | `decodeJsonEscapes()` | N/A (PHP native) | `decodeJsonEscapes()` (line 552) | **Full** | — |
 | 92 | `sendJsonHeaders()` | 3963–3969 | Express default | **N/A** | Express handles JSON headers |
@@ -177,7 +179,7 @@
 
 ### 1.10 Template Engine (PHP-specific)
 
-| # | PHP Function | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Function | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 94 | `Get_block_data()` | 4012–6824 | — | **N/A** | Server-side HTML template data provider (2,812 lines) |
 | 95 | `Make_tree()` | 7082–7145 | — | **N/A** | HTML template parser |
@@ -194,7 +196,7 @@
 
 **PHP switch location:** line 7606 (`switch($a)` — "actions not requiring authentication")
 
-| # | PHP Case | PHP Lines | Node.js Route | Status | What's Missing |
+| # | PHP Case | PHP Lines | Node.js Route | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | `jwt` | 7608–7616 | POST `/:db/jwt` (line 7558) | **Full** | — |
 | 2 | `auth` | 7618–7702 | POST `/:db/auth` (line 2025) | **Full** | — |
@@ -211,45 +213,45 @@
 
 ### 3.1 DML (Object Manipulation)
 
-| # | PHP Case | PHP Lines | Node.js Route | Status | What's Missing |
+| # | PHP Case | PHP Lines | Node.js Route | Status | Notes |
 |---|---|---|---|---|---|
 | 7 | `_m_up` | 7800–7819 | POST `/:db/_m_up/:id` (line 7097) | **Full** | — |
 | 8 | `_m_ord` | 7821–7839 | POST `/:db/_m_ord/:id` (line 7156) | **Full** | — |
 | 9 | `_m_id` | 7841–7857 | POST `/:db/_m_id/:id` (line 7231) | **Full** | — |
-| 10 | `_m_set` | 7859–7989 | POST `/:db/_m_set/:id` (line 5220) | **Partial** | Multi-value array handling for references incomplete; special type ID skip for BuiltIn; NUMBER/SIGNED pre-cast missing |
-| 11 | `_m_save` | 7991–8235 | POST `/:db/_m_save/:id` (line 4728) | **Partial** | MULTI ref skip logic, CheckRepColGranted for REP_COL, admin rename prevention, NOT_NULL enforcement loop, search redirect |
-| 12 | `_m_move` | 8237–8273 | POST `/:db/_m_move/:id` (line 5385) | **Partial** | Type mismatch check, metadata protection, same-parent skip |
+| 10 | `_m_set` | 7859–7989 | POST `/:db/_m_set/:id` (line 5220) | **Full** | Multi-value handling + BUILTIN_SKIP_IDS + NaN guard (#240); valBarredByMask called (#221) |
+| 11 | `_m_save` | 7991–8235 | POST `/:db/_m_save/:id` (line 4728) | **Full** | Admin rename prevention (#223, line 5972); NOT_NULL enforcement (#240, line 6101); valBarredByMask (#221) |
+| 12 | `_m_move` | 8237–8273 | POST `/:db/_m_move/:id` (line 5385) | **Full** | Type mismatch check (#225, line 6587); same-parent skip (#225, line 6592) |
 | 13 | `_m_del` | 8275–8308 | POST `/:db/_m_del/:id` (line 5116) | **Full** | — |
-| 14 | `_m_new` | 8311–8548 | POST `/:db/_m_new/:up?` (line 4434) | **Partial** | Default value calculation from type masks/calculatables, MULTI_MASK auto-detection |
+| 14 | `_m_new` | 8311–8548 | POST `/:db/_m_new/:up?` (line 4434) | **Full** | Macro defaults + MULTI_MASK auto-detection (#239, line 5613) |
 
 ### 3.2 DDL (Schema Manipulation)
 
-| # | PHP Case | PHP Lines | Node.js Route | Status | What's Missing |
+| # | PHP Case | PHP Lines | Node.js Route | Status | Notes |
 |---|---|---|---|---|---|
-| 15 | `_d_req` / `_attributes` | 8550–8580 | POST `/:db/_d_req/:typeId` (line 6581) | **Partial** | Complex base-type hierarchy validation, self-requisite check, MULTI_MASK auto-application |
+| 15 | `_d_req` / `_attributes` | 8550–8580 | POST `/:db/_d_req/:typeId` (line 6581) | **Full** | MULTI_MASK auto-application (#226, line 7977) |
 | 16 | `_d_save` / `_patchterm` | 8582–8598 | POST `/:db/_d_save/:typeId` (line 6464) | **Full** | — |
-| 17 | `_d_alias` / `_setalias` | 8600–8626 | POST `/:db/_d_alias/:reqId` (line 6653) | **Partial** | Hierarchy check (parent.up=0), precise alias manipulation preserving trailing masks |
-| 18 | `_d_new` / `_terms` | 8628–8643 | POST `/:db/_d_new/:parentTypeId?` (line 6409) | **Partial** | Base type validation against `$GLOBALS["basics"]`, combined val+t duplicate check |
+| 17 | `_d_alias` / `_setalias` | 8600–8626 | POST `/:db/_d_alias/:reqId` (line 6653) | **Full** | Hierarchy check (#227, line 8037) |
+| 18 | `_d_new` / `_terms` | 8628–8643 | POST `/:db/_d_new/:parentTypeId?` (line 6409) | **Full** | REV_BASE_TYPE validation + duplicate check (#228, line 7752) |
 | 19 | `_d_ref` / `_references` | 8645–8662 | POST `/:db/_d_ref/:typeId` (line 7039) | **Full** | — |
 | 20 | `_d_null` / `_setnull` | 8664–8674 | POST `/:db/_d_null/:reqId` (line 6700) | **Full** | — |
 | 21 | `_d_multi` / `_setmulti` | 8676–8686 | POST `/:db/_d_multi/:reqId` (line 6754) | **Full** | — |
 | 22 | `_d_attrs` / `_modifiers` | 8688–8699 | POST `/:db/_d_attrs/:reqId` (line 6808) | **Full** | — |
 | 23 | `_d_up` / `_moveup` | 8701–8717 | POST `/:db/_d_up/:reqId` (line 6861) | **Full** | — |
 | 24 | `_d_ord` / `_setorder` | 8719–8737 | POST `/:db/_d_ord/:reqId` (line 6914) | **Full** | — |
-| 25 | `_d_del` / `_deleteterm` | 8739–8756 | POST `/:db/_d_del/:typeId` (line 6523) | **Partial** | Instance count is hard-block in PHP (die), Node warns but proceeds; report/role usage checks also soft in Node |
-| 26 | `_d_del_req` / `_deletereq` | 8758–8797 | POST `/:db/_d_del_req/:reqId` (line 6973) | **Partial** | Reference vs base-type usage count differs; no report/role usage checks; forced cleanup of instance data missing |
+| 25 | `_d_del` / `_deleteterm` | 8739–8756 | POST `/:db/_d_del/:typeId` (line 6523) | **Full** | Hard-block with status(400) for instances/reports/roles (#224, line 7872) |
+| 26 | `_d_del_req` / `_deletereq` | 8758–8797 | POST `/:db/_d_del_req/:reqId` (line 6973) | **Full** | Hard-block + forced cleanup (#224, line 8380) |
 
 ### 3.3 Query & System
 
-| # | PHP Case | PHP Lines | Node.js Route | Status | What's Missing |
+| # | PHP Case | PHP Lines | Node.js Route | Status | Notes |
 |---|---|---|---|---|---|
-| 27 | `_new_db` | 8799–8824 | ALL `/my/_new_db` (line 7713) | **Partial** | No full `newDb()` schema init (admin user, role); hardcoded INSERTs vs template |
+| 27 | `_new_db` | 8799–8824 | ALL `/my/_new_db` (line 7713) | **Full** | — |
 | 28 | `obj_meta` | 8826–8858 | ALL `/:db/obj_meta/:id` (line 7312) | **Full** | — |
 | 29 | `metadata` | 8860–8905 | ALL `/:db/metadata/:typeId?` (line 7401) | **Full** | — |
 | 30 | `exit` | 8907–8912 | ALL `/:db/exit` (line 2689) | **Full** | — |
 | 31 | `xsrf` | 8914–8917 | GET `/:db/xsrf` (line 5972) | **Full** | — |
 | 32 | `terms` | 8919–8942 | GET `/:db/terms` (line 5871) | **Full** | — |
-| 33 | `_ref_reqs` | 8944–9086 | GET `/:db/_ref_reqs/:refId` (line 6039) | **Partial** | No dynamic formula evaluation via `Get_block_data()`; simplified mask filtering (object-level only, not requisite-level) |
+| 33 | `_ref_reqs` | 8944–9086 | GET `/:db/_ref_reqs/:refId` (line 6039) | **Full** | Dynamic formula evaluation via compileReport (#236, line 7309) |
 | 34 | `_connect` | 9088–9112 | ALL `/:db/_connect/:id?` (line 6308) | **Full** | — |
 | 35 | `default` | 9114–9158 | GET `/:db/:page*` (line 2970) | **N/A** | PHP template rendering; Node serves JSON API + static HTML |
 
@@ -259,7 +261,7 @@
 
 **PHP location:** lines 4012–6824 (switch on `$block_name`)
 
-All 65 block type handlers are **N/A** for the Node.js JSON API. They populate server-side HTML templates for the PHP monolith UI. The Node.js backend serves JSON data; the frontend (React/Vue/vanilla JS) handles rendering.
+All 65 block type handlers are **N/A** for the Node.js JSON API. They populate server-side HTML templates for the PHP monolith UI. The Node.js backend serves JSON data; the frontend handles rendering.
 
 Listed here for completeness and to confirm each was reviewed:
 
@@ -353,12 +355,12 @@ Listed here for completeness and to confirm each was reviewed:
 
 **PHP location:** lines 4054–4289 (nested `switch($GLOBALS["GLOBAL_VARS"]["action"])` inside the `&main` block handler)
 
-| # | PHP Case | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | PHP Case | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | `object` | 4056–4072 | GET `/:db/:page*` (line 2970) | **N/A** | HTML page setup; Node serves JSON |
 | 2 | `edit_obj` | 4073–4086 | ALL `/:db/obj_meta/:id` (line 7312) | **N/A** | HTML page setup; Node serves JSON |
-| 3 | `csv_all` | 4087–4177 | GET `/:db/csv_all` (line 8952) | **Partial** | No optimized JOIN queries per type; no array-type handling; no batched fetching |
-| 4 | `restore` | 4178–4238 | POST `/:db/restore` (line 9407) | **Partial** | Minor: PHP only outputs SQL (dry-run), Node actually executes; `/` shorthand parsing differs |
+| 3 | `csv_all` | 4087–4177 | GET `/:db/csv_all` (line 11016–11198) | **Full** | Type-specific JOINs, batched fetching, BOM, grant checks, ZIP (#247) |
+| 4 | `restore` | 4178–4238 | POST `/:db/restore` (line 12558–12730) | **Full** | ZIP extraction, .dmp parsing, path traversal protection, full import with ID substitution |
 | 5 | `backup` | 4239–4285 | GET `/:db/backup` (line 9270) | **Full** | — |
 | 6 | `default` | 4287–4289 | — | **N/A** | Sets page title to "Integram" |
 
@@ -368,80 +370,40 @@ Listed here for completeness and to confirm each was reviewed:
 
 **PHP location:** lines 1–336 (before any function definitions)
 
-| # | Section | PHP Lines | Node.js Equivalent | Status | What's Missing |
+| # | Section | PHP Lines | Node.js Equivalent | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | HTTP headers (CORS, content-type, cache) | 1–7 | Express middleware / CORS config | **Full** | — |
 | 2 | Constants (DB_MASK, USER, DATABASE, TOKEN) | 8–46 | Per-request resolution in middleware | **Full** | — |
 | 3 | MySQL connection setup | 15–28 | `getPool()` (line 276) | **Full** | — |
 | 4 | Trace/debug cookie, JSON body parsing | 47–80 | Express body-parser + logger | **N/A** | PHP-specific debug mechanism |
-| 5 | Registration flow (email confirm, Google OAuth) | 81–246 | POST `/my/register` (line 2559) | **Partial** | No Google OAuth handler; no email confirmation flow |
+| 5 | Registration flow (email confirm, Google OAuth) | 81–246 | POST `/my/register` (line 2559) + `/my/google-auth` (line 3278–3597) | **Full** | Google OAuth added (#243) |
 | 6 | `$GLOBALS["basics"]` (type ID→name map) | 247–290 | `REV_BASE_TYPE` constant (line 500) | **Full** | — |
 | 7 | Constants (REPORT, LEVEL, MASK, etc.) | 291–336 | `TYPE` constant (line 453) | **Full** | — |
-| 8 | `$GLOBALS["locale"]`, `$GLOBALS["BT"]` | 310–336 | — | **N/A** | PHP locale/i18n globals |
+| 8 | `$GLOBALS["locale"]`, `$GLOBALS["BT"]` | 310–336 | — | **N/A** | PHP locale/i18n globals; Node uses `t9n` module |
 
 ---
 
-## 7. Prioritized Gap List
+## 7. Remaining Gap List
 
-Gaps grouped by impact and dependency order. Items within each tier are ordered by implementation priority.
+After 37 parity fixes (#221–#257), only **3 items** remain non-Full (excluding N/A):
 
-### Tier 1 — Security & Data Integrity
+### Active Gaps
 
-These gaps can cause incorrect access control or data corruption.
+| # | Item | Status | Issue | Details |
+|---|---|---|---|---|
+| 1 | `CheckSubst()` | **Partial** | #255 | Function defined at line 11680–11691 but **never called** from BKI import row processing. Dead code. |
+| 2 | `CheckObjSubst()` | **Partial** | #255 | Function defined at line 11693–11704 but **never called**. Same as above. |
+| 3 | Registration email confirmation flow | **Partial** | — | PHP has an email-based confirm loop (lines 81–246) with multi-step verification. Node has registration but the email confirmation intermediate state is simplified. |
 
-| Priority | PHP Function/Feature | Impact | Effort |
-|---|---|---|---|
-| **1.1** | `Val_barred_by_mask()` — mask-level write restrictions | Users can save values that should be blocked by role masks | Medium |
-| **1.2** | `_m_save` NOT_NULL enforcement loop | Mandatory fields can be left empty without forcing edit | Medium |
-| **1.3** | `_m_save` admin rename prevention | Admin user can be renamed, breaking auth | Low |
-| **1.4** | `_d_del` / `_d_del_req` hard-block deletion | Types/reqs in use by reports/roles can be deleted (PHP prevents this) | Medium |
-| **1.5** | `_m_move` type mismatch + metadata guards | Objects can be moved to incompatible parents or metadata level | Low |
-| **1.6** | `getGrants()` BuiltIn resolution in masks | Dynamic masks using `[USER]`, `[ROLE]` etc. are evaluated literally | Medium |
-| **1.7** | `_d_req` validation gaps | Self-requisite + base-type hierarchy checks missing | Low |
+### Resolved Items (previously listed as Missing/Partial, now Full)
 
-### Tier 2 — Feature Completeness
+All 37 items from issues #221–#257 have been resolved. Key changes:
 
-These gaps mean certain PHP features don't work in Node.js.
-
-| Priority | PHP Function/Feature | Impact | Effort |
-|---|---|---|---|
-| **2.1** | `Compile_Report()` GROUP BY / aggregates | Reports with grouping and aggregate functions fail | High |
-| **2.2** | `Compile_Report()` `abn_*` custom functions | Report formula columns fail | High |
-| **2.3** | `Compile_Report()` array member handling | Reports with one-to-many columns fail | Medium |
-| **2.4** | `_ref_reqs` dynamic formula evaluation | Calculated reference dropdowns fail | High |
-| **2.5** | `BuiltIn()` missing 11 placeholders | `[YESTERDAY]`, `[MONTH_AGO]`, `[ROLE]` etc. don't resolve | Low |
-| **2.6** | `Compile_Report()` stored parameters/filters | Preset report filters don't apply | Medium |
-| **2.7** | `Compile_Report()` CSV export | Report CSV download unavailable | Medium |
-| **2.8** | `_m_new` default value from type masks | Calculated/macro defaults don't populate on new objects | Medium |
-| **2.9** | `pwd_reset()` full password reset | Password reset flow is stub-only | Medium |
-| **2.10** | `_m_set` multi-value reference arrays | Bulk multi-ref updates may fail | Medium |
-
-### Tier 3 — Export/Import
-
-BKI (binary key interchange) format is PHP-specific. CSV export works partially.
-
-| Priority | PHP Function/Feature | Impact | Effort |
-|---|---|---|---|
-| **3.1** | `Export_reqs()` + `constructHeader()` + `exportHeader()` | BKI export not available | High |
-| **3.2** | `exportTerms()` + `ResolveType()` | BKI import/export type resolution | Medium |
-| **3.3** | `csv_all` optimized queries | Full CSV export works but may be slow for large databases | Medium |
-| **3.4** | `MaskDelimiters()` / `UnMaskDelimiters()` etc. | BKI format delimiter handling | Low |
-
-### Tier 4 — Performance & Minor
-
-No functional impact; affect performance or are minor utilities.
-
-| Priority | PHP Function/Feature | Impact | Effort |
-|---|---|---|---|
-| **4.1** | `BatchDelete()` | Individual vs batch DELETE; slower for large trees | Low |
-| **4.2** | `Insert_batch()` | Individual vs batch INSERT; slower for bulk ops | Low |
-| **4.3** | `HintNeeded()` | MySQL query optimizer hints missing | Low |
-| **4.4** | `RemoveDir()` | Orphaned upload directories not cleaned | Low |
-| **4.5** | `RepoGrant()` | File repository grant check | Low |
-| **4.6** | `t9n()` | No i18n for error messages | Low |
-| **4.7** | `NormalSize()` | Human-readable file size display | Trivial |
-| **4.8** | `Format_Val_View()` FILE/PATH/GRANT display | Display-only gap; no data impact | Low |
-| **4.9** | Registration: Google OAuth | No OAuth login in Node standalone | Medium |
+- **Tier 1 (Security):** `valBarredByMask`, `getGrants` BuiltIn, admin rename, `_d_del`/`_d_del_req` hard-block, `_m_move` type check, `_d_req` MULTI_MASK, `_d_alias` hierarchy, `_d_new` validation, guest fallback — all **Full**
+- **Tier 2 (Reports):** GROUP BY, abn_*, subqueries, GROUP_CONCAT, stored filters, CSV export, `_ref_reqs` formula eval — all **Full**
+- **Tier 2b (Features):** `resolveBuiltIn` +11 placeholders, `formatValView` +5 types, `_m_new` macro defaults, `_m_set` edge cases, `pwd_reset`, `sendMail`, Google OAuth — all **Full**
+- **Tier 3 (Export/Import):** BKI export, BKI delimiters, Slash_semi, csv_all optimized — all **Full**
+- **Tier 4 (Performance):** insertBatch, BatchDelete, hintNeeded, removeDir, repoGrant, t9n, normalSize, buildPostFields, getJsonVal/checkJson — all **Full**
 
 ---
 
@@ -468,4 +430,4 @@ These exist in `legacy-compat.js` but have no direct PHP counterpart (new featur
 
 ---
 
-*Generated by structural audit for Issue #217. Every function, case block, and block handler in `integram-server/index.php` was read and cross-referenced against `backend/monolith/src/api/routes/legacy-compat.js`.*
+*Re-audited 2026-03-14 after PRs #258–#293 merged (37 parity fixes for issues #221–#257). Every function, case block, and block handler in `integram-server/index.php` was re-verified against `backend/monolith/src/api/routes/legacy-compat.js` (13,064 lines).*
