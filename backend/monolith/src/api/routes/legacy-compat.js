@@ -2072,6 +2072,41 @@ async function recursiveDelete(pool, db, id) {
   // Root node last
   idsToDelete.push(id);
 
+  // Clean up upload files/directories for all objects being deleted.
+  // PHP parity: PHP RemoveDir(GetSubdir($id)."/".GetFilename($id).".".$ext)
+  // removes associated files when deleting objects with FILE requisites.
+  // Group by subdir (floor(id/1000)) to batch cleanup and avoid redundant checks.
+  const subdirsSeen = new Set();
+  for (const objId of idsToDelete) {
+    const subdir = getSubdir(db, objId);
+    const baseName = getFilename(db, objId);
+    const uploadDir = path.join(legacyPath, 'download', db, subdir);
+    // Remove any files matching this object's baseName pattern (any extension)
+    try {
+      if (fs.existsSync(uploadDir)) {
+        const files = fs.readdirSync(uploadDir);
+        for (const file of files) {
+          if (file.startsWith(baseName)) {
+            removeDir(path.join(uploadDir, file));
+          }
+        }
+      }
+    } catch (_e) { /* ignore — dir may not exist */ }
+    subdirsSeen.add(uploadDir);
+  }
+
+  // Clean up empty subdirectories left behind
+  for (const uploadDir of subdirsSeen) {
+    try {
+      if (fs.existsSync(uploadDir)) {
+        const remaining = fs.readdirSync(uploadDir);
+        if (remaining.length === 0) {
+          removeDir(uploadDir);
+        }
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
   // Delete in batches
   for (let i = 0; i < idsToDelete.length; i += BATCH_DELETE_THRESHOLD) {
     const batch = idsToDelete.slice(i, i + BATCH_DELETE_THRESHOLD);
@@ -2163,6 +2198,25 @@ function getSubdir(db, id) {
 function getFilename(db, id) {
   const fileNum = ('00' + id).slice(-3);
   return `${fileNum}${fileGetSha(db, id).slice(0, 8)}`;
+}
+
+/**
+ * Recursively remove a file or directory from the filesystem.
+ * PHP parity: PHP RemoveDir() (index.php lines 596–616).
+ *
+ * Uses fs.rmSync with recursive+force to mirror the PHP behaviour:
+ *  - If path is a directory, remove it and all contents recursively.
+ *  - If path is a file, remove the file.
+ *  - If path does not exist, silently do nothing (force: true).
+ *
+ * @param {string} dirPath - absolute path to file or directory to remove
+ */
+function removeDir(dirPath) {
+  try {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+  } catch (err) {
+    logger.warn('[removeDir] Failed to remove path', { dirPath, error: err.message });
+  }
 }
 
 /**
@@ -6205,12 +6259,13 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       }
 
       // File deletion: when value cleared and type is FILE, delete old file
+      // PHP parity: RemoveDir() handles both files and directories recursively
       if (meta && meta.base_type === TYPE.FILE && !finalValue && !uploadedFile) {
         const existing = await getRequisiteByType(db, objectId, typeIdNum);
         if (existing && existing.val) {
           const subdir = getSubdir(db, objectId);
           const oldPath = path.join(legacyPath, 'download', db, subdir, path.basename(existing.val));
-          try { fs.unlinkSync(oldPath); } catch (_e) { /* ignore missing */ }
+          removeDir(oldPath);
         }
       }
 
@@ -12054,6 +12109,7 @@ export {
   legacyDdlGrantCheck,
   resolveBuiltIn,
   recursiveDelete,
+  removeDir,
   checkDuplicatedReqs,
   isBlacklisted,
   getSubdir,
