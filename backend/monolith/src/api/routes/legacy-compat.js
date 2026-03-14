@@ -110,7 +110,7 @@ async function getFile(db, file, fatal = true) {
   try {
     return await fsPromises.readFile(defaultPath, 'utf-8');
   } catch {
-    if (!fatal) return false;
+    if (!fatal) return '';
     throw new Error(`Template ${file} is not found!`);
   }
 }

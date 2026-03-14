@@ -72,9 +72,9 @@ describe('getFile', () => {
 
   // ── Non-fatal mode ─────────────────────────────────────────────────────
 
-  it('returns false when template not found in non-fatal mode', async () => {
+  it('returns empty string when template not found in non-fatal mode', async () => {
     const result = await getFile('anydb', 'nonexistent.html', false);
-    expect(result).toBe(false);
+    expect(result).toBe('');
   });
 
   // ── Input validation ───────────────────────────────────────────────────
