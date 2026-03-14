@@ -7580,7 +7580,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
  * _dict - Get type dictionary (list of types with their definitions)
  * GET/POST /:db/_dict/:typeId?
  */
-router.all('/:db/_dict/:typeId?', async (req, res) => {
+router.all('/:db/_dict/:typeId?', legacyAuthMiddleware, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -7650,7 +7650,7 @@ router.all('/:db/_dict/:typeId?', async (req, res) => {
  * GET/POST /:db/_list/:typeId
  * Parameters: up (parent), LIMIT, F (offset/from), q (search)
  */
-router.all('/:db/_list/:typeId', async (req, res) => {
+router.all('/:db/_list/:typeId', legacyAuthMiddleware, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -7793,7 +7793,7 @@ router.all('/:db/_list/:typeId', async (req, res) => {
  * This endpoint supports complex multi-join queries that fetch object data
  * along with requisite values in a single query.
  */
-router.all('/:db/_list_join/:typeId', async (req, res) => {
+router.all('/:db/_list_join/:typeId', legacyAuthMiddleware, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -7895,7 +7895,7 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
  * _d_main - Get type metadata with requisites
  * GET/POST /:db/_d_main/:typeId
  */
-router.all('/:db/_d_main/:typeId', async (req, res) => {
+router.all('/:db/_d_main/:typeId', legacyAuthMiddleware, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
@@ -11630,7 +11630,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
  * Export data endpoint with full requisite support
  * GET /:db/export/:typeId
  */
-router.get('/:db/export/:typeId', async (req, res) => {
+router.get('/:db/export/:typeId', legacyAuthMiddleware, async (req, res) => {
   const { db, typeId } = req.params;
   const { format = 'csv', include_reqs = '1' } = req.query;
 
