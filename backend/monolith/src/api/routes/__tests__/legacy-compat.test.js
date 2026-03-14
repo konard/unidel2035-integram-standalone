@@ -79,6 +79,8 @@ const {
   getSubdir,
   getFilename,
   checkNewRef,
+  constructWhere,
+  formatDateForStorage,
 } = await import('../legacy-compat.js');
 
 // ─── app factory ─────────────────────────────────────────────────────────────
@@ -915,6 +917,217 @@ describe('Phase 2: middleware wiring', () => {
       // xsrf route should return 200 with empty session (no 401)
       expect(res.status).toBe(200);
       expect(res.body._xsrf).toBe('');
+    });
+  });
+});
+
+// ─── constructWhere — PHP-parity filter engine ──────────────────────────────
+
+describe('formatDateForStorage', () => {
+  it('converts dd.mm.yyyy to yyyymmdd', () => {
+    expect(formatDateForStorage('15.03.2024')).toBe('20240315');
+  });
+
+  it('converts dd/mm/yyyy to yyyymmdd', () => {
+    expect(formatDateForStorage('01/12/2023')).toBe('20231201');
+  });
+
+  it('converts ISO yyyy-mm-dd to yyyymmdd', () => {
+    expect(formatDateForStorage('2024-03-15')).toBe('20240315');
+  });
+
+  it('converts ISO yyyy/mm/dd to yyyymmdd', () => {
+    expect(formatDateForStorage('2024/03/15')).toBe('20240315');
+  });
+
+  it('handles compact yyyymmdd (already formatted)', () => {
+    expect(formatDateForStorage('20240315')).toBe('20240315');
+  });
+
+  it('handles two-digit year', () => {
+    expect(formatDateForStorage('15/03/24')).toBe('20240315');
+  });
+
+  it('passes through bracket expressions unchanged', () => {
+    expect(formatDateForStorage('[TODAY]')).toBe('[TODAY]');
+  });
+
+  it('passes through empty/null values', () => {
+    expect(formatDateForStorage('')).toBe('');
+    expect(formatDateForStorage(null)).toBe(null);
+  });
+});
+
+describe('constructWhere', () => {
+  const baseCtx = { revBT: {}, refTyps: {}, multi: new Set(), db: 'testdb' };
+
+  describe('basic DSL syntax', () => {
+    it('exact value match — val → = ?', () => {
+      const r = constructWhere('10', { F: 'hello' }, '1', false, baseCtx);
+      expect(r.where).toContain('a10.val');
+      expect(r.where).toContain('=?');
+      expect(r.params).toContain('hello');
+    });
+
+    it('LIKE match — %val% → LIKE ?', () => {
+      const r = constructWhere('10', { F: '%hello%' }, '1', false, baseCtx);
+      expect(r.where).toContain('LIKE ?');
+      expect(r.params).toContain('%hello%');
+    });
+
+    it('IS NOT NULL — % → IS NOT NULL', () => {
+      const r = constructWhere('10', { F: '%' }, '1', false, baseCtx);
+      expect(r.where).toContain('IS NOT NULL');
+    });
+
+    it('IS NULL — !% → IS NULL', () => {
+      const r = constructWhere('10', { F: '!%' }, '1', false, baseCtx);
+      expect(r.where).toContain('IS NULL');
+    });
+
+    it('NOT equal — !value → !=? + OR IS NULL', () => {
+      const r = constructWhere('10', { F: '!hello' }, '1', false, baseCtx);
+      expect(r.where).toContain('!=?');
+      expect(r.where).toContain('IS NULL');
+    });
+
+    it('NOT LIKE — !%val% → NOT LIKE + OR IS NULL', () => {
+      const r = constructWhere('10', { F: '!%hello%' }, '1', false, baseCtx);
+      expect(r.where).toContain('NOT LIKE ?');
+      expect(r.where).toContain('IS NULL');
+    });
+
+    it('>= operator', () => {
+      const r = constructWhere('10', { F: '>=100' }, '1', false,
+        { ...baseCtx, revBT: { '10': 'NUMBER' } });
+      expect(r.where).toContain('>=');
+    });
+
+    it('<= operator', () => {
+      const r = constructWhere('10', { F: '<=100' }, '1', false,
+        { ...baseCtx, revBT: { '10': 'NUMBER' } });
+      expect(r.where).toContain('<=');
+    });
+
+    it('> operator', () => {
+      const r = constructWhere('10', { F: '>100' }, '1', false,
+        { ...baseCtx, revBT: { '10': 'NUMBER' } });
+      expect(r.where).toContain('>');
+    });
+
+    it('< operator', () => {
+      const r = constructWhere('10', { F: '<100' }, '1', false,
+        { ...baseCtx, revBT: { '10': 'NUMBER' } });
+      expect(r.where).toContain('<');
+    });
+
+    it('IN(1,2,3) → val IN (?, ?, ?)', () => {
+      const r = constructWhere('10', { F: 'IN(a,b,c)' }, '1', false, baseCtx);
+      expect(r.where).toContain('IN (?,?,?)');
+      expect(r.params).toEqual(expect.arrayContaining(['a', 'b', 'c']));
+    });
+
+    it('@IN(1,2,3) → id IN (?, ?, ?)', () => {
+      const r = constructWhere('10', { F: '@IN(1,2,3)' }, '1', false, baseCtx);
+      expect(r.where).toContain('a10.id');
+      expect(r.where).toContain('IN (?,?,?)');
+      expect(r.params).toEqual(expect.arrayContaining([1, 2, 3]));
+    });
+
+    it('@IN with non-numeric throws', () => {
+      expect(() => constructWhere('10', { F: '@IN(1,abc,3)' }, '1', false, baseCtx))
+        .toThrow('Non-numeric');
+    });
+
+    it('@999 — single ID search', () => {
+      const r = constructWhere('10', { F: '@999' }, '1', false, baseCtx);
+      expect(r.where).toContain('a10.id=?');
+      expect(r.params).toContain(999);
+    });
+
+    it('!@999 — NOT ID + OR IS NULL', () => {
+      const r = constructWhere('10', { F: '!@999' }, '1', false, baseCtx);
+      expect(r.where).toContain('a10.id!=?');
+      expect(r.where).toContain('IS NULL');
+    });
+
+    it('100..500 range → BETWEEN', () => {
+      const r = constructWhere('10', { F: '100..500' }, '1', false,
+        { ...baseCtx, revBT: { '10': 'NUMBER' } });
+      expect(r.where).toContain('BETWEEN ? AND ?');
+      expect(r.params).toContain(100);
+      expect(r.params).toContain(500);
+    });
+  });
+
+  describe('FR + TO range filters', () => {
+    it('FR and TO produce >= and <= clauses', () => {
+      const r = constructWhere('10', { FR: '100', TO: '500' }, '1', false,
+        { ...baseCtx, revBT: { '10': 'NUMBER' } });
+      expect(r.where).toContain('>=');
+      expect(r.where).toContain('<=');
+    });
+  });
+
+  describe('type-aware behavior', () => {
+    it('DATE: formats value via formatDateForStorage', () => {
+      const r = constructWhere('10', { F: '15.03.2024' }, '1', false,
+        { ...baseCtx, revBT: { '10': 'DATE' } });
+      expect(r.params.some(p => p === '20240315')).toBe(true);
+    });
+
+    it('NUMBER: CAST for range comparisons', () => {
+      const ctx = { ...baseCtx, revBT: { '10': 'NUMBER' } };
+      const r = constructWhere('10', { FR: '100', TO: '500' }, '1', '5', ctx);
+      expect(r.where).toContain('CAST(a10.val AS DECIMAL)>=CAST(? AS DECIMAL)');
+    });
+
+    it('ARRAY type sets distinct=true', () => {
+      const ctx = { ...baseCtx, revBT: { '10': 'ARRAY' } };
+      const r = constructWhere('10', { F: 'test' }, '1', false, ctx);
+      expect(r.distinct).toBe(true);
+    });
+
+    it('MULTI type sets distinct=true via ctx.multi', () => {
+      const ctx = { ...baseCtx, multi: new Set(['10']) };
+      const r = constructWhere('10', { F: 'test' }, '1', false, ctx);
+      expect(r.distinct).toBe(true);
+    });
+  });
+
+  describe('reference JOIN generation', () => {
+    it('generates CROSS JOIN for reference types', () => {
+      const ctx = { ...baseCtx, refTyps: { '10': '99' } };
+      const r = constructWhere('10', { F: 'hello' }, '1', '5', ctx);
+      expect(r.join).toContain('CROSS JOIN');
+      expect(r.join).toContain('r10');
+      expect(r.join).toContain('a10');
+    });
+
+    it('NOT on reference adds OR IS NULL', () => {
+      const ctx = { ...baseCtx, refTyps: { '10': '99' } };
+      const r = constructWhere('10', { F: '!hello' }, '1', '5', ctx);
+      expect(r.where).toContain('IS NULL');
+    });
+  });
+
+  describe('curTyp match (filter on main val)', () => {
+    it('key === curTyp → uses vals.val', () => {
+      const r = constructWhere('1', { F: 'hello' }, '1', false, baseCtx);
+      expect(r.where).toContain('vals.val');
+    });
+
+    it('@id on curTyp → uses vals.id', () => {
+      const r = constructWhere('1', { F: '@42' }, '1', false, baseCtx);
+      expect(r.where).toContain('vals.id');
+    });
+  });
+
+  describe('parameterized output', () => {
+    it('all values are in params array, not inlined', () => {
+      const r = constructWhere('10', { F: '%test%' }, '1', false, baseCtx);
+      expect(r.params.length).toBeGreaterThan(0);
+      expect(r.where).not.toContain("'test'");
     });
   });
 });

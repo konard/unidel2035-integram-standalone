@@ -1172,6 +1172,392 @@ function getAlign(typeId) {
 }
 
 // ============================================================================
+// Construct_WHERE — Full PHP-parity filter engine (Issue #215)
+// Ports PHP Construct_WHERE (index.php:624-886) to Node.js.
+// ============================================================================
+
+/**
+ * Format a date value for DB storage (YYYYMMDD).
+ * Port of PHP Format_Val() for DATE type only.
+ *   dd.mm.yyyy / dd/mm/yyyy → yyyymmdd
+ *   yyyy-mm-dd / yyyy/mm/dd → yyyymmdd
+ */
+function formatDateForStorage(val) {
+  if (!val || val === '' || val === 'NULL') return val;
+  val = String(val).trim();
+  if (val.startsWith('[') || val.startsWith('_request_.')) return val;
+  // ISO: YYYY[-/.]MM[-/.]DD
+  const iso = val.match(/^(\d{4})[-\/.]?(\d{2})[-\/.]?(\d{2})/);
+  if (iso) return iso[1] + iso[2] + iso[3];
+  // dd/mm/yyyy or dd.mm.yyyy etc
+  const parts = val.replace(/[.,\s]/g, '/').split('/');
+  const dd = parseInt(parts[0], 10);
+  const mm = parts[1] ? parseInt(parts[1], 10) : new Date().getMonth() + 1;
+  const rawYr = parts[2] ? parseInt(parts[2], 10) : new Date().getFullYear();
+  const dy = String(parts[2] || '').length === 4 ? rawYr : 2000 + rawYr;
+  return String(dy) + String(mm).padStart(2, '0') + String(dd).padStart(2, '0');
+}
+
+/**
+ * Core filter engine — port of PHP Construct_WHERE().
+ *
+ * @param {string|number} key   - Requisite type ID being filtered
+ * @param {object} filter       - {F: 'value', FR: 'from', TO: 'to'}
+ * @param {string|number} curTyp - Parent type ID (main object type)
+ * @param {string|number|false} joinReq - Requisite ID for JOIN context, or false/0
+ * @param {object} ctx          - { revBT, refTyps, multi, db }
+ *   revBT   — { [typeId]: 'DATE'|'NUMBER'|... } (maps type IDs to base type names)
+ *   refTyps — { [typeId]: refTargetTypeId } (reference type targets)
+ *   multi   — Set or object of array/multi type IDs
+ *   db      — database name
+ * @returns {{ where: string, join: string, params: any[], distinct: boolean }}
+ */
+function constructWhere(key, filter, curTyp, joinReq, ctx) {
+  key = String(key);
+  curTyp = String(curTyp);
+  const join = joinReq && joinReq !== '0' && joinReq !== 0;
+  const db = ctx.db || '';
+  const z = db ? `\`${db}\`` : 'db';
+  let whereStr = '';
+  let joinStr = '';
+  const params = [];
+  let distinct = false;
+
+  if (ctx.multi && (ctx.multi instanceof Set ? ctx.multi.has(key) : ctx.multi[key])) {
+    distinct = true;
+  }
+
+  for (const f of Object.keys(filter)) {
+    let value = String(filter[f]);
+    let NOT_flag = false;
+    let NOT = '';
+    let NOT_EQ = '';
+    let EQ = '=';
+    let LTGT = false;
+
+    // Parse prefix operators
+    if (value.startsWith('!')) {
+      NOT = 'NOT';
+      NOT_EQ = '!';
+      value = value.slice(1);
+      NOT_flag = true;
+    } else if (/^\s*(>=|<=)/.test(value)) {
+      const m = value.match(/^\s*(>=|<=)/);
+      NOT_EQ = m[1];
+      value = value.replace(/^\s*(>=|<=)/, '');
+      EQ = '';
+    } else if (/^\s*[><]/.test(value)) {
+      const m = value.match(/^\s*([><])/);
+      NOT_EQ = m[1];
+      LTGT = true;
+      value = value.replace(/^\s*[><]/, '');
+      EQ = '';
+    }
+
+    // resolveBuiltIn substitution (needs user context; skip if unavailable)
+    if (ctx.user) {
+      value = resolveBuiltIn(value, ctx.user, db, ctx.tzone || 0, '');
+    }
+
+    let search_val = '';
+    let inFlag = false;
+    let inIDFlag = false;
+
+    if (value === '%') {
+      // NULL check: % means IS NOT NULL; !% means IS NULL
+      search_val = `IS ${NOT_flag ? '' : 'NOT '}NULL`;
+    } else if (/^\s*IN\s*\(/i.test(value) && value.trimEnd().endsWith(')')) {
+      // IN(1,2,3)
+      inFlag = true;
+      const inner = value.replace(/^\s*IN\s*\(/i, '').slice(0, -1);
+      const items = inner.split(',').map(s => s.trim());
+      const placeholders = items.map(() => '?').join(',');
+      search_val = `${NOT} IN (${placeholders})`;
+      params.push(...items);
+    } else if (/^\s*@IN\s*\(/i.test(value) && value.trimEnd().endsWith(')')) {
+      // @IN(1,2,3) — ID-based IN
+      inIDFlag = true;
+      const inner = value.replace(/^\s*@IN\s*\(/i, '').slice(0, -1);
+      const items = inner.split(',').map(s => s.trim());
+      for (const v of items) {
+        if (!/^\d+$/.test(v)) {
+          throw new Error('Non-numeric IDs are not allowed');
+        }
+      }
+      const placeholders = items.map(() => '?').join(',');
+      search_val = `${NOT} IN (${placeholders})`;
+      params.push(...items.map(Number));
+      EQ = '';
+    } else {
+      // Standard value comparison
+      if (!value.includes('%')) {
+        search_val = `${NOT_EQ}${EQ}?`;
+        params.push(value);
+      } else {
+        search_val = `${NOT} LIKE ?`;
+        params.push(value);
+      }
+    }
+
+    // ── @-ID search: @999 or !@999 ──
+    if (ctx.revBT && ctx.revBT[key] === 'ARRAY') {
+      distinct = true;
+    }
+
+    if (value.startsWith('@') && !inIDFlag) {
+      // Single ID search
+      const idVal = parseInt(value.slice(1).replace(/ /g, ''), 10);
+      if (key === curTyp) {
+        whereStr += ` AND vals.id${NOT_EQ}${EQ}?`;
+        params.push(idVal);
+      } else {
+        if (ctx.revBT && ctx.revBT[key] === 'ARRAY') distinct = true;
+        let joinTable, joinCond;
+        if (NOT_flag) {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            params.push(joinReq);
+          } else {
+            joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+            joinCond = '';
+            params.push(parseInt(key, 10));
+          }
+          whereStr += ` AND (a${key}.id!=? OR a${key}.id IS NULL)`;
+          params.push(idVal);
+        } else {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinCond = ` AND r${key}.t=?`;
+            params.push(joinReq, idVal);
+          } else {
+            joinTable = ` JOIN ${z} a${key} ON a${key}.up=vals.id`;
+            joinCond = ` AND a${key}.id=?`;
+            params.push(parseInt(key, 10));
+            // push idVal for the WHERE
+          }
+          whereStr += ` AND a${key}.id=?`;
+          params.push(idVal);
+        }
+        if (join && !joinStr.includes(`a${key}`)) {
+          joinStr += `${joinTable}${joinCond}`;
+        }
+      }
+      break;
+    }
+
+    if (inIDFlag) {
+      // @IN() already handled search_val; apply to id column
+      if (key === curTyp) {
+        whereStr += ` AND vals.id ${search_val}`;
+      } else {
+        let joinTable, joinCond;
+        if (NOT_flag) {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            params.push(joinReq);
+          } else {
+            joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+            joinCond = '';
+            params.push(parseInt(key, 10));
+          }
+          whereStr += ` AND (a${key}.id ${search_val} OR a${key}.id IS NULL)`;
+        } else {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinCond = ` AND r${key}.t ${search_val}`;
+            params.push(joinReq);
+          } else {
+            joinTable = ` JOIN ${z} a${key} ON a${key}.up=vals.id`;
+            joinCond = '';
+          }
+          whereStr += ` AND a${key}.id ${search_val}`;
+        }
+        if (join && !joinStr.includes(`a${key}`)) {
+          joinStr += `${joinTable}${joinCond}`;
+        }
+      }
+      break;
+    }
+
+    // ── Type-aware WHERE construction ──
+    if (ctx.refTyps && ctx.refTyps[key]) {
+      // Reference type — CROSS JOIN pattern
+      if (join) {
+        const jt = ` LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=? AND a${key}.t=?`;
+        if (!joinStr.includes(`a${key}`)) {
+          joinStr += jt;
+          params.push(joinReq, parseInt(ctx.refTyps[key], 10));
+        }
+      }
+      if (NOT_flag) {
+        whereStr += ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL)`;
+      } else {
+        whereStr += ` AND a${key}.val ${search_val}`;
+      }
+    } else {
+      const baseType = (ctx.revBT && ctx.revBT[key]) || 'SHORT';
+
+      // DATE/DATETIME: format values for storage
+      const isDate = baseType === 'DATE';
+      if ((baseType === 'DATE' || baseType === 'DATETIME') && value !== '%') {
+        value = formatDateForStorage(value);
+      }
+
+      if (baseType === 'DATE' || baseType === 'DATETIME' ||
+          baseType === 'NUMBER' || baseType === 'SIGNED') {
+        // Numeric/date types — range support
+
+        // ".." range syntax: 100..500 → BETWEEN
+        if (value.includes('..') && value.indexOf('..') > 0 && (filter.FR !== undefined || filter.TO === undefined)) {
+          const rangeParts = value.split('..');
+          const v0 = parseFloat(String(rangeParts[0]).replace(/ /g, ''));
+          const v1 = parseFloat(String(rangeParts[1]).replace(/ /g, ''));
+          if (!isNaN(v0) && !isNaN(v1)) {
+            if (key === curTyp) {
+              whereStr += ` AND vals.val BETWEEN ? AND ?`;
+            } else {
+              if (join) {
+                const jt = ` JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+                if (!joinStr.includes(`a${key}`)) {
+                  joinStr += jt;
+                  params.push(parseInt(key, 10));
+                }
+              }
+              whereStr += ` AND a${key}.val BETWEEN ? AND ?`;
+            }
+            params.push(v0, v1);
+            break;
+          }
+        }
+
+        // Strip spaces from numeric values
+        const numericClean = parseFloat(String(value).replace(/ /g, ''));
+        if (numericClean !== 0 && !isNaN(numericClean)) {
+          value = String(value).replace(/ /g, '');
+        }
+
+        // Single-border or exact match (no full range)
+        if (filter.TO === undefined || filter.FR === undefined || value === '%') {
+          if (key === curTyp) {
+            if (inFlag) {
+              whereStr += ` AND vals.val ${search_val}`;
+            } else if (value === '%') {
+              whereStr += ` AND vals.val ${search_val}`;
+            } else if (!value.includes('%')) {
+              whereStr += ` AND vals.val${NOT_EQ}${EQ}?`;
+              // Re-push the formatted value (remove old unformatted one)
+              params.pop(); // remove old value pushed in standard section
+              params.push(isDate ? value : value);
+            } else {
+              whereStr += ` AND vals.val ${NOT} LIKE ?`;
+            }
+          } else {
+            const joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+            if (join && !joinStr.includes(`a${key}`)) {
+              joinStr += ` ${joinTable}`;
+              params.push(parseInt(key, 10));
+            }
+            if (value === '%') {
+              whereStr += ` AND a${key}.val ${search_val}`;
+            } else if (!value.includes('%')) {
+              if (NOT_flag) {
+                if (inFlag) {
+                  whereStr += ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL)`;
+                } else {
+                  whereStr += ` AND (a${key}.val!=? OR a${key}.val IS NULL)`;
+                  params.pop(); // remove old
+                  params.push(value);
+                }
+              } else {
+                if (inFlag) {
+                  whereStr += ` AND a${key}.val ${search_val}`;
+                } else if (!isNaN(parseFloat(value))) {
+                  whereStr += ` AND a${key}.val${NOT_EQ}${EQ}?`;
+                  params.pop();
+                  params.push(value);
+                } else {
+                  whereStr += ` AND a${key}.val=?`;
+                  params.pop();
+                  params.push(value);
+                }
+              }
+            } else {
+              if (NOT_flag) {
+                whereStr += ` AND (a${key}.val NOT LIKE ? OR a${key}.val IS NULL)`;
+              } else {
+                whereStr += ` AND a${key}.val LIKE ?`;
+              }
+            }
+          }
+        } else {
+          // Range filter with FR / TO
+          let rangeVal;
+          if (isDate) {
+            rangeVal = value;  // already formatted
+          } else if (!value.includes('[') && !value.includes('_')) {
+            rangeVal = parseFloat(String(value).replace(/ /g, ''));
+          } else {
+            rangeVal = value;
+          }
+
+          if (f === 'FR') {
+            if (key === curTyp) {
+              whereStr += ` AND vals.val>=?`;
+              params.pop(); // remove standard push
+              params.push(rangeVal);
+            } else {
+              const jt = `JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+              if (join && !joinStr.includes(`a${key}`)) {
+                joinStr += ` ${jt}`;
+                params.push(parseInt(key, 10));
+              }
+              if (baseType === 'NUMBER' || baseType === 'SIGNED') {
+                whereStr += ` AND CAST(a${key}.val AS DECIMAL)>=CAST(? AS DECIMAL)`;
+              } else {
+                whereStr += ` AND a${key}.val>=?`;
+              }
+              params.pop();
+              params.push(rangeVal);
+            }
+          } else if (f === 'TO') {
+            if (key === curTyp) {
+              whereStr += ` AND vals.val<=?`;
+              params.pop();
+              params.push(rangeVal);
+            } else {
+              whereStr += ` AND a${key}.val<=?`;
+              params.pop();
+              params.push(rangeVal);
+            }
+          }
+        }
+      } else {
+        // DEFAULT: SHORT, CHARS, HTML, etc.
+        if (key === curTyp) {
+          whereStr += ` AND vals.val ${search_val}`;
+        } else {
+          if (baseType === 'ARRAY') distinct = true;
+          const joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+          if (join && !joinStr.includes(`a${key}`)) {
+            joinStr += ` ${joinTable}`;
+            params.push(parseInt(key, 10));
+          }
+          if (NOT_flag) {
+            whereStr += ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL)`;
+          } else {
+            whereStr += ` AND a${key}.val ${search_val}`;
+          }
+        }
+      }
+    }
+  }
+
+  return { where: whereStr, join: joinStr, params, distinct };
+}
+
+// ============================================================================
 // Phase 1 — New Helper Functions (PHP parity)
 // ============================================================================
 
@@ -2679,30 +3065,67 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
 
         // Column filters: F_{colId}=value, FR_{colId}=from, TO_{colId}=to
-        const colFilters = {}, colFrom = {}, colTo = {};
+        // Build consolidated filter dict: { reqId: {F: val, FR: from, TO: to} }
+        const colFilterDict = {};
         for (const [k, v] of Object.entries(allObjParams)) {
+          if (v === undefined || String(v) === '') continue;
           const fm = k.match(/^F_(\d+)$/);
-          if (fm && String(fm[1]) !== String(subId) && v !== undefined && String(v) !== '') {
-            colFilters[fm[1]] = String(v);
+          if (fm && String(fm[1]) !== String(subId)) {
+            if (!colFilterDict[fm[1]]) colFilterDict[fm[1]] = {};
+            colFilterDict[fm[1]].F = String(v);
           }
           const frm = k.match(/^FR_(\d+)$/);
-          if (frm && v !== undefined && String(v) !== '') colFrom[frm[1]] = String(v);
-          const tom = k.match(/^TO_(\d+)$/);
-          if (tom && v !== undefined && String(v) !== '') colTo[tom[1]] = String(v);
-        }
-        for (const [colId, val] of Object.entries(colFilters)) {
-          const pattern = val.includes('%') ? val : `%${val}%`;
-          objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val LIKE ?)`);
-          objWhereParams.push(parseInt(colId, 10), pattern);
-        }
-        for (const colId of new Set([...Object.keys(colFrom), ...Object.keys(colTo)])) {
-          if (colFrom[colId]) {
-            objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val >= ?)`);
-            objWhereParams.push(parseInt(colId, 10), colFrom[colId]);
+          if (frm) {
+            if (!colFilterDict[frm[1]]) colFilterDict[frm[1]] = {};
+            colFilterDict[frm[1]].FR = String(v);
           }
-          if (colTo[colId]) {
-            objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val <= ?)`);
-            objWhereParams.push(parseInt(colId, 10), colTo[colId]);
+          const tom = k.match(/^TO_(\d+)$/);
+          if (tom) {
+            if (!colFilterDict[tom[1]]) colFilterDict[tom[1]] = {};
+            colFilterDict[tom[1]].TO = String(v);
+          }
+        }
+
+        // If we have column filters, load requisite metadata for constructWhere context
+        let objJoinStr = '';
+        let objDistinct = false;
+        const filterKeys = Object.keys(colFilterDict);
+        if (filterKeys.length > 0) {
+          // Load lightweight req type metadata (base type + ref type)
+          const [reqMeta] = await pool.query(
+            `SELECT a.t AS req_id,
+                    CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ,
+                    refs.id AS ref_id, arrs.id AS arr_id
+             FROM \`${db}\` a, \`${db}\` typs
+             LEFT JOIN \`${db}\` refs ON refs.id=typs.t AND refs.t!=refs.id
+             LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
+             WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`,
+            [subId]
+          );
+
+          const revBT = {};
+          const refTyps = {};
+          const multiKeys = new Set();
+          for (const rm of reqMeta) {
+            const k = String(rm.req_id);
+            revBT[k] = rm.base_typ === 0 ? 'TAB_DELIMITER' : (REV_BASE_TYPE[rm.base_typ] || 'SHORT');
+            if (rm.ref_id != null) refTyps[k] = String(rm.ref_id);
+            if (rm.arr_id != null) multiKeys.add(k);
+          }
+
+          const cwCtx = { revBT, refTyps, multi: multiKeys, db };
+          for (const [colId, filterObj] of Object.entries(colFilterDict)) {
+            const cw = constructWhere(colId, filterObj, String(subId), colId, cwCtx);
+            if (cw.where) {
+              // constructWhere output uses "vals" alias; replace with "a" for object list query
+              objWhereParts.push(cw.where.replace(/^ AND /, '').replace(/\bvals\./g, 'a.'));
+              objWhereParams.push(...cw.params);
+            }
+            if (cw.join) {
+              // Replace "vals" with "a" in JOIN clauses
+              objJoinStr += cw.join.replace(/\bvals\./g, 'a.');
+            }
+            if (cw.distinct) objDistinct = true;
           }
         }
 
@@ -2721,15 +3144,16 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
         const objLimitStr = ` LIMIT ${objOffset}, ${objLimit}`;
 
-        // Total count (same WHERE, no LIMIT)
+        // Total count (same WHERE, no LIMIT); uses JOIN when constructWhere produced JOINs
+        const distinctKw = objDistinct ? 'DISTINCT ' : '';
         const [[countRow]] = await pool.query(
-          `SELECT COUNT(*) AS cnt FROM \`${db}\` a WHERE ${whereStr}`,
+          `SELECT COUNT(${distinctKw}a.id) AS cnt FROM \`${db}\` a${objJoinStr} WHERE ${whereStr}`,
           objWhereParams
         );
         const objTotal = countRow ? Number(countRow.cnt) : 0;
 
         const [objRows] = await pool.query(
-          `SELECT a.id, a.val, a.up, a.t AS base, a.ord FROM \`${db}\` a WHERE ${whereStr} ORDER BY ${objOrderStr}${objLimitStr}`,
+          `SELECT ${distinctKw}a.id, a.val, a.up, a.t AS base, a.ord FROM \`${db}\` a${objJoinStr} WHERE ${whereStr} ORDER BY ${objOrderStr}${objLimitStr}`,
           objWhereParams
         );
 
@@ -5666,15 +6090,16 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       }
 
       if (searchQuery) {
-        if (searchQuery.startsWith('@')) {
-          const searchId = parseInt(searchQuery.substring(1), 10);
-          if (!isNaN(searchId)) {
-            query += ` AND id = ?`;
-            params.push(searchId);
-          }
-        } else {
-          query += ` AND val LIKE ?`;
-          params.push(`%${searchQuery}%`);
+        // Use constructWhere to parse search DSL (@id, %like%, IN(), etc.)
+        const searchFilter = searchQuery.startsWith('@')
+          ? { F: searchQuery }
+          : { F: `%${searchQuery}%` };
+        const cwCtx = { revBT: {}, refTyps: {}, multi: new Set(), db };
+        const cw = constructWhere(String(refTypeId), searchFilter, String(refTypeId), false, cwCtx);
+        if (cw.where) {
+          // Replace vals.val/vals.id with val/id (simple query uses no alias)
+          query += cw.where.replace(/\bvals\./g, '').replace(/\ba\d+\./g, '');
+          params.push(...cw.params);
         }
       }
 
@@ -5798,20 +6223,24 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
     // Handle search parameter (?q=<search> or ?q=@<id>)
     let searchClause = '';
+    const searchParams = [];
     if (searchQuery) {
       if (searchQuery.startsWith('@')) {
-        const searchId = parseInt(searchQuery.substring(1), 10);
-        if (!isNaN(searchId)) {
-          whereClause += ` AND vals.id = ${searchId}`;
+        // Use constructWhere for ID-based search DSL
+        const cwCtx = { revBT: {}, refTyps: {}, multi: new Set(), db };
+        const cw = constructWhere(String(dic), { F: searchQuery }, String(dic), false, cwCtx);
+        if (cw.where) {
+          searchClause = cw.where;
+          searchParams.push(...cw.params);
         }
       } else {
         // PHP: CONCAT(vals.val, '/', COALESCE(a{req}.val,''), ...) LIKE '%search%'
-        const escapedSearch = searchQuery.replace(/'/g, "''").replace(/%/g, '\\%');
         let searchConcat = 'vals.val';
         for (const rq of refReqs) {
           searchConcat = `CONCAT(${searchConcat}, '/', COALESCE(a${rq.reqId}.val, ''))`;
         }
-        searchClause = ` AND ${searchConcat} LIKE '%${escapedSearch}%'`;
+        searchClause = ` AND ${searchConcat} LIKE ?`;
+        searchParams.push(`%${searchQuery}%`);
       }
     }
 
@@ -5831,7 +6260,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
     logger.debug('[Legacy _ref_reqs] Query', { db, id, sql: sql.replace(/\s+/g, ' ').trim() });
 
-    const [rows] = await pool.query(sql);
+    const [rows] = await pool.query(sql, searchParams);
 
     // Build result with concatenated requisite values
     // PHP: foreach($ref_reqs as $v) $list[$row["id"]] .= isset($row[$v."val"]) ? " / ".$row[$v."val"] : " / --";
@@ -7824,6 +8253,13 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     const whereParts  = ['a.t = ?', 'a.up != 0'];
     const whereParams = [report.parentType];
 
+    // Build revBT from report column metadata for constructWhere context
+    const reportRevBT = {};
+    for (const col of report.columns) {
+      if (col.baseType) reportRevBT[col.alias] = REV_BASE_TYPE[col.baseType] || 'SHORT';
+    }
+    const reportCwCtx = { revBT: reportRevBT, refTyps: {}, multi: new Set(), db };
+
     for (const [key, filter] of Object.entries(filters)) {
       // Special key: filter by main object ID (used by dubRecDone)
       if (key === '_id') {
@@ -7838,24 +8274,37 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       // Filter on the joined table column (or a.val for main column)
       const expr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
 
-      // SmartQ text filters: FR_ColName=%searchterm% (LIKE), numeric: FR_ColName=N (>=)
-      // Value with % → LIKE; value starting with @ → by ID; !% → NOT LIKE; else → >= (range from)
-      if (filter.from  !== undefined && filter.from  !== '') {
-        const fv = String(filter.from);
-        if (fv.startsWith('!%')) {
-          whereParts.push(`${expr} NOT LIKE ?`); whereParams.push(fv.slice(1));
-        } else if (fv.includes('%')) {
-          whereParts.push(`${expr} LIKE ?`); whereParams.push(fv);
-        } else if (fv.startsWith('@')) {
-          const fid = parseInt(fv.slice(1), 10);
-          if (!isNaN(fid)) { whereParts.push(`${expr} = ?`); whereParams.push(fid); }
-        } else {
-          whereParts.push(`${expr} >= ?`); whereParams.push(fv);
+      // Use constructWhere for DSL-style filters (from/to/eq translated to F/FR/TO)
+      const cwFilter = {};
+      if (filter.from !== undefined && filter.from !== '') cwFilter.FR = String(filter.from);
+      if (filter.to   !== undefined && filter.to   !== '') cwFilter.TO = String(filter.to);
+      if (filter.eq   !== undefined && filter.eq   !== '') cwFilter.F  = String(filter.eq);
+      if (filter.like !== undefined && filter.like !== '') cwFilter.F  = `%${filter.like}%`;
+      // If from has DSL syntax (%, !, @, etc.) and no TO, treat as F (exact/LIKE filter)
+      if (cwFilter.FR && !cwFilter.TO && !cwFilter.F) {
+        const fv = cwFilter.FR;
+        if (fv.includes('%') || fv.startsWith('!') || fv.startsWith('@') || /^(IN|@IN)\s*\(/i.test(fv)) {
+          cwFilter.F = fv;
+          delete cwFilter.FR;
         }
       }
-      if (filter.to    !== undefined && filter.to    !== '') { whereParts.push(`${expr} <= ?`);       whereParams.push(filter.to); }
-      if (filter.eq    !== undefined && filter.eq    !== '') { whereParts.push(`${expr} = ?`);        whereParams.push(filter.eq); }
-      if (filter.like  !== undefined && filter.like  !== '') { whereParts.push(`${expr} LIKE ?`);     whereParams.push(`%${filter.like}%`); }
+
+      if (Object.keys(cwFilter).length > 0) {
+        // Use alias as key so constructWhere generates a{alias}.val references
+        const cw = constructWhere(col.alias, cwFilter, col.alias, false, reportCwCtx);
+        if (cw.where) {
+          // Replace a{alias}.val with the actual column expression
+          let cwWhere = cw.where.replace(/^ AND /, '');
+          cwWhere = cwWhere.replace(new RegExp(`a${col.alias}\\.val`, 'g'), expr);
+          cwWhere = cwWhere.replace(new RegExp(`a${col.alias}\\.id`, 'g'),
+            col.isMainCol ? 'a.id' : `\`${col.alias}\`.id`);
+          // Also handle vals.val/vals.id for curTyp match
+          cwWhere = cwWhere.replace(/\bvals\.val\b/g, expr);
+          cwWhere = cwWhere.replace(/\bvals\.id\b/g, col.isMainCol ? 'a.id' : `\`${col.alias}\`.id`);
+          whereParts.push(cwWhere);
+          whereParams.push(...cw.params);
+        }
+      }
     }
 
     const lim = Math.min(parseInt(limit, 10)  || 100, 10000);
@@ -9409,6 +9858,8 @@ export {
   checkNewRef,
   checkValGranted,
   checkRepColGranted,
+  constructWhere,
+  formatDateForStorage,
 };
 
 export default router;
