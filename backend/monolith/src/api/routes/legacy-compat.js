@@ -277,6 +277,11 @@ router.use(phpJsonMiddleware());
 //   - Headers: include lowercase variants (x-authorization, content-type)
 //
 // The whitelist CORS policy remains active for /api/* routes.
+// Issue #413: PHP lowercases entire URI (strtolower) before routing.
+// Without this, /MyDB/Auth would fail on case-sensitive DB lookups.
+router.param('db', (req, res, next, val) => { req.params.db = val.toLowerCase(); next(); });
+router.param('action', (req, res, next, val) => { req.params.action = val.toLowerCase(); next(); });
+
 router.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.removeHeader('Access-Control-Allow-Credentials');
@@ -287,7 +292,9 @@ router.use((req, res, next) => {
   );
 
   if (req.method === 'OPTIONS') {
-    return res.status(204).end();
+    res.set('Allow', 'GET,POST,OPTIONS');
+    res.set('Content-Length', '0');
+    return res.status(200).end();
   }
   next();
 });
@@ -769,8 +776,9 @@ function generateXsrf(a, b, db) {
  */
 async function updateTokens(pool, db, row) {
   const safeDb = sanitizeIdentifier(db);
-  const token = crypto.randomBytes(32).toString('hex');
-  const xsrf  = crypto.randomBytes(32).toString('hex');
+  // PHP parity (#420): reuse existing token if present, only generate new if none
+  const token = row.tok_val || crypto.randomBytes(32).toString('hex');
+  const xsrf  = generateXsrf(token, db, db);
 
   // Update or insert token row
   if (row.tok) {
@@ -1286,7 +1294,8 @@ function htmlEsc(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 // ── BKI delimiter helpers (PHP index.php lines 1619-1634) ──────────────
@@ -2781,9 +2790,9 @@ function legacyXsrfCheck(req, res, next) {
   const bodyXsrf = req.body && req.body._xsrf;
 
   if (!xsrf || bodyXsrf !== xsrf) {
-    // HTTP 200 matching PHP my_die() behavior
+    // PHP: header('HTTP/1.0 403 Forbidden') before my_die()
     const locale = getLocale(req, req.params.db);
-    return res.status(200).json([{ error: t9n('invalid_csrf', locale) }]);
+    return res.status(403).json([{ error: t9n('invalid_csrf', locale) }]);
   }
 
   next();
@@ -3451,9 +3460,7 @@ router.post('/:db/auth', async (req, res, next) => {
   try {
     // Check if database exists
     if (!await dbExists(db)) {
-      if (isJSON) {
-        return res.status(200).json([{ error: `${db} does not exist` }]);
-      }
+      // PHP: header("HTTP/1.0 404 Not found"); die("$z does not exist") (#427)
       return res.status(404).send(`${db} does not exist`);
     }
 
@@ -3655,17 +3662,17 @@ router.post('/:db/auth', async (req, res, next) => {
     let msg = '';
     if (changePassword) {
       if (npw1.length < 6) {
-        msg = 'Password must be at least 6 characters long [errShort]. ';
+        msg = t9n('[RU]Новый пароль должен быть не короче 6 символов[EN]Password must be at least 6 symbols long', locale);
       } else if (npw1 === password) {
-        msg = 'The new password must differ from the old one [errOld]. ';
+        msg = t9n('[RU]Новый пароль должен отличаться от старого[EN]The new password must differ from the old one', locale);
       } else if (npw1 !== npw2) {
-        msg = 'Please input the same password twice [errDiffer]. ';
+        msg = t9n('[RU]Введите новый пароль дважды одинаково[EN]Please input the same password twice', locale);
       } else {
         // Update password
         const newPwdHash = phpCompatibleHash(login, npw1, db);
         if (user.pwd_id) {
           await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [newPwdHash, user.pwd_id], { label: 'query_update' });
-          msg = 'The password has been changed';
+          msg = t9n('[RU]Пароль успешно изменен[EN]The password has been changed', locale);
           logger.info('[Legacy Auth] Password changed', { db, login });
         }
       }
@@ -3831,7 +3838,7 @@ router.post('/:db/getcode', async (req, res) => {
 
   // PHP validates email format
   if (!u || !/^.+@.+\..+$/.test(u)) {
-    return res.status(200).json([{ error: 'invalid user' }]);
+    return res.status(200).json({ error: 'invalid user' });
   }
 
   try {
@@ -3850,7 +3857,7 @@ router.post('/:db/getcode', async (req, res) => {
     }
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy GetCode] Error');
-    return res.status(200).json([{ error: 'server error' }]);
+    return res.status(200).json({ error: 'server error' });
   }
 });
 
@@ -3869,7 +3876,7 @@ router.post('/:db/checkcode', async (req, res) => {
   logger.info({ db, u }, '[Legacy CheckCode] Request');
 
   if (!u || !c || c.length !== 4) {
-    return res.status(200).json([{ error: 'invalid data' }]);
+    return res.status(200).json({ error: 'invalid data' });
   }
 
   try {
@@ -3905,16 +3912,15 @@ router.post('/:db/checkcode', async (req, res) => {
         await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.ACTIVITY}, ?)`, [row.uid, nowTimestamp], { label: 'u_insert' });
       }
 
-      // Set cookie like PHP
-      res.cookie(db, newToken, { maxAge: 30 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
+      // PHP checkcode does NOT set a cookie — client sets it from JSON response (#430)
 
       return res.status(200).json({ token: newToken, _xsrf: newXsrf });
     } else {
-      return res.status(200).json([{ error: 'user not found' }]);
+      return res.status(200).json({ error: 'user not found' });
     }
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy CheckCode] Error');
-    return res.status(200).json([{ error: 'invalid data' }]);
+    return res.status(200).json({ error: 'invalid data' });
   }
 });
 
@@ -4327,6 +4333,7 @@ router.get('/auth.asp', async (req, res) => {
       const updated = await updateTokens(pool, z, {
         uid: row.uid,
         tok: row.tok_id,
+        tok_val: row.tok_val,
         xsrf: row.xsrf_id,
         act: row.act_id,
       });
@@ -5063,19 +5070,86 @@ router.get('/:db/:page*', async (req, res, next) => {
 
         if (req.query.JSON_DATA !== undefined) {
           // Compact format: each row → {i:id, u:up, o:ord, r:[req_val,...]}
-          // Get requisite type IDs for this type (defines column order)
-          const { rows: reqDefs } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? ORDER BY ord`, [subId], { label: 'orderColId_select' });
-          const reqIds = reqDefs.map(r => r.id);
+          // PHP parity: #432 ref_id prefix, #412 array count, #411 Format_Val_View
 
-          // Batch-load all requisite values for all objects
+          // Get requisite type defs (matching PHP index.php lines 5771-5775 exactly)
+          const { rows: reqDefs } = await execSql(pool, `SELECT
+                 CASE WHEN arrs.id IS NULL THEN a.id ELSE typs.id END AS t,
+                 refs.id AS ref_id, arrs.id AS arr_id,
+                 CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ
+              FROM \`${db}\` a
+              JOIN \`${db}\` typs ON typs.id = a.t
+              LEFT JOIN \`${db}\` refs ON refs.id = typs.t AND refs.t != refs.id
+              LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up = typs.id AND arrs.ord = 1
+              WHERE a.up = ? ORDER BY a.ord`, [subId], { label: 'json_data_reqdefs' });
+          const reqIds = reqDefs.map(r => r.t);
+          const nonRefSet = new Set(); // req type IDs that are NOT references
+          const arrSet = new Set();    // req type IDs that are arrays
+          const baseMap = {};          // req type ID → base type for formatValView
+          for (const rd of reqDefs) {
+            if (rd.ref_id != null && rd.ref_id !== 0) {
+              // Reference type — NOT added to nonRefSet
+            } else {
+              nonRefSet.add(rd.t);
+              if (rd.arr_id != null && rd.arr_id !== 0) arrSet.add(rd.t);
+            }
+            if (rd.base_typ != null) baseMap[rd.t] = rd.base_typ;
+          }
+
+          // Batch-load all requisite values (matching PHP index.php lines 6347-6354)
           const reqMap = {};
           if (objRows.length > 0 && reqIds.length > 0) {
             const objIds = objRows.map(r => r.id);
             const ph = objIds.map(() => '?').join(',');
-            const { rows: reqVals } = await execSql(pool, `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`, objIds, { label: 'orderColId_select' });
+            const { rows: reqVals } = await execSql(pool,
+              `SELECT reqs.up, typs.id AS t, reqs.val, typs.t AS ref_type, typs.val AS refr, COUNT(1) AS arr_num
+               FROM \`${db}\` reqs JOIN \`${db}\` typs ON typs.id = reqs.t
+               WHERE reqs.up IN (${ph})
+               GROUP BY reqs.val, reqs.id, typs.id
+               ORDER BY reqs.up, reqs.ord`, objIds, { label: 'json_data_reqvals' });
+
+            // PHP processes values differently for refs vs non-refs:
+            // Non-ref: reqs.t = req type def ID, reqs.val = actual value
+            // Ref: reqs.t = referenced OBJECT ID, reqs.val = req type def ID
+            // (integram stores the reference target in the t field)
+            const refAccum = {}; // objId → reqTypeId → { refIds: [], vals: [] }
+
             for (const rv of reqVals) {
               if (!reqMap[rv.up]) reqMap[rv.up] = {};
-              reqMap[rv.up][rv.t] = rv.val;
+              const tid = rv.t; // typs.id = reqs.t
+
+              if (nonRefSet.has(tid)) {
+                // Non-reference value: tid = req type def ID
+                if (arrSet.has(tid)) {
+                  // Array type: store count (#412)
+                  reqMap[rv.up][tid] = rv.arr_num != null ? Number(rv.arr_num) : '';
+                } else {
+                  // Regular: apply formatValView (#411)
+                  const bt = baseMap[tid];
+                  reqMap[rv.up][tid] = bt ? formatValView(bt, rv.val || '', tzone) : (rv.val || '');
+                }
+              } else {
+                // Reference value: tid = referenced object ID, rv.val = req type def ID
+                const reqTypeId = parseInt(rv.val, 10);
+                if (!isNaN(reqTypeId) && reqIds.includes(reqTypeId)) {
+                  if (!refAccum[rv.up]) refAccum[rv.up] = {};
+                  if (!refAccum[rv.up][reqTypeId]) refAccum[rv.up][reqTypeId] = { refIds: [], vals: [] };
+                  refAccum[rv.up][reqTypeId].refIds.push(tid);
+                  // PHP: display value = typs.val (the referenced object's name)
+                  refAccum[rv.up][reqTypeId].vals.push((rv.refr || '').replace(/,/g, '&comma;'));
+                }
+              }
+            }
+
+            // Flatten reference accumulations to "refId1,refId2:val1,val2" format (#432)
+            for (const objId of Object.keys(refAccum)) {
+              if (!reqMap[objId]) reqMap[objId] = {};
+              for (const rtId of Object.keys(refAccum[objId])) {
+                const acc = refAccum[objId][rtId];
+                const refIdStr = acc.refIds.join(',');
+                const valStr = acc.vals.join(',');
+                reqMap[objId][rtId] = `${refIdStr}:${valStr}`;
+              }
             }
           }
 
@@ -5454,7 +5528,14 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
 
         response['total']                              = objTotal;
-        response['object']                             = objRows.map(r => ({ id: String(r.id), val: r.val, up: String(r.up), base: String(r.base) }));
+        response['object']                             = objRows.map(r => {
+          const obj = { id: String(r.id), val: r.val, up: String(r.up), base: String(r.base) };
+          // PHP #418: include ord when viewing child objects (f_u > 1)
+          if (fuParam && parseInt(fuParam, 10) > 1) obj.ord = String(r.ord || 0);
+          // PHP #419: include ref for REPORT_COLUMN and GRANT types
+          if (parseInt(r.base, 10) === TYPE.REPORT_COLUMN || parseInt(r.base, 10) === TYPE.GRANT) obj.ref = String(r.t || 0);
+          return obj;
+        });
         response['&main.a.&uni_obj.&uni_obj_all']      = uniObjAll;
 
         if (hasReqs && Object.keys(reqsStd).length > 0) {
@@ -6544,21 +6625,16 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       req.body['t' + reqId] = resolved;
     }
 
-    // Uniqueness check: if ord=1 (unique), check if same val+type already exists
-    if (parseInt(order, 10) === 1 || order === 1) {
-      // Check for uniqueness via type attrs
-      const { rows: typeAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId], { label: 'query_select' });
-      const attrs = typeAttrs.length > 0 ? String(typeAttrs[0].val) : '';
-      if (attrs.includes(':UNIQ:')) {
-        const { rows: existingObj } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND up = ? LIMIT 1`, [value, typeId, parentId], { label: 'query_select' });
-        if (existingObj.length > 0) {
-          const existId = existingObj[0].id;
-          warning = 'Object already exists';
-          if (isApiRequest(req)) {
-            return res.json({ id: existId, obj: existId, ord: 0, next_act: 'edit_obj', args: '', val: htmlEsc(formatValView(baseType, value, tzone)), warning });
-          }
-          return res.redirect(`/${db}/edit_obj/${existId}`);
+    // Uniqueness check: PHP checks any non-zero ord value (#416)
+    if (parseInt(order, 10)) {
+      const { rows: existingObj } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND up = ? LIMIT 1`, [value, typeId, parentId], { label: 'query_select' });
+      if (existingObj.length > 0) {
+        const existId = existingObj[0].id;
+        warning = 'Object already exists';
+        if (isApiRequest(req)) {
+          return res.json({ id: existId, obj: typeId, ord: 0, next_act: 'edit_obj', args: '', val: htmlEsc(formatValView(baseType, value, tzone)), warning });
         }
+        return res.redirect(`/${db}/edit_obj/${existId}`);
       }
     }
 
@@ -8501,20 +8577,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       result[row.id] = displayValue;
     }
 
-    // Grant mask filtering: filter out requisites that the user's role masks as hidden
-    const { grants } = req.legacyUser || {};
-    if (grants && grants.mask) {
-      // Get the parent type ID for mask lookup
-      const typeId = refRows[0].dic;
-      if (grants.mask[typeId]) {
-        const mask = grants.mask[typeId];
-        for (const objId of Object.keys(result)) {
-          if (mask[objId] === 'HIDE') {
-            delete result[objId];
-          }
-        }
-      }
-    }
+    // PHP does NOT apply grant mask filtering on _ref_reqs (#429)
 
     logger.info('[Legacy _ref_reqs] Retrieved', { db, id, count: Object.keys(result).length, hasReqs: refReqs.length > 0 });
 
@@ -9851,7 +9914,7 @@ router.post('/:db/jwt', async (req, res) => {
   }
 
   if (!jwtToken) {
-    return res.status(200).json([{ error: 'JWT verification failed' }]);
+    return res.status(200).json({ error: 'JWT verification failed' });
   }
 
   try {
@@ -9865,24 +9928,24 @@ router.post('/:db/jwt', async (req, res) => {
       // PHP: openssl_verify("$header.$payload", $sig, $publicKey, OPENSSL_ALGO_SHA256)
       const parts = jwtToken.split('.');
       if (parts.length !== 3) {
-        return res.status(200).json([{ error: 'JWT verification failed' }]);
+        return res.status(200).json({ error: 'JWT verification failed' });
       }
       const [headerB64, payloadB64, sigB64] = parts;
       const sigBuf = Buffer.from(sigB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
       const data = Buffer.from(`${headerB64}.${payloadB64}`);
       const ok = crypto.verify('SHA256', data, { key: publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, sigBuf);
       if (!ok) {
-        return res.status(200).json([{ error: 'JWT verification failed' }]);
+        return res.status(200).json({ error: 'JWT verification failed' });
       }
       const payload = JSON.parse(Buffer.from(payloadB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
       const now = Math.floor(Date.now() / 1000);
       if (!payload.iat || !payload.exp || now > payload.exp || now < payload.iat) {
-        return res.status(200).json([{ error: 'JWT expired' }]);
+        return res.status(200).json({ error: 'JWT expired' });
       }
       // PHP: $params->data->userId
       username = payload?.data?.userId || payload?.sub || null;
       if (!username) {
-        return res.status(200).json([{ error: 'JWT verification failed' }]);
+        return res.status(200).json({ error: 'JWT verification failed' });
       }
     }
 
@@ -9900,7 +9963,7 @@ router.post('/:db/jwt', async (req, res) => {
        WHERE ${whereClause} LIMIT 1`, [whereParam], { label: 'post_db_jwt_select' });
 
     if (!rows.length) {
-      return res.status(200).json([{ error: 'JWT verification failed' }]);
+      return res.status(200).json({ error: 'No user found' });
     }
 
     const user = rows[0];
@@ -9909,6 +9972,7 @@ router.post('/:db/jwt', async (req, res) => {
     const { token: newToken, xsrf: newXsrf } = await updateTokens(pool, db, {
       uid: user.uid,
       tok: user.tok_id,
+      tok_val: user.tok_val,
       xsrf: user.xsrf_id,
       act: null,
     });
@@ -9923,7 +9987,7 @@ router.post('/:db/jwt', async (req, res) => {
     res.status(200).json({ _xsrf: newXsrf, token: newToken, id: String(user.uid), user: user.uname });
   } catch (error) {
     logger.error('[Legacy jwt] Error', { error: error.message, db });
-    res.status(200).json([{ error: 'JWT verification failed' }]);
+    res.status(200).json({ error: 'JWT verification failed' });
   }
 });
 
@@ -11576,23 +11640,18 @@ router.all('/:db/report/:reportId?', async (req, res) => {
           }
         }
         const cols = colEntries.map(e => e.def);
-        // PHP parity: rows is an object keyed by row index (string keys "0","1",...),
-        // each row is an object keyed by column ID → value
-        const rows = {};
-        for (let idx = 0; idx < results.data.length; idx++) {
-          const row = results.data[idx];
-          const r = {};
-          for (const e of colEntries) {
-            r[String(e.def.id)] = row[e.alias] !== undefined ? row[e.alias] : '';
-          }
-          rows[String(idx)] = r;
+        // PHP parity (#410): data is column-major — data[i] = array of all values for column i
+        // PHP: foreach($GLOBALS["STORED_REPS"][$id]["last_res"] as $rs) $json["data"][$i++] = $rs;
+        const data = colEntries.map(e => {
+          return results.data.map(row => row[e.alias] !== undefined ? row[e.alias] : '');
+        });
+        // PHP: columns[i].totals set from col_totals
+        for (let ci = 0; ci < cols.length; ci++) {
+          if (cols[ci].totals === null) delete cols[ci].totals;
         }
         return res.json({
           columns: cols,
-          rows,
-          totalCount: results.data.length,
-          header: report.header || '',
-          footer: [],
+          data,
         });
       }
 
