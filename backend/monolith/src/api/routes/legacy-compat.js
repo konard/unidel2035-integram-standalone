@@ -9249,10 +9249,13 @@ router.all('/:db/report/:reportId?', async (req, res) => {
     // PHP also executes for JSON_KV, JSON_CR, JSON_HR, JSON_DATA flags (they select output format, not trigger)
     const q = req.query;
     // PHP executes the report for all JSON flags including plain ?JSON
+    // CSV export (?csv or ?format=csv) also triggers execution
+    const wantCsv = q.csv !== undefined || format === 'csv';
     const shouldExecute = execute || req.method === 'POST' ||
       q.JSON !== undefined || q.json !== undefined ||
       q.JSON_KV !== undefined || q.JSON_CR !== undefined || q.JSON_HR !== undefined ||
-      q.JSON_DATA !== undefined || q.RECORD_COUNT !== undefined;
+      q.JSON_DATA !== undefined || q.RECORD_COUNT !== undefined ||
+      wantCsv;
 
     if (shouldExecute) {
       // Parse filters from request
@@ -9382,16 +9385,20 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         return res.json({ count: cntResults.rownum });
       }
 
-      // CSV export (?format=csv)
-      if (format === 'csv') {
-        const headers = report.columns.map(c => c.name).join(',');
-        const csvRows = results.data.map(row =>
-          report.columns.map(c => `"${(row[c.alias] || '').toString().replace(/"/g, '""')}"`).join(',')
-        ).join('\n');
+      // CSV export (?csv or ?format=csv)
+      // PHP behaviour: when ?csv is set, LIMIT is removed so all matching rows are exported.
+      // Re-fetch without LIMIT to ensure complete export.
+      if (wantCsv) {
+        let csvData = results.data;
+        if (limit < 99999) {
+          const allResults = await executeReport(pool, db, report, filters, 999999, 0, orderParam, 0, reportUserCtx);
+          csvData = allResults.data;
+        }
 
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', `attachment; filename=report_${id}.csv`);
-        return res.send(headers + '\n' + csvRows);
+        const { csv, filename } = formatReportCsv(report, csvData, id);
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        return res.send(csv);
       }
 
       // PHP-compatible JSON output formats
@@ -9990,6 +9997,48 @@ function maskCsvDelimiters(val) {
   const str = String(val);
   // Escape semicolons and newlines for CSV
   return str.replace(/;/g, '\\;').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+/**
+ * Format report results as CSV for download.
+ * Matches PHP Compile_Report CSV export behavior:
+ *   - Semicolon delimiter (fputcsv($handle, $data, ';'))
+ *   - UTF-8 BOM prefix for Excel compatibility
+ *   - Values containing semicolons, quotes, or newlines are quoted
+ *   - Double-quotes inside values are escaped as ""
+ *
+ * @param {object}   report  - compiled report with .columns[]
+ * @param {object[]} rows    - result data array
+ * @param {number}   reportId - report ID for filename
+ * @returns {{ csv: string, filename: string }}
+ */
+function formatReportCsv(report, rows, reportId) {
+  const BOM = '\ufeff';
+  const DELIM = ';';
+
+  /** Escape a single cell value for semicolon-delimited CSV */
+  function escapeCell(val) {
+    if (val === null || val === undefined) return '';
+    const str = String(val);
+    // If the value contains the delimiter, quotes, or newlines — wrap in quotes
+    if (str.includes(DELIM) || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }
+
+  // Header row: column display names
+  const headerLine = report.columns.map(c => escapeCell(c.name)).join(DELIM);
+
+  // Data rows
+  const dataLines = rows.map(row =>
+    report.columns.map(c => escapeCell(row[c.alias])).join(DELIM)
+  );
+
+  const csv = BOM + headerLine + '\n' + dataLines.join('\n');
+  const filename = `report_${reportId}.csv`;
+
+  return { csv, filename };
 }
 
 // ============================================================================
@@ -10628,14 +10677,29 @@ router.post('/:db', async (req, res, next) => {
       ip: req.ip || '',
     } : null;
 
-    const results = await executeReport(pool, db, report, filters, limit, offset, null, 0, reportUserCtx);
-
     const q = req.query;
+
+    // CSV export: fetch all rows (no LIMIT) to match PHP behaviour
+    const wantCsv = q.csv !== undefined || q.format === 'csv';
+    if (wantCsv) {
+      limit = 999999;
+      offset = 0;
+    }
+
+    const results = await executeReport(pool, db, report, filters, limit, offset, null, 0, reportUserCtx);
 
     // RECORD_COUNT: smartq.js calls ?JSON&RECORD_COUNT → {count: N}
     if (q.RECORD_COUNT !== undefined) {
       const cntResults = await executeReport(pool, db, report, filters, 999999, 0, null, 0, reportUserCtx);
       return res.json({ count: cntResults.rownum });
+    }
+
+    // CSV export (?csv or ?format=csv)
+    if (wantCsv) {
+      const { csv, filename } = formatReportCsv(report, results.data, reportId);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(csv);
     }
 
     // JSON_KV format: [{col_name: val, ...}, ...]
