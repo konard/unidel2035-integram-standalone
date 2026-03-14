@@ -6269,6 +6269,126 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 });
 
 /**
+ * Get_Current_Values — load current field values for an object before save.
+ * Port of PHP Get_Current_Values (index.php:6977).
+ *
+ * Runs GetObjectReqs Query 1 (field definitions) and Query 2 (stored values),
+ * then merges them into plain-object maps the caller can use for validation,
+ * NOT_NULL enforcement, BOOLEAN tracking, and REFERENCE / ARRAY resolution.
+ *
+ * @param {import('mysql2/promise').Pool} pool
+ * @param {string} db   - database (table) name
+ * @param {number|string} id  - object id
+ * @param {number|string} typ - object type id
+ * @param {object} reqs    - mutable requisite map  { reqId → metadata|value }
+ * @param {object} refTyps - reqId → refTypeId mapping
+ * @param {object} arrTyps - reqId → arrSubTypeId mapping
+ * @param {object} revBt   - reqId → base-type name mapping
+ * @returns {Promise<{reqs: object, reqTyps: object, notNull: object, revBt: object, booleans: object}>}
+ */
+async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt) {
+  const z = sanitizeIdentifier(db);
+
+  // ── Query 1: Req field definitions (PHP GetObjectReqs query 1) ──────────
+  const q1 = `SELECT a.id AS req_id, refs.id AS ref_id, a.val AS attrs, a.ord,
+                CASE WHEN refs.id IS NULL THEN typs.t    ELSE refs.t   END AS base_typ,
+                CASE WHEN refs.id IS NULL THEN typs.val  ELSE refs.val END AS type_val,
+                CASE WHEN arrs.id IS NULL THEN NULL      ELSE typs.id  END AS arr_id
+         FROM ${z} a, ${z} typs
+         LEFT JOIN ${z} refs ON refs.id=typs.t AND refs.t!=refs.id
+         LEFT JOIN ${z} arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
+         WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`;
+  const { rows: reqMeta } = await execSql(pool, q1, [typ], { label: 'getCurrentValues_q1', db });
+
+  // Build local metadata from Query 1 (populates reqs, refTyps, arrTyps if empty)
+  const localReqs    = {};   // reqId → { base_typ, attrs }
+  for (const rd of reqMeta) {
+    const k = String(rd.req_id);
+    localReqs[k] = {
+      base_typ: rd.base_typ,
+      attrs:    rd.attrs || '',
+    };
+    if (rd.ref_id != null)       refTyps[k] = String(rd.ref_id);
+    else if (rd.arr_id != null)  arrTyps[k] = String(rd.arr_id);
+  }
+
+  // ── Query 2: Stored values (PHP GetObjectReqs query 2) ─────────────────
+  const q2 = `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
+                CASE WHEN typs.up=0 THEN 0 ELSE reqs.val END AS val,
+                reqs.ord, typs.id AS t, COUNT(1) AS arr_num,
+                origs.t AS bt, typs.val AS ref_val
+         FROM ${z} reqs
+         JOIN ${z} typs  ON typs.id  = reqs.t
+         LEFT JOIN ${z} origs ON origs.id = typs.t
+         WHERE reqs.up = ?
+         GROUP BY val, id, t
+         ORDER BY reqs.ord`;
+  const { rows: storedRows } = await execSql(pool, q2, [id], { label: 'getCurrentValues_q2', db });
+
+  // Process stored rows into a keyed map (PHP: $rows)
+  const rows = {};
+  for (const row of storedRows) {
+    const tStr = String(row.t);
+    rows[tStr] = {
+      id:      row.id != null ? String(row.id) : '',
+      val:     row.val != null ? String(row.val) : '',
+      arr_num: Number(row.arr_num),
+    };
+  }
+
+  // ── Merge pass (PHP foreach over GLOBALS["REQS"]) ──────────────────────
+  const reqTyps  = {};
+  const notNull  = {};
+  const booleans = {};
+
+  // Iterate over all known requisite keys from Query 1
+  for (const key of Object.keys(localReqs)) {
+    const meta = localReqs[key];
+
+    // NOT_NULL detection (PHP: strpos attrs, NOT_NULL_MASK)
+    if (meta.attrs && meta.attrs.includes(':!NULL:')) {
+      notNull[key] = '';
+    }
+
+    // Reverse base-type mapping
+    const baseTypId = meta.base_typ;
+    revBt[key] = REV_BASE_TYPE[baseTypId] || revBt[baseTypId] || '';
+
+    if (rows[key] !== undefined) {
+      // Direct match — stored value keyed by req type id
+      reqs[key]    = rows[key].val;
+      reqTyps[key] = rows[key].id;
+    } else if (refTyps[key] !== undefined) {
+      // REFERENCE resolution: look up by the ref-type id
+      const refKey = refTyps[key];
+      if (rows[refKey] !== undefined) {
+        reqs[key]    = rows[refKey].val;
+        reqTyps[key] = rows[refKey].id;
+      } else {
+        reqs[key]    = '';
+        reqTyps[key] = '';
+      }
+      revBt[key] = 'REFERENCE';
+    } else if (arrTyps[key] !== undefined) {
+      // ARRAY / multiselect resolution: use arr_num
+      const arrKey = arrTyps[key];
+      reqs[key] = rows[arrKey] !== undefined ? rows[arrKey].arr_num : 0;
+    } else if (key !== String(typ)) {
+      // Default: empty
+      reqs[key]    = '';
+      reqTyps[key] = '';
+    }
+
+    // BOOLEAN tracking
+    if (revBt[key] === 'BOOLEAN' && reqs[key] == 1) {  // == intentional (PHP loose comparison)
+      booleans[key] = 1;
+    }
+  }
+
+  return { reqs, reqTyps, notNull, revBt, booleans };
+}
+
+/**
  * _m_save - Save/update object attributes (with copy support)
  * POST /:db/_m_save/:id
  * Parameters:
@@ -6393,6 +6513,17 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     );
     const objTypeEarly = objInfoEarly.length > 0 ? objInfoEarly[0].t : 0;
     const objValEarly = objInfoEarly.length > 0 ? objInfoEarly[0].val : '';
+
+    // Load current field values for this object (PHP: Get_Current_Values)
+    // Provides NOT_NULL enforcement, BOOLEAN tracking, and REFERENCE/ARRAY resolution
+    const currentReqs = {};
+    const currentRefTyps = {};
+    const currentArrTyps = {};
+    const currentRevBt = {};
+    const currentValues = await getCurrentValues(
+      pool, db, objectId, objTypeEarly,
+      currentReqs, currentRefTyps, currentArrTyps, currentRevBt
+    );
 
     // Normal save (not copy)
     // Update value if provided
@@ -13515,6 +13646,7 @@ export {
   calcOrder,
   isDbVacant,
   updateTokens,
+  getCurrentValues,
 };
 
 export default router;
