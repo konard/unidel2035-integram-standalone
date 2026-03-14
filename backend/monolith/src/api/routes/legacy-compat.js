@@ -1638,47 +1638,111 @@ async function legacyAuthMiddleware(req, res, next) {
   }
 
   const token = extractToken(req, db);
-  if (!token) {
-    return res.status(401).json({ error: 'Authentication required' });
-  }
 
   try {
     const pool = getPool();
-    // Reuse the token validation pattern from the xsrf handler (~line 4510)
-    const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
-              role_def.val role_val, role_def.id roleId
+
+    // --- Attempt token-based authentication ---
+    if (token) {
+      const [rows] = await pool.query(
+        `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
+                role_def.val role_val, role_def.id roleId
+         FROM ${db} u
+         JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
+         LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
+         LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
+           ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
+         WHERE u.t=${TYPE.USER}
+         LIMIT 1`,
+        [token]
+      );
+
+      if (rows.length > 0) {
+        const user = rows[0];
+        const xsrf = user.xsrf_val || generateXsrf(token, db, db);
+        const roleId = user.roleId || 0;
+        const grants = roleId ? await getGrants(pool, db, roleId, {
+          username: user.uname, uid: user.uid, role: (user.role_val || '').toLowerCase(), roleId,
+        }) : {};
+
+        req.legacyUser = {
+          uid: user.uid,
+          username: user.uname,
+          xsrf,
+          role: (user.role_val || '').toLowerCase(),
+          roleId,
+          grants,
+        };
+
+        return next();
+      }
+    }
+
+    // --- Guest fallback (PHP parity: lines 1213–1243) ---
+    // When no valid token/auth is provided, look for a 'guest' user in the DB.
+    // PHP uses hardcoded token "gtuoeksetn" and generates xsrf via xsrf("gtuoeksetn","guest").
+    const GUEST_TOKEN = 'gtuoeksetn';
+    const [guestRows] = await pool.query(
+      `SELECT u.id uid, u.val uname, tok.val tok_val, tok.id tok_id,
+              xsrf.id xsrf_id, role_def.id roleId, role_def.val role_val
        FROM ${db} u
-       JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
+       LEFT JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN}
        LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
        LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
          ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
-       WHERE u.t=${TYPE.USER}
+       WHERE u.t=${TYPE.USER} AND u.val='guest'
        LIMIT 1`,
-      [token]
+      []
     );
 
-    if (rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
+    if (guestRows.length > 0) {
+      const guest = guestRows[0];
+      const guestXsrf = generateXsrf(GUEST_TOKEN, 'guest', db);
+
+      // Ensure the guest user has a token row (PHP: Insert if missing)
+      if (!guest.tok_val) {
+        await pool.query(
+          `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 0, ${TYPE.TOKEN}, ?)`,
+          [guest.uid, GUEST_TOKEN]
+        );
+      }
+
+      // Ensure the guest user has an xsrf row (PHP: Insert if missing)
+      if (!guest.xsrf_id) {
+        await pool.query(
+          `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 0, ${TYPE.XSRF}, ?)`,
+          [guest.uid, guestXsrf]
+        );
+      } else {
+        await pool.query(
+          `UPDATE ${db} SET val=? WHERE id=?`,
+          [guestXsrf, guest.xsrf_id]
+        );
+      }
+
+      const roleId = guest.roleId || 0;
+      const grants = roleId ? await getGrants(pool, db, roleId, {
+        username: 'guest', uid: guest.uid, role: (guest.role_val || '').toLowerCase(), roleId,
+      }) : {};
+
+      req.legacyUser = {
+        uid: guest.uid,
+        username: 'guest',
+        xsrf: guestXsrf,
+        role: (guest.role_val || '').toLowerCase(),
+        roleId,
+        grants,
+        isGuest: true,
+      };
+
+      // Set guest cookie (PHP: 30-day expiry via COOKIES_EXPIRE)
+      res.cookie(db, GUEST_TOKEN, { maxAge: 30 * 24 * 60 * 60 * 1000, path: '/' });
+
+      return next();
     }
 
-    const user = rows[0];
-    const xsrf = user.xsrf_val || generateXsrf(token, db, db);
-    const roleId = user.roleId || 0;
-    const grants = roleId ? await getGrants(pool, db, roleId, {
-      username: user.uname, uid: user.uid, role: (user.role_val || '').toLowerCase(), roleId,
-    }) : {};
-
-    req.legacyUser = {
-      uid: user.uid,
-      username: user.uname,
-      xsrf,
-      role: (user.role_val || '').toLowerCase(),
-      roleId,
-      grants,
-    };
-
-    next();
+    // No guest user defined — reject
+    return res.status(401).json({ error: token ? 'Invalid or expired token' : 'Authentication required' });
   } catch (error) {
     logger.error({ error: error.message, db }, '[legacyAuthMiddleware] Error');
     return res.status(401).json({ error: 'Authentication failed' });
@@ -6577,22 +6641,42 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
 
   try {
     const parentId = parseInt(parentTypeId || req.body.up || '0', 10);
-    const baseType = parseInt(req.body.t || '8', 10); // Default to CHARS type (8)
     const name = req.body.val || req.body.name || '';
 
+    // PHP line 8630-8631: if($val == "") my_die("Empty type")
     if (!name) {
       return res.status(200).json({ error: 'Type name (val) is required'  });
     }
 
-    // PHP parity: duplicate name check — cannot create type with existing name
+    // PHP line 8632-8633: if(!isset($_REQUEST["t"])) my_die("Base type is not set")
+    if (req.body.t === undefined && req.query.t === undefined) {
+      return res.status(200).json({ error: 'Base type is not set' });
+    }
+
+    const baseType = parseInt(req.body.t ?? req.query.t, 10);
+
+    // PHP line 8634-8635: if(!isset($GLOBALS["basics"][$_REQUEST["t"]]) && ($_REQUEST["t"] !== "0"))
+    //   my_die("Base type is invalid: ...")
+    if (!REV_BASE_TYPE[baseType] && baseType !== 0) {
+      return res.status(200).json({ error: `Base type is invalid: ${baseType}` });
+    }
+
+    // PHP line 8636-8641: duplicate (val, t) check at root level
+    // SELECT id FROM $z WHERE val='...' AND t=$t AND id!=t
+    // If duplicate found: return existing id with warning (not an error)
     if (parentId === 0) {
       const pool = getPool();
       const [dupeRows] = await pool.query(
-        `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? LIMIT 1`,
-        [name]
+        `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND id != t LIMIT 1`,
+        [name, baseType]
       );
       if (dupeRows.length > 0) {
-        return res.status(200).json({ error: `Type with name "${name}" already exists` });
+        const existingId = dupeRows[0].id;
+        logger.info('[Legacy _d_new] Type already exists, returning existing', { db, existingId, name, baseType });
+        return legacyRespond(req, res, db, {
+          id: '', obj: existingId, next_act: 'edit_types', args: 'ext',
+          warnings: `The Type ${name} already exists!`
+        });
       }
     }
 
