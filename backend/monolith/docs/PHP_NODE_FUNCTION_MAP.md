@@ -10,7 +10,7 @@
 
 | Category | Total | Full | Partial | Stub | Missing | N/A |
 |----------|-------|------|---------|------|---------|-----|
-| **Functions** | 96 | 48 | 11 | 2 | 14 | 21 |
+| **Functions** | 96 | 51 | 11 | 2 | 11 | 21 |
 | **Route Case Blocks** | 31 | 25 | 2 | 0 | 2 | 2 |
 | **Block Type Handlers** | 82 | 0 | 0 | 0 | 0 | 82 |
 | **Global Init Code** | 5 | 3 | 1 | 0 | 1 | 0 |
@@ -168,7 +168,7 @@
 | 80 | `HideDelimiters()` | 1627-1629 | `hideDelimiters()` | **Full** | Implemented in PR #280 |
 | 81 | `UnHideDelimiters()` | 1631-1633 | `unHideDelimiters()` | **Full** | Implemented in PR #280 |
 | 82 | `constructHeader()` | 1635-1681 | Inline in export | **Full** | — |
-| 83 | `build_post_fields()` | 3883-3910 | Not implemented | **Missing** | Multipart form builder for connectors |
+| 83 | `build_post_fields()` | 3883-3910 | `buildPostFields()` | **Full** | Implemented in PR #292 |
 | 84 | `getJsonVal()` | 3912-3930 | Not implemented | **Missing** | JSON path extraction for reports |
 | 85 | `checkJson()` | 3932-3938 | Not implemented | **Missing** | JSON validation for reports |
 | 86 | `Slash_semi()` | 3940-3942 | `slashSemi()` | **Full** | Implemented in PR #281 |
@@ -177,8 +177,8 @@
 | 89 | `FetchAlias()` | 3959-3961 | Not implemented | **Missing** | Alias extraction from modifiers |
 | 90 | `sendJsonHeaders()` | 3963-3968 | `res.json()` | **Full** | — |
 | 91 | `ResolveType()` | 3970-3989 | Inline type checks | **Full** | — |
-| 92 | `CheckSubst()` | 3991-3996 | Not implemented | **Missing** | Column substitution for reports |
-| 93 | `CheckObjSubst()` | 3998-4003 | Not implemented | **Missing** | Object substitution for reports |
+| 92 | `CheckSubst()` | 3991-3996 | `checkSubst()` | **Full** | Implemented in PR #291 |
+| 93 | `CheckObjSubst()` | 3998-4003 | `checkObjSubst()` | **Full** | Implemented in PR #291 |
 | 94 | `maskCsvDelimiters()` | 4005-4010 | `maskCsvDelimiters()` | **Full** | — |
 | 95 | `removeMasks()` | 7553-7556 | `parseModifiers()` | **Full** | — |
 | 96 | `RepoGrant()` | 6826-6834 | Not implemented | **Missing** | Repository-level grant check |
@@ -349,7 +349,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | 7 | ~~`HintNeeded()`~~ | ~~Search hints don't appear~~ | ~~UX~~ — **Implemented in PR #286** |
 | 8 | ~~`NormalSize()`~~ | ~~File sizes show raw bytes~~ | ~~UX~~ — **Implemented in PR #290** |
 | 9 | `RepoGrant()` | Repository-level access check | Advanced permissions |
-| 10 | `build_post_fields()` | External connector POST fails | Connectors |
+| 10 | ~~`build_post_fields()`~~ | ~~External connector POST fails~~ | ~~Connectors~~ — **Implemented in PR #292** |
 | 11 | `getJsonVal()` / `checkJson()` | JSON extraction in reports | Advanced reporting |
 
 ### 6.4 Low (Edge Cases)
@@ -357,7 +357,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
 | 12 | ~~Delimiter masking functions~~ | ~~CSV edge cases~~ | ~~Export~~ — **Implemented in PR #280 (`MaskDelimiters`, `UnMaskDelimiters`, `HideDelimiters`, `UnHideDelimiters`) and PR #281 (`Slash_semi`, `UnSlash_semi`)** |
-| 13 | `CheckSubst()` / `CheckObjSubst()` | Column substitution | Advanced reporting |
+| 13 | ~~`CheckSubst()` / `CheckObjSubst()`~~ | ~~Column substitution~~ | ~~Advanced reporting~~ — **Implemented in PR #291** |
 | 14 | `FetchAlias()` | Alias extraction | Advanced reporting |
 | 15 | `mail2DB()` | Email-to-DB linking | Multi-tenant |
 
@@ -401,3 +401,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 13. ~~**t9n i18n**~~ — **Implemented in PR #289** — Full i18n support for error messages with dictionary and inline modes.
 
 14. ~~**NormalSize**~~ — **Implemented in PR #290** — Human-readable file size formatting.
+
+15. ~~**CheckSubst / CheckObjSubst**~~ — **Implemented in PR #291** — Report column and object substitution checks for BKI import.
+
+16. ~~**build_post_fields**~~ — **Implemented in PR #292** — Multipart/form-data builder for connector POST requests with file uploads.
