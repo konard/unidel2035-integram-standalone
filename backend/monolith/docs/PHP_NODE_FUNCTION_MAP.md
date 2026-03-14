@@ -95,7 +95,7 @@
 
 | # | PHP Function | Lines | Node.js Equivalent | Status | What's Missing |
 |---|--------------|-------|-------------------|--------|----------------|
-| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Aggregates (`SUM`/`AVG`/`MIN`/`MAX`/`COUNT`/`GROUP_CONCAT`) and `GROUP BY` implemented in PR #266. Sub-queries `[report_name]` implemented in PR #267. `REP_COL_FUNC` (abn_* functions) implemented in PR #268. Missing: `REP_WHERE`, `REP_PIVOT`, complex JOIN aliases |
+| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Aggregates (`SUM`/`AVG`/`MIN`/`MAX`/`COUNT`/`GROUP_CONCAT`) and `GROUP BY` implemented in PR #266. Sub-queries `[report_name]` implemented in PR #267. `REP_COL_FUNC` (abn_* functions) implemented in PR #268. GROUP_CONCAT for array-type (`:MULTI:`) requisites implemented in PR #269. REP_WHERE stored filters with BuiltIn placeholders implemented in PR #270. Missing: `REP_PIVOT`, complex JOIN aliases |
 | 41 | `Get_block_data()` (case "&functions") | 4021-4027 | Not implemented | **Missing** | Report function list for calculatables |
 | 42 | `Get_block_data()` (case "&formats") | 4028-4033 | Not implemented | **Missing** | Format list for reports |
 | 43 | `exportHeader()` | 1683-1688 | Inline in CSV export | **Full** | — |
@@ -250,7 +250,7 @@
 | 37 | `case "csv_all"` | 4087-4176 | `GET /:db/csv_all` | **Full** | — |
 | 38 | `case "restore"` | 4178-4237 | `POST /:db/restore` | **Full** | — |
 | 39 | `case "backup"` | 4239-4291 | `GET /:db/backup` | **Full** | — |
-| 40 | `case "report"` / `"smartq"` / `"sql"` | 9120-9127 | `ALL /:db/report/:reportId?` | **Partial** | Missing pivot, complex JOINs (sub-queries implemented in PR #267) |
+| 40 | `case "report"` / `"smartq"` / `"sql"` | 9120-9127 | `ALL /:db/report/:reportId?` | **Partial** | Missing pivot, complex JOINs (sub-queries implemented in PR #267, stored filters REP_WHERE implemented in PR #270) |
 | 41 | `case "dir_admin"` | 9128-9131 | `GET /:db/dir_admin` | **N/A** | File browser UI, PHP-specific |
 | 42 | `default:` (page render) | 9114-9158 | `GET /:db`, `GET /:db/:page*` | **N/A** | HTML template rendering |
 
@@ -338,7 +338,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
 | 3 | `Compile_Report()` REP_PIVOT | Pivot tables don't work | Advanced reporting |
-| 4 | `Compile_Report()` REP_WHERE | Custom WHERE clauses in reports | Advanced reporting |
+| 4 | ~~`Compile_Report()` REP_WHERE~~ | ~~Custom WHERE clauses in reports~~ | ~~Advanced reporting~~ — **Implemented in PR #270** |
 | 5 | `_ref_reqs` grant mask integration | Reference dropdowns may show unauthorized items | Security |
 | 6 | ~~`abn_*` functions (DATE2STR, RUB2STR, etc.)~~ | ~~Russian locale reports fail~~ | ~~Localization~~ — **Implemented in PR #268** |
 
@@ -374,7 +374,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 ## 8. Recommendations
 
-1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. ~~Sub-queries~~ and pivot tables are used in production reports. (Note: Aggregates implemented in PR #266, sub-queries implemented in PR #267, abn_* functions implemented in PR #268. Remaining: REP_PIVOT, REP_WHERE, complex JOIN aliases.)
+1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. Pivot tables are used in production reports. (Note: Aggregates implemented in PR #266, sub-queries implemented in PR #267, abn_* functions implemented in PR #268, GROUP_CONCAT for arrays implemented in PR #269, REP_WHERE stored filters implemented in PR #270. Remaining: REP_PIVOT, complex JOIN aliases.)
 
 2. **Add batch insert** — `Insert_batch()` is critical for restore and data migration performance.
 
