@@ -1289,6 +1289,40 @@ function decodeJsonEscapes(str) {
   return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+// PHP: checkDbNameReserved() — all MySQL reserved words (index.php lines 435-464) (#436)
+const MYSQL_RESERVED = new Set([
+  'ACCESSIBLE','ACCOUNT','ACTION','ACTIVE','ADD','ADMIN','AFTER','AGAINST','AGGREGATE','ALGORITHM','ALL','ALTER','ALWAYS','ANALYSE','ANALYZE','AND','ANY','ARRAY','ASC','ASCII','ASENSITIVE','ATTRIBUTE','AUTHENTICATION','AUTOEXTEND_SIZE','AUTO_INCREMENT',
+  'AVG','AVG_ROW_LENGTH','BACKUP','BEFORE','BEGIN','BETWEEN','BIGINT','BINARY','BINLOG','BIT','BLOB','BLOCK','BOOL','BOOLEAN','BOTH','BTREE','BUCKETS','BULK','BYTE','CACHE','CALL','CASCADE','CASCADED','CASE','CATALOG_NAME','CHAIN','CHANGE','CHANGED','CHANNEL','CHAR',
+  'CHARACTER','CHARSET','CHECK','CHECKSUM','CIPHER','CLASS_ORIGIN','CLIENT','CLONE','CLOSE','COALESCE','CODE','COLLATE','COLLATION','COLUMN','COLUMNS','COLUMN_FORMAT','COLUMN_NAME','COMMENT','COMMIT','COMMITTED','COMPACT','COMPLETION','COMPONENT','COMPRESSED',
+  'COMPRESSION','CONCURRENT','CONDITION','CONNECTION','CONSISTENT','CONSTRAINT','CONSTRAINT_NAME','CONTAINS','CONTEXT','CONTINUE','CONVERT','CPU','CREATE','CROSS','CUBE','CUME_DIST','CURRENT','CURRENT_DATE','CURRENT_TIME','CURRENT_USER','CURSOR','CURSOR_NAME',
+  'DATA','DATABASE','DATABASES','DATAFILE','DATE','DATETIME','DAY','DAY_HOUR','DAY_MICROSECOND','DAY_MINUTE','DAY_SECOND','DEALLOCATE','DEC','DECIMAL','DECLARE','DEFAULT','DEFAULT_AUTH','DEFINER','DEFINITION','DELAYED','DELAY_KEY_WRITE','DELETE','DENSE_RANK',
+  'DESC','DESCRIBE','DESCRIPTION','DES_KEY_FILE','DETERMINISTIC','DIAGNOSTICS','DIRECTORY','DISABLE','DISCARD','DISK','DISTINCT','DISTINCTROW','DIV','DOUBLE','DROP','DUAL','DUMPFILE','DUPLICATE','DYNAMIC','EACH','ELSE','ELSEIF','EMPTY','ENABLE','ENCLOSED','ENCRYPTION',
+  'END','ENDS','ENFORCED','ENGINE','ENGINES','ENUM','ERROR','ERRORS','ESCAPE','ESCAPED','EVENT','EVENTS','EVERY','EXCEPT','EXCHANGE','EXCLUDE','EXECUTE','EXISTS','EXIT','EXPANSION','EXPIRE','EXPLAIN','EXPORT','EXTENDED','EXTENT_SIZE','FACTOR','FALSE','FAST','FAULTS','FETCH',
+  'FIELDS','FILE','FILE_BLOCK_SIZE','FILTER','FINISH','FIRST','FIRST_VALUE','FIXED','FLOAT','FLOAT4','FLOAT8','FLUSH','FOLLOWING','FOLLOWS','FOR','FORCE','FOREIGN','FORMAT','FOUND','FROM','FULL','FULLTEXT','FUNCTION','GENERAL','GENERATE','GENERATED','GEOMCOLLECTION',
+  'GEOMETRY','GET','GET_FORMAT','GLOBAL','GRANT','GRANTS','GROUP','GROUPING','GROUPS','GTID_ONLY','HANDLER','HASH','HAVING','HELP','HIGH_PRIORITY','HISTOGRAM','HISTORY','HOST','HOSTS','HOUR','HOUR_MINUTE','HOUR_SECOND','IDENTIFIED','IGNORE','IMPORT','INACTIVE','INDEX',
+  'INDEXES','INFILE','INITIAL','INITIAL_SIZE','INITIATE','INNER','INOUT','INSENSITIVE','INSERT','INSERT_METHOD','INSTALL','INSTANCE','INT','INT1','INT2','INT3','INT4','INT8','INTEGER','INTERSECT','INTERVAL','INTO','INVISIBLE','INVOKER','IO_AFTER_GTIDS','IO_BEFORE_GTIDS',
+  'IO_THREAD','IPC','ISOLATION','ISSUER','ITERATE','JOIN','JSON','JSON_TABLE','JSON_VALUE','KEY','KEYRING','KEYS','KEY_BLOCK_SIZE','KILL','LAG','LANGUAGE','LAST','LAST_VALUE','LATERAL','LEAD','LEADING','LEAVE','LEAVES','LEFT','LESS','LEVEL','LIKE','LIMIT','LINEAR','LINES',
+  'LINESTRING','LIST','LOAD','LOCAL','LOCALTIME','LOCALTIMESTAMP','LOCK','LOCKED','LOCKS','LOGFILE','LOGS','LONG','LONGBLOB','LONGTEXT','LOOP','LOW_PRIORITY','MASTER','MASTER_BIND','MASTER_DELAY','MASTER_HOST','MASTER_LOG_FILE','MASTER_LOG_POS','MASTER_PASSWORD',
+  'MASTER_PORT','MASTER_SSL','MASTER_SSL_CA','MASTER_SSL_CERT','MASTER_SSL_CRL','MASTER_SSL_KEY','MASTER_USER','MATCH','MAXVALUE','MAX_ROWS','MAX_SIZE','MEDIUM','MEDIUMBLOB','MEDIUMINT','MEDIUMTEXT','MEMBER','MEMORY','MERGE','MESSAGE_TEXT','MICROSECOND',
+  'MIDDLEINT','MIGRATE','MINUTE','MINUTE_SECOND','MIN_ROWS','MOD','MODE','MODIFIES','MODIFY','MONTH','MULTILINESTRING','MULTIPOINT','MULTIPOLYGON','MUTEX','MYSQL_ERRNO','NAME','NAMES','NATIONAL','NATURAL','NCHAR','NDB','NDBCLUSTER','NESTED','NEVER','NEW','NEXT',
+  'NODEGROUP','NONE','NOT','NOWAIT','NO_WAIT','NTH_VALUE','NTILE','NULL','NULLS','NUMBER','NUMERIC','NVARCHAR','OFF','OFFSET','OLD','ONE','ONLY','OPEN','OPTIMIZE','OPTIMIZER_COSTS','OPTION','OPTIONAL','OPTIONALLY','OPTIONS','ORDER','ORDINALITY','ORGANIZATION','OTHERS',
+  'OUT','OUTER','OUTFILE','OVER','OWNER','PACK_KEYS','PAGE','PARSER','PARTIAL','PARTITION','PARTITIONING','PARTITIONS','PASSWORD','PATH','PERCENT_RANK','PERSIST','PERSIST_ONLY','PHASE','PLUGIN','PLUGINS','PLUGIN_DIR','POINT','POLYGON','PORT','PRECEDES','PRECEDING',
+  'PRECISION','PREPARE','PRESERVE','PREV','PRIMARY','PRIVILEGES','PROCEDURE','PROCESS','PROCESSLIST','PROFILE','PROFILES','PROXY','PURGE','QUARTER','QUERY','QUICK','RANDOM','RANGE','RANK','READ','READS','READ_ONLY','READ_WRITE','REAL','REBUILD','RECOVER','RECURSIVE',
+  'REDOFILE','REDUNDANT','REFERENCE','REFERENCES','REGEXP','REGISTRATION','RELAY','RELAYLOG','RELAY_LOG_FILE','RELAY_LOG_POS','RELAY_THREAD','RELEASE','RELOAD','REMOTE','REMOVE','RENAME','REORGANIZE','REPAIR','REPEAT','REPEATABLE','REPLACE','REPLICA','REPLICAS',
+  'REPLICATE_DO_DB','REPLICATION','REQUIRE','RESET','RESIGNAL','RESOURCE','RESPECT','RESTART','RESTORE','RESTRICT','RESUME','RETAIN','RETURN','RETURNING','RETURNS','REUSE','REVERSE','REVOKE','RIGHT','RLIKE','ROLE','ROLLBACK','ROLLUP','ROTATE','ROUTINE','ROW','ROWS',
+  'ROW_COUNT','ROW_FORMAT','ROW_NUMBER','RTREE','SAVEPOINT','SCHEDULE','SCHEMA','SCHEMAS','SCHEMA_NAME','SECOND','SECONDARY','SECONDARY_LOAD','SECURITY','SELECT','SENSITIVE','SEPARATOR','SERIAL','SERIALIZABLE','SERVER','SESSION','SET','SHARE','SHOW','SHUTDOWN',
+  'SIGNAL','SIGNED','SIMPLE','SKIP','SLAVE','SLOW','SMALLINT','SNAPSHOT','SOCKET','SOME','SONAME','SOUNDS','SOURCE','SOURCE_BIND','SOURCE_DELAY','SOURCE_HOST','SOURCE_LOG_FILE','SOURCE_LOG_POS','SOURCE_PASSWORD','SOURCE_PORT','SOURCE_SSL','SOURCE_SSL_CA',
+  'SOURCE_SSL_CERT','SOURCE_SSL_CRL','SOURCE_SSL_KEY','SOURCE_USER','SPATIAL','SPECIFIC','SQL','SQLEXCEPTION','SQLSTATE','SQLWARNING','SQL_AFTER_GTIDS','SQL_BIG_RESULT','SQL_CACHE','SQL_NO_CACHE','SQL_THREAD','SQL_TSI_DAY','SQL_TSI_HOUR','SQL_TSI_MINUTE',
+  'SQL_TSI_MONTH','SQL_TSI_QUARTER','SQL_TSI_SECOND','SQL_TSI_WEEK','SQL_TSI_YEAR','SRID','SSL','STACKED','START','STARTING','STARTS','STATUS','STOP','STORAGE','STORED','STRAIGHT_JOIN','STREAM','STRING','SUBCLASS_ORIGIN','SUBJECT','SUBPARTITION','SUBPARTITIONS',
+  'SUPER','SUSPEND','SWAPS','SWITCHES','SYSTEM','TABLE','TABLES','TABLESPACE','TABLE_CHECKSUM','TABLE_NAME','TEMPORARY','TEMPTABLE','TERMINATED','TEXT','THAN','THEN','THREAD_PRIORITY','TIES','TIME','TIMESTAMP','TIMESTAMPADD','TIMESTAMPDIFF','TINYBLOB','TINYINT',
+  'TINYTEXT','TLS','TRAILING','TRANSACTION','TRIGGER','TRIGGERS','TRUE','TRUNCATE','TYPE','TYPES','UNBOUNDED','UNCOMMITTED','UNDEFINED','UNDO','UNDOFILE','UNICODE','UNINSTALL','UNION','UNIQUE','UNKNOWN','UNLOCK','UNREGISTER','UNSIGNED','UNTIL','UPDATE','UPGRADE','URL',
+  'USAGE','USE','USER','USER_RESOURCES','USE_FRM','USING','UTC_DATE','UTC_TIME','UTC_TIMESTAMP','VALIDATION','VALUE','VALUES','VARBINARY','VARCHAR','VARCHARACTER','VARIABLES','VARYING','VCPU','VIEW','VIRTUAL','VISIBLE','WAIT','WARNINGS','WEEK','WEIGHT_STRING','WHEN',
+  'WHERE','WHILE','WINDOW','WITH','WITHOUT','WORK','WRAPPER','WRITE','X509','XID','XML','XOR','YEAR','YEAR_MONTH','ZEROFILL','ZONE',
+]);
+function checkDbNameReserved(name) {
+  return MYSQL_RESERVED.has(name.toUpperCase());
+}
+
 function htmlEsc(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -3686,29 +3720,14 @@ router.post('/:db/auth', async (req, res, next) => {
       }
     }
 
-    // PHP: reuses existing token if present, only generates new when none exists
-    // (updateTokens, index.php lines 363-383)
-    let token;
-    if (user.token_id && user.token) {
-      // Reuse existing token (PHP: if($row["tok"]) $token = $row["token"])
-      token = user.token;
-    } else {
-      // Generate new token only when none exists (PHP: md5(microtime(TRUE)))
-      token = generateToken();
-      await execSql(pool,
-        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
-        [user.uid, token],
-        { label: 'insertToken', db }
-      );
-    }
-    const xsrf = generateXsrf(token, db, db);
-
-    if (!user.xsrf_id) {
-      await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [user.uid, xsrf], { label: 'query_insert' });
-    } else {
-      // Update xsrf to keep it in sync with token
-      await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [xsrf, user.xsrf_id], { label: 'query_update' });
-    }
+    // PHP parity: use updateTokens() which handles token, xsrf AND activity (#433)
+    const { token, xsrf } = await updateTokens(pool, db, {
+      uid: user.uid,
+      tok: user.token_id || null,
+      tok_val: user.token || null,
+      xsrf: user.xsrf_id || null,
+      act: user.act_id || null,
+    });
 
     logger.info('[Legacy Auth] Success', { db, login, uid: user.uid });
 
@@ -3905,7 +3924,7 @@ router.post('/:db/checkcode', async (req, res) => {
 
       // PHP parity: upsert ACTIVITY record for last-login tracking
       const { rows: actRows } = await execSql(pool, `SELECT id FROM ${db} WHERE up = ? AND t = ${TYPE.ACTIVITY} LIMIT 1`, [row.uid], { label: 'u_select' });
-      const nowTimestamp = String(Math.floor(Date.now() / 1000));
+      const nowTimestamp = String(Date.now() / 1000); // PHP: microtime(TRUE) — preserve fractional seconds (#437)
       if (actRows.length > 0) {
         await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [nowTimestamp, actRows[0].id], { label: 'u_update' });
       } else {
@@ -7302,6 +7321,28 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       }
     }
 
+    // PHP parity (#434): post-save NOT_NULL sweep — if any mandatory field is empty, prevent redirect
+    // PHP index.php lines 8204-8221: checks all NOT_NULL reqs after save
+    if (currentNotNull && Object.keys(currentNotNull).length > 0) {
+      for (const nnKey of Object.keys(currentNotNull)) {
+        const nnTypeId = parseInt(nnKey, 10);
+        // Only check fields the user has WRITE grant for
+        const hasGrant = await checkGrant(pool, db, req.legacyUser.grants, objectId, nnTypeId, 'WRITE', req.legacyUser.username);
+        if (!hasGrant) continue;
+        // Check if this field was submitted with a value, or is an array/multi with existing data
+        const submitted = req.body[`t${nnTypeId}`] || req.body[`NEW_${nnTypeId}`];
+        if (submitted && String(submitted).length > 0) continue;
+        if (isCopy) continue;
+        // Check if the field has a value in DB
+        const { rows: nnRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? LIMIT 1`, [objectId, nnTypeId], { label: 'not_null_check' });
+        if (nnRows.length > 0) continue;
+        // Mandatory field is empty — add warning and prevent redirect
+        const locale = getLocale(req, db);
+        warnings += t9n('[RU]Данные сохранены. Необходимо заполнить реквизиты, выделенные красным[EN]The data are saved. The attributes marked red are mandatory', locale) + '!<br>';
+        break; // PHP breaks after first missing field
+      }
+    }
+
     logger.info('[Legacy _m_save] Object saved', { db, id: objectId, newRefs: Object.keys(newRefParams).length });
 
     // Reuse the already-fetched object info for PHP api_dump() compatible response
@@ -7313,10 +7354,12 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     // PHP args: "saved1=1&F_U=$up&F_I=$id" (always include prefix + F_U + F_I)
     //           "copied1=1&F_U=$up&F_I=$id" for copy operations
     const argsPrefix = isCopy ? 'copied1=1&' : 'saved1=1&';
+    // PHP: if NOT_NULL warning was set, $next_act = "" (prevent redirect)
+    const hasNotNullWarning = warnings.includes('mandatory');
     const response = {
       id: String(objType),
       obj: objectId,
-      next_act: 'object',
+      next_act: hasNotNullWarning ? '' : 'object',
       args: `${argsPrefix}F_U=${objUp}&F_I=${objectId}`,
       warnings,
     };
@@ -7543,7 +7586,8 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
           lastReqId = String(existing.id);
         } else {
           const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
-          const newId = await insertRow(db, objectId, attrOrder, refVal, '');
+          // PHP: Insert($obj, 1, $val, "$t") → t=refObjId, val=reqTypeId (#438)
+          const newId = await insertRow(db, objectId, attrOrder, refVal, String(typeIdNum));
           lastReqId = String(newId);
         }
         continue;
@@ -9977,8 +10021,8 @@ router.post('/:db/jwt', async (req, res) => {
       act: null,
     });
 
-    // PHP: setcookie($z, $token, time() + 2592000*12, "/") — 360 days
-    res.cookie(db, newToken, { maxAge: 360 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
+    // PHP: setcookie($z, $token, 0, "/") — session cookie (expires on browser close) (#435)
+    res.cookie(db, newToken, { path: '/', httpOnly: false });
 
     logger.info('[Legacy jwt] JWT validated', { db, uid: user.uid });
 
@@ -10064,9 +10108,8 @@ router.all('/my/_new_db', async (req, res) => {
     return res.status(200).json([{ error: 'Invalid database name. Must be 3-15 characters, starting with a letter.' }]);
   }
 
-  // Check for reserved names
-  const reservedNames = ['my', 'admin', 'root', 'system', 'test', 'demo', 'api', 'health'];
-  if (reservedNames.includes(newDbName.toLowerCase())) {
+  // Check for reserved names — full MySQL reserved words list (PHP: checkDbNameReserved, index.php lines 435-464) (#436)
+  if (checkDbNameReserved(newDbName.toLowerCase())) {
     return res.status(200).json([{ error: `Database name "${newDbName}" is reserved` }]);
   }
 
