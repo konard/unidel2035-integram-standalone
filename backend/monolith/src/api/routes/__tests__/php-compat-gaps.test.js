@@ -763,11 +763,11 @@ describe('Already fixed — regression guard', () => {
   });
 
   it('HTTP 200 used for all error responses (not 4xx)', () => {
-    // PHP my_die(): always HTTP 200, body: [{"error":"..."}]
-    const phpErrorFormat = (msg) => [{ error: msg }];
+    // PHP my_die(): always HTTP 200, body: {"error":"..."}
+    const phpErrorFormat = (msg) => ({ error: msg });
     const result = phpErrorFormat('something went wrong');
-    expect(Array.isArray(result)).toBe(true);
-    expect(result[0]).toHaveProperty('error');
+    expect(typeof result).toBe('object');
+    expect(result).toHaveProperty('error');
   });
 
   it('report ?JSON_KV returns array of objects with column NAMES as keys', () => {
