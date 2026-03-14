@@ -8943,9 +8943,11 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
 
     logger.info('[Legacy _d_ord] Order set', { db, id, ord: newOrd });
 
-    // PHP api_dump(): {id:parentId, obj:parentId, next_act:"edit_types", args:"ext"}
-    // PHP returns the parent type ID so frontend refreshes the type editor
-    legacyRespond(req, res, db, { id: String(parentId), obj: String(parentId), next_act: 'edit_types', args: 'ext' });
+    // PHP (index.php:8726-8733): $id is only reassigned to $row["up"] (parentId)
+    // when the order actually changed. If newOrd === oldOrd, $id stays as reqId.
+    // $obj=$id is set after the if-block, so $obj always equals the final $id.
+    const responseId = (String(newOrd) !== String(oldOrd)) ? String(parentId) : String(id);
+    legacyRespond(req, res, db, { id: responseId, obj: responseId, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ord] Error', { error: error.message, db });
     res.status(200).json([{ error: error.message  }]);
