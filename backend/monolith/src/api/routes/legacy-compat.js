@@ -277,6 +277,18 @@ router.use(phpJsonMiddleware());
 //   - Headers: include lowercase variants (x-authorization, content-type)
 //
 // The whitelist CORS policy remains active for /api/* routes.
+// Issue #413: PHP lowercases entire URI (strtolower) before routing.
+// Without this, /MyDB/Auth would fail on case-sensitive DB lookups.
+router.param('db', (req, res, next, val) => { req.params.db = val.toLowerCase(); next(); });
+router.param('action', (req, res, next, val) => { req.params.action = val.toLowerCase(); next(); });
+
+// PHP parity: strtolower($_SERVER["REQUEST_URI"]) — entire URI is lowercased before routing
+// This ensures hardcoded routes like /xsrf, /csv_all, /_m_del match regardless of case
+router.use((req, res, next) => {
+  req.url = req.url.toLowerCase();
+  next();
+});
+
 router.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.removeHeader('Access-Control-Allow-Credentials');
@@ -287,7 +299,9 @@ router.use((req, res, next) => {
   );
 
   if (req.method === 'OPTIONS') {
-    return res.status(204).end();
+    res.set('Allow', 'GET,POST,OPTIONS');
+    res.set('Content-Length', '0');
+    return res.status(200).end();
   }
   next();
 });
@@ -570,9 +584,10 @@ function legacyRespond(req, res, db, data) {
 
   if (effectiveNextAct === 'nul') return res.send('');
 
-  // Build redirect URL: /{db}/{next_act}/{id}[?args][#obj]
+  // Build redirect URL: /{db}/{next_act}/{id}[/?args][#obj]
+  // PHP: "/$z/$next_act/$id" . (strlen($arg) ? "/?$arg" : "") — note slash before ?
   const idPart  = id  ? `/${id}`   : '';
-  const argPart = args && String(args).length ? `?${args}` : '';
+  const argPart = args && String(args).length ? `/?${args}` : '';
   const hashPart = obj != null ? `#${obj}` : '';
   return res.redirect(`/${db}/${effectiveNextAct}${idPart}${argPart}${hashPart}`);
 }
@@ -769,8 +784,9 @@ function generateXsrf(a, b, db) {
  */
 async function updateTokens(pool, db, row) {
   const safeDb = sanitizeIdentifier(db);
-  const token = crypto.randomBytes(32).toString('hex');
-  const xsrf  = crypto.randomBytes(32).toString('hex');
+  // PHP parity (#420): reuse existing token if present, only generate new if none
+  const token = row.tok_val || crypto.randomBytes(32).toString('hex');
+  const xsrf  = generateXsrf(token, db, db);
 
   // Update or insert token row
   if (row.tok) {
@@ -1281,12 +1297,47 @@ function decodeJsonEscapes(str) {
   return str.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+// PHP: checkDbNameReserved() — all MySQL reserved words (index.php lines 435-464) (#436)
+const MYSQL_RESERVED = new Set([
+  'ACCESSIBLE','ACCOUNT','ACTION','ACTIVE','ADD','ADMIN','AFTER','AGAINST','AGGREGATE','ALGORITHM','ALL','ALTER','ALWAYS','ANALYSE','ANALYZE','AND','ANY','ARRAY','ASC','ASCII','ASENSITIVE','ATTRIBUTE','AUTHENTICATION','AUTOEXTEND_SIZE','AUTO_INCREMENT',
+  'AVG','AVG_ROW_LENGTH','BACKUP','BEFORE','BEGIN','BETWEEN','BIGINT','BINARY','BINLOG','BIT','BLOB','BLOCK','BOOL','BOOLEAN','BOTH','BTREE','BUCKETS','BULK','BYTE','CACHE','CALL','CASCADE','CASCADED','CASE','CATALOG_NAME','CHAIN','CHANGE','CHANGED','CHANNEL','CHAR',
+  'CHARACTER','CHARSET','CHECK','CHECKSUM','CIPHER','CLASS_ORIGIN','CLIENT','CLONE','CLOSE','COALESCE','CODE','COLLATE','COLLATION','COLUMN','COLUMNS','COLUMN_FORMAT','COLUMN_NAME','COMMENT','COMMIT','COMMITTED','COMPACT','COMPLETION','COMPONENT','COMPRESSED',
+  'COMPRESSION','CONCURRENT','CONDITION','CONNECTION','CONSISTENT','CONSTRAINT','CONSTRAINT_NAME','CONTAINS','CONTEXT','CONTINUE','CONVERT','CPU','CREATE','CROSS','CUBE','CUME_DIST','CURRENT','CURRENT_DATE','CURRENT_TIME','CURRENT_USER','CURSOR','CURSOR_NAME',
+  'DATA','DATABASE','DATABASES','DATAFILE','DATE','DATETIME','DAY','DAY_HOUR','DAY_MICROSECOND','DAY_MINUTE','DAY_SECOND','DEALLOCATE','DEC','DECIMAL','DECLARE','DEFAULT','DEFAULT_AUTH','DEFINER','DEFINITION','DELAYED','DELAY_KEY_WRITE','DELETE','DENSE_RANK',
+  'DESC','DESCRIBE','DESCRIPTION','DES_KEY_FILE','DETERMINISTIC','DIAGNOSTICS','DIRECTORY','DISABLE','DISCARD','DISK','DISTINCT','DISTINCTROW','DIV','DOUBLE','DROP','DUAL','DUMPFILE','DUPLICATE','DYNAMIC','EACH','ELSE','ELSEIF','EMPTY','ENABLE','ENCLOSED','ENCRYPTION',
+  'END','ENDS','ENFORCED','ENGINE','ENGINES','ENUM','ERROR','ERRORS','ESCAPE','ESCAPED','EVENT','EVENTS','EVERY','EXCEPT','EXCHANGE','EXCLUDE','EXECUTE','EXISTS','EXIT','EXPANSION','EXPIRE','EXPLAIN','EXPORT','EXTENDED','EXTENT_SIZE','FACTOR','FALSE','FAST','FAULTS','FETCH',
+  'FIELDS','FILE','FILE_BLOCK_SIZE','FILTER','FINISH','FIRST','FIRST_VALUE','FIXED','FLOAT','FLOAT4','FLOAT8','FLUSH','FOLLOWING','FOLLOWS','FOR','FORCE','FOREIGN','FORMAT','FOUND','FROM','FULL','FULLTEXT','FUNCTION','GENERAL','GENERATE','GENERATED','GEOMCOLLECTION',
+  'GEOMETRY','GET','GET_FORMAT','GLOBAL','GRANT','GRANTS','GROUP','GROUPING','GROUPS','GTID_ONLY','HANDLER','HASH','HAVING','HELP','HIGH_PRIORITY','HISTOGRAM','HISTORY','HOST','HOSTS','HOUR','HOUR_MINUTE','HOUR_SECOND','IDENTIFIED','IGNORE','IMPORT','INACTIVE','INDEX',
+  'INDEXES','INFILE','INITIAL','INITIAL_SIZE','INITIATE','INNER','INOUT','INSENSITIVE','INSERT','INSERT_METHOD','INSTALL','INSTANCE','INT','INT1','INT2','INT3','INT4','INT8','INTEGER','INTERSECT','INTERVAL','INTO','INVISIBLE','INVOKER','IO_AFTER_GTIDS','IO_BEFORE_GTIDS',
+  'IO_THREAD','IPC','ISOLATION','ISSUER','ITERATE','JOIN','JSON','JSON_TABLE','JSON_VALUE','KEY','KEYRING','KEYS','KEY_BLOCK_SIZE','KILL','LAG','LANGUAGE','LAST','LAST_VALUE','LATERAL','LEAD','LEADING','LEAVE','LEAVES','LEFT','LESS','LEVEL','LIKE','LIMIT','LINEAR','LINES',
+  'LINESTRING','LIST','LOAD','LOCAL','LOCALTIME','LOCALTIMESTAMP','LOCK','LOCKED','LOCKS','LOGFILE','LOGS','LONG','LONGBLOB','LONGTEXT','LOOP','LOW_PRIORITY','MASTER','MASTER_BIND','MASTER_DELAY','MASTER_HOST','MASTER_LOG_FILE','MASTER_LOG_POS','MASTER_PASSWORD',
+  'MASTER_PORT','MASTER_SSL','MASTER_SSL_CA','MASTER_SSL_CERT','MASTER_SSL_CRL','MASTER_SSL_KEY','MASTER_USER','MATCH','MAXVALUE','MAX_ROWS','MAX_SIZE','MEDIUM','MEDIUMBLOB','MEDIUMINT','MEDIUMTEXT','MEMBER','MEMORY','MERGE','MESSAGE_TEXT','MICROSECOND',
+  'MIDDLEINT','MIGRATE','MINUTE','MINUTE_SECOND','MIN_ROWS','MOD','MODE','MODIFIES','MODIFY','MONTH','MULTILINESTRING','MULTIPOINT','MULTIPOLYGON','MUTEX','MYSQL_ERRNO','NAME','NAMES','NATIONAL','NATURAL','NCHAR','NDB','NDBCLUSTER','NESTED','NEVER','NEW','NEXT',
+  'NODEGROUP','NONE','NOT','NOWAIT','NO_WAIT','NTH_VALUE','NTILE','NULL','NULLS','NUMBER','NUMERIC','NVARCHAR','OFF','OFFSET','OLD','ONE','ONLY','OPEN','OPTIMIZE','OPTIMIZER_COSTS','OPTION','OPTIONAL','OPTIONALLY','OPTIONS','ORDER','ORDINALITY','ORGANIZATION','OTHERS',
+  'OUT','OUTER','OUTFILE','OVER','OWNER','PACK_KEYS','PAGE','PARSER','PARTIAL','PARTITION','PARTITIONING','PARTITIONS','PASSWORD','PATH','PERCENT_RANK','PERSIST','PERSIST_ONLY','PHASE','PLUGIN','PLUGINS','PLUGIN_DIR','POINT','POLYGON','PORT','PRECEDES','PRECEDING',
+  'PRECISION','PREPARE','PRESERVE','PREV','PRIMARY','PRIVILEGES','PROCEDURE','PROCESS','PROCESSLIST','PROFILE','PROFILES','PROXY','PURGE','QUARTER','QUERY','QUICK','RANDOM','RANGE','RANK','READ','READS','READ_ONLY','READ_WRITE','REAL','REBUILD','RECOVER','RECURSIVE',
+  'REDOFILE','REDUNDANT','REFERENCE','REFERENCES','REGEXP','REGISTRATION','RELAY','RELAYLOG','RELAY_LOG_FILE','RELAY_LOG_POS','RELAY_THREAD','RELEASE','RELOAD','REMOTE','REMOVE','RENAME','REORGANIZE','REPAIR','REPEAT','REPEATABLE','REPLACE','REPLICA','REPLICAS',
+  'REPLICATE_DO_DB','REPLICATION','REQUIRE','RESET','RESIGNAL','RESOURCE','RESPECT','RESTART','RESTORE','RESTRICT','RESUME','RETAIN','RETURN','RETURNING','RETURNS','REUSE','REVERSE','REVOKE','RIGHT','RLIKE','ROLE','ROLLBACK','ROLLUP','ROTATE','ROUTINE','ROW','ROWS',
+  'ROW_COUNT','ROW_FORMAT','ROW_NUMBER','RTREE','SAVEPOINT','SCHEDULE','SCHEMA','SCHEMAS','SCHEMA_NAME','SECOND','SECONDARY','SECONDARY_LOAD','SECURITY','SELECT','SENSITIVE','SEPARATOR','SERIAL','SERIALIZABLE','SERVER','SESSION','SET','SHARE','SHOW','SHUTDOWN',
+  'SIGNAL','SIGNED','SIMPLE','SKIP','SLAVE','SLOW','SMALLINT','SNAPSHOT','SOCKET','SOME','SONAME','SOUNDS','SOURCE','SOURCE_BIND','SOURCE_DELAY','SOURCE_HOST','SOURCE_LOG_FILE','SOURCE_LOG_POS','SOURCE_PASSWORD','SOURCE_PORT','SOURCE_SSL','SOURCE_SSL_CA',
+  'SOURCE_SSL_CERT','SOURCE_SSL_CRL','SOURCE_SSL_KEY','SOURCE_USER','SPATIAL','SPECIFIC','SQL','SQLEXCEPTION','SQLSTATE','SQLWARNING','SQL_AFTER_GTIDS','SQL_BIG_RESULT','SQL_CACHE','SQL_NO_CACHE','SQL_THREAD','SQL_TSI_DAY','SQL_TSI_HOUR','SQL_TSI_MINUTE',
+  'SQL_TSI_MONTH','SQL_TSI_QUARTER','SQL_TSI_SECOND','SQL_TSI_WEEK','SQL_TSI_YEAR','SRID','SSL','STACKED','START','STARTING','STARTS','STATUS','STOP','STORAGE','STORED','STRAIGHT_JOIN','STREAM','STRING','SUBCLASS_ORIGIN','SUBJECT','SUBPARTITION','SUBPARTITIONS',
+  'SUPER','SUSPEND','SWAPS','SWITCHES','SYSTEM','TABLE','TABLES','TABLESPACE','TABLE_CHECKSUM','TABLE_NAME','TEMPORARY','TEMPTABLE','TERMINATED','TEXT','THAN','THEN','THREAD_PRIORITY','TIES','TIME','TIMESTAMP','TIMESTAMPADD','TIMESTAMPDIFF','TINYBLOB','TINYINT',
+  'TINYTEXT','TLS','TRAILING','TRANSACTION','TRIGGER','TRIGGERS','TRUE','TRUNCATE','TYPE','TYPES','UNBOUNDED','UNCOMMITTED','UNDEFINED','UNDO','UNDOFILE','UNICODE','UNINSTALL','UNION','UNIQUE','UNKNOWN','UNLOCK','UNREGISTER','UNSIGNED','UNTIL','UPDATE','UPGRADE','URL',
+  'USAGE','USE','USER','USER_RESOURCES','USE_FRM','USING','UTC_DATE','UTC_TIME','UTC_TIMESTAMP','VALIDATION','VALUE','VALUES','VARBINARY','VARCHAR','VARCHARACTER','VARIABLES','VARYING','VCPU','VIEW','VIRTUAL','VISIBLE','WAIT','WARNINGS','WEEK','WEIGHT_STRING','WHEN',
+  'WHERE','WHILE','WINDOW','WITH','WITHOUT','WORK','WRAPPER','WRITE','X509','XID','XML','XOR','YEAR','YEAR_MONTH','ZEROFILL','ZONE',
+]);
+function checkDbNameReserved(name) {
+  return MYSQL_RESERVED.has(name.toUpperCase());
+}
+
 function htmlEsc(str) {
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 // ── BKI delimiter helpers (PHP index.php lines 1619-1634) ──────────────
@@ -2045,11 +2096,15 @@ function formatValView(typeId, val, tzone = 0) {
       }
       break;
 
-    case 'SIGNED':
-      if (val !== 0) {
-        return String(parseFloat(val));
-      }
-      break;
+    case 'SIGNED': {
+      if (val === '' || val === null || val === undefined) break;
+      // PHP: number_format(int_part) + "." + substr(dec_part+"00", 0, max(2, len(dec_part)))
+      const parts = String(val).trim().split('.');
+      const intPart = String(parseInt(parts[0], 10) || 0);
+      const decPart = parts[1] || '';
+      const decLen = Math.max(2, decPart.length);
+      return intPart + '.' + (decPart + '00').substring(0, decLen);
+    }
 
     case 'FILE': {
       // PHP: if val contains ":", format is "id:filename" — extract filename for display.
@@ -2781,9 +2836,9 @@ function legacyXsrfCheck(req, res, next) {
   const bodyXsrf = req.body && req.body._xsrf;
 
   if (!xsrf || bodyXsrf !== xsrf) {
-    // HTTP 200 matching PHP my_die() behavior
+    // PHP: header('HTTP/1.0 403 Forbidden') before my_die()
     const locale = getLocale(req, req.params.db);
-    return res.status(200).json([{ error: t9n('invalid_csrf', locale) }]);
+    return res.status(403).json([{ error: t9n('invalid_csrf', locale) }]);
   }
 
   next();
@@ -3451,9 +3506,7 @@ router.post('/:db/auth', async (req, res, next) => {
   try {
     // Check if database exists
     if (!await dbExists(db)) {
-      if (isJSON) {
-        return res.status(200).json([{ error: `${db} does not exist` }]);
-      }
+      // PHP: header("HTTP/1.0 404 Not found"); die("$z does not exist") (#427)
       return res.status(404).send(`${db} does not exist`);
     }
 
@@ -3485,10 +3538,12 @@ router.post('/:db/auth', async (req, res, next) => {
         pwd.id AS pwd_id,
         token.val AS token,
         token.id AS token_id,
+        act.id AS act_id,
         xsrf.val AS xsrf,
         xsrf.id AS xsrf_id
       FROM ${db} user
       LEFT JOIN ${db} pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
+      LEFT JOIN ${db} act ON act.up = user.id AND act.t = ${TYPE.ACTIVITY}
       LEFT JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
       LEFT JOIN ${db} xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
       WHERE user.val = ? AND user.t = ${TYPE.USER}
@@ -3655,17 +3710,17 @@ router.post('/:db/auth', async (req, res, next) => {
     let msg = '';
     if (changePassword) {
       if (npw1.length < 6) {
-        msg = 'Password must be at least 6 characters long [errShort]. ';
+        msg = t9n('[RU]Новый пароль должен быть не короче 6 символов[EN]Password must be at least 6 symbols long', locale);
       } else if (npw1 === password) {
-        msg = 'The new password must differ from the old one [errOld]. ';
+        msg = t9n('[RU]Новый пароль должен отличаться от старого[EN]The new password must differ from the old one', locale);
       } else if (npw1 !== npw2) {
-        msg = 'Please input the same password twice [errDiffer]. ';
+        msg = t9n('[RU]Введите новый пароль дважды одинаково[EN]Please input the same password twice', locale);
       } else {
         // Update password
         const newPwdHash = phpCompatibleHash(login, npw1, db);
         if (user.pwd_id) {
           await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [newPwdHash, user.pwd_id], { label: 'query_update' });
-          msg = 'The password has been changed';
+          msg = t9n('[RU]Пароль успешно изменен[EN]The password has been changed', locale);
           logger.info('[Legacy Auth] Password changed', { db, login });
         }
       }
@@ -3679,29 +3734,14 @@ router.post('/:db/auth', async (req, res, next) => {
       }
     }
 
-    // PHP: reuses existing token if present, only generates new when none exists
-    // (updateTokens, index.php lines 363-383)
-    let token;
-    if (user.token_id && user.token) {
-      // Reuse existing token (PHP: if($row["tok"]) $token = $row["token"])
-      token = user.token;
-    } else {
-      // Generate new token only when none exists (PHP: md5(microtime(TRUE)))
-      token = generateToken();
-      await execSql(pool,
-        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
-        [user.uid, token],
-        { label: 'insertToken', db }
-      );
-    }
-    const xsrf = generateXsrf(token, db, db);
-
-    if (!user.xsrf_id) {
-      await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [user.uid, xsrf], { label: 'query_insert' });
-    } else {
-      // Update xsrf to keep it in sync with token
-      await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [xsrf, user.xsrf_id], { label: 'query_update' });
-    }
+    // PHP parity: use updateTokens() which handles token, xsrf AND activity (#433)
+    const { token, xsrf } = await updateTokens(pool, db, {
+      uid: user.uid,
+      tok: user.token_id || null,
+      tok_val: user.token || null,
+      xsrf: user.xsrf_id || null,
+      act: user.act_id || null,
+    });
 
     logger.info('[Legacy Auth] Success', { db, login, uid: user.uid });
 
@@ -3831,7 +3871,7 @@ router.post('/:db/getcode', async (req, res) => {
 
   // PHP validates email format
   if (!u || !/^.+@.+\..+$/.test(u)) {
-    return res.status(200).json([{ error: 'invalid user' }]);
+    return res.status(200).json({ error: 'invalid user' });
   }
 
   try {
@@ -3850,7 +3890,7 @@ router.post('/:db/getcode', async (req, res) => {
     }
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy GetCode] Error');
-    return res.status(200).json([{ error: 'server error' }]);
+    return res.status(200).json({ error: 'server error' });
   }
 });
 
@@ -3869,7 +3909,7 @@ router.post('/:db/checkcode', async (req, res) => {
   logger.info({ db, u }, '[Legacy CheckCode] Request');
 
   if (!u || !c || c.length !== 4) {
-    return res.status(200).json([{ error: 'invalid data' }]);
+    return res.status(200).json({ error: 'invalid data' });
   }
 
   try {
@@ -3898,23 +3938,22 @@ router.post('/:db/checkcode', async (req, res) => {
 
       // PHP parity: upsert ACTIVITY record for last-login tracking
       const { rows: actRows } = await execSql(pool, `SELECT id FROM ${db} WHERE up = ? AND t = ${TYPE.ACTIVITY} LIMIT 1`, [row.uid], { label: 'u_select' });
-      const nowTimestamp = String(Math.floor(Date.now() / 1000));
+      const nowTimestamp = String(Date.now() / 1000); // PHP: microtime(TRUE) — preserve fractional seconds (#437)
       if (actRows.length > 0) {
         await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [nowTimestamp, actRows[0].id], { label: 'u_update' });
       } else {
         await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.ACTIVITY}, ?)`, [row.uid, nowTimestamp], { label: 'u_insert' });
       }
 
-      // Set cookie like PHP
-      res.cookie(db, newToken, { maxAge: 30 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
+      // PHP checkcode does NOT set a cookie — client sets it from JSON response (#430)
 
       return res.status(200).json({ token: newToken, _xsrf: newXsrf });
     } else {
-      return res.status(200).json([{ error: 'user not found' }]);
+      return res.status(200).json({ error: 'user not found' });
     }
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy CheckCode] Error');
-    return res.status(200).json([{ error: 'invalid data' }]);
+    return res.status(200).json({ error: 'invalid data' });
   }
 });
 
@@ -4327,6 +4366,7 @@ router.get('/auth.asp', async (req, res) => {
       const updated = await updateTokens(pool, z, {
         uid: row.uid,
         tok: row.tok_id,
+        tok_val: row.tok_val,
         xsrf: row.xsrf_id,
         act: row.act_id,
       });
@@ -5063,19 +5103,86 @@ router.get('/:db/:page*', async (req, res, next) => {
 
         if (req.query.JSON_DATA !== undefined) {
           // Compact format: each row → {i:id, u:up, o:ord, r:[req_val,...]}
-          // Get requisite type IDs for this type (defines column order)
-          const { rows: reqDefs } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? ORDER BY ord`, [subId], { label: 'orderColId_select' });
-          const reqIds = reqDefs.map(r => r.id);
+          // PHP parity: #432 ref_id prefix, #412 array count, #411 Format_Val_View
 
-          // Batch-load all requisite values for all objects
+          // Get requisite type defs (matching PHP index.php lines 5771-5775 exactly)
+          const { rows: reqDefs } = await execSql(pool, `SELECT
+                 CASE WHEN arrs.id IS NULL THEN a.id ELSE typs.id END AS t,
+                 refs.id AS ref_id, arrs.id AS arr_id,
+                 CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ
+              FROM \`${db}\` a
+              JOIN \`${db}\` typs ON typs.id = a.t
+              LEFT JOIN \`${db}\` refs ON refs.id = typs.t AND refs.t != refs.id
+              LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up = typs.id AND arrs.ord = 1
+              WHERE a.up = ? ORDER BY a.ord`, [subId], { label: 'json_data_reqdefs' });
+          const reqIds = reqDefs.map(r => r.t);
+          const nonRefSet = new Set(); // req type IDs that are NOT references
+          const arrSet = new Set();    // req type IDs that are arrays
+          const baseMap = {};          // req type ID → base type for formatValView
+          for (const rd of reqDefs) {
+            if (rd.ref_id != null && rd.ref_id !== 0) {
+              // Reference type — NOT added to nonRefSet
+            } else {
+              nonRefSet.add(rd.t);
+              if (rd.arr_id != null && rd.arr_id !== 0) arrSet.add(rd.t);
+            }
+            if (rd.base_typ != null) baseMap[rd.t] = rd.base_typ;
+          }
+
+          // Batch-load all requisite values (matching PHP index.php lines 6347-6354)
           const reqMap = {};
           if (objRows.length > 0 && reqIds.length > 0) {
             const objIds = objRows.map(r => r.id);
             const ph = objIds.map(() => '?').join(',');
-            const { rows: reqVals } = await execSql(pool, `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`, objIds, { label: 'orderColId_select' });
+            const { rows: reqVals } = await execSql(pool,
+              `SELECT reqs.up, typs.id AS t, reqs.val, typs.t AS ref_type, typs.val AS refr, COUNT(1) AS arr_num
+               FROM \`${db}\` reqs JOIN \`${db}\` typs ON typs.id = reqs.t
+               WHERE reqs.up IN (${ph})
+               GROUP BY reqs.val, reqs.id, typs.id
+               ORDER BY reqs.up, reqs.ord`, objIds, { label: 'json_data_reqvals' });
+
+            // PHP processes values differently for refs vs non-refs:
+            // Non-ref: reqs.t = req type def ID, reqs.val = actual value
+            // Ref: reqs.t = referenced OBJECT ID, reqs.val = req type def ID
+            // (integram stores the reference target in the t field)
+            const refAccum = {}; // objId → reqTypeId → { refIds: [], vals: [] }
+
             for (const rv of reqVals) {
               if (!reqMap[rv.up]) reqMap[rv.up] = {};
-              reqMap[rv.up][rv.t] = rv.val;
+              const tid = rv.t; // typs.id = reqs.t
+
+              if (nonRefSet.has(tid)) {
+                // Non-reference value: tid = req type def ID
+                if (arrSet.has(tid)) {
+                  // Array type: store count (#412)
+                  reqMap[rv.up][tid] = rv.arr_num != null ? Number(rv.arr_num) : '';
+                } else {
+                  // Regular: apply formatValView (#411)
+                  const bt = baseMap[tid];
+                  reqMap[rv.up][tid] = bt ? formatValView(bt, rv.val || '', tzone) : (rv.val || '');
+                }
+              } else {
+                // Reference value: tid = referenced object ID, rv.val = req type def ID
+                const reqTypeId = parseInt(rv.val, 10);
+                if (!isNaN(reqTypeId) && reqIds.includes(reqTypeId)) {
+                  if (!refAccum[rv.up]) refAccum[rv.up] = {};
+                  if (!refAccum[rv.up][reqTypeId]) refAccum[rv.up][reqTypeId] = { refIds: [], vals: [] };
+                  refAccum[rv.up][reqTypeId].refIds.push(tid);
+                  // PHP: display value = typs.val (the referenced object's name)
+                  refAccum[rv.up][reqTypeId].vals.push((rv.refr || '').replace(/,/g, '&comma;'));
+                }
+              }
+            }
+
+            // Flatten reference accumulations to "refId1,refId2:val1,val2" format (#432)
+            for (const objId of Object.keys(refAccum)) {
+              if (!reqMap[objId]) reqMap[objId] = {};
+              for (const rtId of Object.keys(refAccum[objId])) {
+                const acc = refAccum[objId][rtId];
+                const refIdStr = acc.refIds.join(',');
+                const valStr = acc.vals.join(',');
+                reqMap[objId][rtId] = `${refIdStr}:${valStr}`;
+              }
             }
           }
 
@@ -5083,8 +5190,11 @@ router.get('/:db/:page*', async (req, res, next) => {
             i: obj.id,
             u: obj.up,
             o: obj.ord,
-            r: reqIds.map(rid => (reqMap[obj.id] && reqMap[obj.id][rid] !== undefined)
-              ? reqMap[obj.id][rid] : null),
+            r: [
+              obj.val || '',  // PHP: r[0] = object's own val (index.php:6124)
+              ...reqIds.map(rid => (reqMap[obj.id] && reqMap[obj.id][rid] !== undefined)
+                ? reqMap[obj.id][rid] : ''),
+            ],
           })));
         }
 
@@ -5454,7 +5564,14 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
 
         response['total']                              = objTotal;
-        response['object']                             = objRows.map(r => ({ id: String(r.id), val: r.val, up: String(r.up), base: String(r.base) }));
+        response['object']                             = objRows.map(r => {
+          const obj = { id: String(r.id), val: r.val, up: String(r.up), base: String(r.base) };
+          // PHP #418: include ord when viewing child objects (f_u > 1)
+          if (fuParam && parseInt(fuParam, 10) > 1) obj.ord = String(r.ord || 0);
+          // PHP #419: include ref for REPORT_COLUMN and GRANT types
+          if (parseInt(r.base, 10) === TYPE.REPORT_COLUMN || parseInt(r.base, 10) === TYPE.GRANT) obj.ref = String(r.t || 0);
+          return obj;
+        });
         response['&main.a.&uni_obj.&uni_obj_all']      = uniObjAll;
 
         if (hasReqs && Object.keys(reqsStd).length > 0) {
@@ -6411,8 +6528,8 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       return res.status(200).json([{ error: t9n('type_required', locale) }]);
     }
 
-    // Verify type and parent exist
-    const { rows: typeCheck } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
+    // Verify type exists and is a metadata row (up=0) — PHP: WHERE obj.id=$id AND obj.up=0
+    const { rows: typeCheck } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? AND up = 0 LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
     if (typeCheck.length === 0) {
       return res.status(200).json([{ error: `Type ${typeId} does not exist` }]);
     }
@@ -6544,21 +6661,16 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       req.body['t' + reqId] = resolved;
     }
 
-    // Uniqueness check: if ord=1 (unique), check if same val+type already exists
-    if (parseInt(order, 10) === 1 || order === 1) {
-      // Check for uniqueness via type attrs
-      const { rows: typeAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId], { label: 'query_select' });
-      const attrs = typeAttrs.length > 0 ? String(typeAttrs[0].val) : '';
-      if (attrs.includes(':UNIQ:')) {
-        const { rows: existingObj } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND up = ? LIMIT 1`, [value, typeId, parentId], { label: 'query_select' });
-        if (existingObj.length > 0) {
-          const existId = existingObj[0].id;
-          warning = 'Object already exists';
-          if (isApiRequest(req)) {
-            return res.json({ id: existId, obj: existId, ord: 0, next_act: 'edit_obj', args: '', val: htmlEsc(formatValView(baseType, value, tzone)), warning });
-          }
-          return res.redirect(`/${db}/edit_obj/${existId}`);
+    // Uniqueness check: PHP checks any non-zero ord value (#416)
+    if (parseInt(order, 10)) {
+      const { rows: existingObj } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND up = ? LIMIT 1`, [value, typeId, parentId], { label: 'query_select' });
+      if (existingObj.length > 0) {
+        const existId = existingObj[0].id;
+        warning = 'Object already exists';
+        if (isApiRequest(req)) {
+          return res.json({ id: existId, obj: typeId, ord: 0, next_act: 'edit_obj', args: '', val: htmlEsc(formatValView(baseType, value, tzone)), warning });
         }
+        return res.redirect(`/${db}/edit_obj/${existId}`);
       }
     }
 
@@ -6695,7 +6807,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     }
     // Non-JSON: redirect like legacyRespond
     const idPart  = id  ? `/${id}`   : '';
-    const argPart = args && String(args).length ? `?${args}` : '';
+    const argPart = args && String(args).length ? `/?${args}` : '';
     const hashPart = id != null ? `#${id}` : '';
     return res.redirect(`/${db}/${next_act}${idPart}${argPart}${hashPart}`);
   } catch (error) {
@@ -7226,6 +7338,28 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       }
     }
 
+    // PHP parity (#434): post-save NOT_NULL sweep — if any mandatory field is empty, prevent redirect
+    // PHP index.php lines 8204-8221: checks all NOT_NULL reqs after save
+    if (currentNotNull && Object.keys(currentNotNull).length > 0) {
+      for (const nnKey of Object.keys(currentNotNull)) {
+        const nnTypeId = parseInt(nnKey, 10);
+        // Only check fields the user has WRITE grant for
+        const hasGrant = await checkGrant(pool, db, req.legacyUser.grants, objectId, nnTypeId, 'WRITE', req.legacyUser.username);
+        if (!hasGrant) continue;
+        // Check if this field was submitted with a value, or is an array/multi with existing data
+        const submitted = req.body[`t${nnTypeId}`] || req.body[`NEW_${nnTypeId}`];
+        if (submitted && String(submitted).length > 0) continue;
+        if (isCopy) continue;
+        // Check if the field has a value in DB
+        const { rows: nnRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? LIMIT 1`, [objectId, nnTypeId], { label: 'not_null_check' });
+        if (nnRows.length > 0) continue;
+        // Mandatory field is empty — add warning and prevent redirect
+        const locale = getLocale(req, db);
+        warnings += t9n('[RU]Данные сохранены. Необходимо заполнить реквизиты, выделенные красным[EN]The data are saved. The attributes marked red are mandatory', locale) + '!<br>';
+        break; // PHP breaks after first missing field
+      }
+    }
+
     logger.info('[Legacy _m_save] Object saved', { db, id: objectId, newRefs: Object.keys(newRefParams).length });
 
     // Reuse the already-fetched object info for PHP api_dump() compatible response
@@ -7237,11 +7371,15 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     // PHP args: "saved1=1&F_U=$up&F_I=$id" (always include prefix + F_U + F_I)
     //           "copied1=1&F_U=$up&F_I=$id" for copy operations
     const argsPrefix = isCopy ? 'copied1=1&' : 'saved1=1&';
+    // PHP: if NOT_NULL warning, $next_act="" then $a="edit_obj", and api_dump uses $a (line 9172)
+    const hasNotNullWarning = warnings.includes('mandatory');
     const response = {
       id: String(objType),
       obj: objectId,
-      next_act: 'object',
-      args: `${argsPrefix}F_U=${objUp}&F_I=${objectId}`,
+      next_act: hasNotNullWarning ? 'edit_obj' : 'object',
+      args: hasNotNullWarning
+        ? `${argsPrefix}F_U=${objUp}&F_I=${objectId}${req.body.tab ? '&tab=' + parseInt(req.body.tab, 10) : ''}&warning=${warnings}`
+        : `${argsPrefix}F_U=${objUp}&F_I=${objectId}`,
       warnings,
     };
 
@@ -7467,7 +7605,8 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
           lastReqId = String(existing.id);
         } else {
           const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
-          const newId = await insertRow(db, objectId, attrOrder, refVal, '');
+          // PHP: Insert($obj, 1, $val, "$t") → t=refObjId, val=reqTypeId (#438)
+          const newId = await insertRow(db, objectId, attrOrder, refVal, String(typeIdNum));
           lastReqId = String(newId);
         }
         continue;
@@ -7491,9 +7630,15 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
 
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
       if (existing) {
-        await updateRowValue(db, existing.id, finalValue);
-        lastReqId = String(existing.id);
-      } else {
+        if (finalValue === '' || finalValue === null) {
+          // PHP: Delete($cur_id) — recursive delete for empty scalar (index.php:7937)
+          await execSql(pool, `DELETE FROM \`${db}\` WHERE id = ? OR up = ?`, [existing.id, existing.id], { label: 'm_set_delete_empty' });
+          lastReqId = '';
+        } else {
+          await updateRowValue(db, existing.id, finalValue);
+          lastReqId = String(existing.id);
+        }
+      } else if (finalValue !== '' && finalValue !== null) {
         const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
         const newId = await insertRow(db, objectId, attrOrder, typeIdNum, finalValue);
         lastReqId = String(newId);
@@ -7587,7 +7732,9 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     // Order adjustment in old parent: shift down peers after removed object
     await execSql(pool, `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`, [oldParentId, objType, oldOrd], { label: 'post_db_m_move_id_update' });
 
-    const newOrder = await calcOrder(pool, db, newParentId, objType);
+    // PHP: COALESCE(MAX(reqs.ord)+1,1) where reqs.up=$up — no type filter (index.php:8244)
+    const { rows: [ordRow] } = await execSql(pool, `SELECT COALESCE(MAX(ord)+1, 1) AS next_ord FROM \`${db}\` WHERE up = ?`, [newParentId], { label: 'm_move_new_ord' });
+    const newOrder = ordRow ? ordRow.next_ord : 1;
     await execSql(pool, `UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId], { label: 'post_db_m_move_id_update' });
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
@@ -8137,6 +8284,8 @@ router.get('/:db/xsrf', async (req, res) => {
     // Use the stored xsrf_val as authoritative; fall back to recomputed if not set.
     const xsrf = user.xsrf_val || generateXsrf(token, db, db);
 
+    // PHP: api_dump(..., "login.json") → Content-Disposition: attachment;filename=login.json
+    res.setHeader('Content-Disposition', 'attachment;filename=login.json');
     return res.status(200).json({
       _xsrf: xsrf,
       token,
@@ -8428,12 +8577,12 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     if (restrictParam) {
       const restrictIds = restrictParam.split(',').filter(v => /^\d+$/.test(v)).map(v => parseInt(v, 10));
       if (restrictIds.length > 0 && refReqs.length > 0) {
-        // PHP applies restrict to the first requisite's type column
+        // PHP: AND a$req.id=<value> — restrict by row ID, not type (index.php:9008)
         const firstReqAlias = `a${refReqs[0].reqId}`;
         if (restrictIds.length === 1) {
-          whereClause += ` AND ${firstReqAlias}.t = ${restrictIds[0]}`;
+          whereClause += ` AND ${firstReqAlias}.id = ${restrictIds[0]}`;
         } else {
-          whereClause += ` AND ${firstReqAlias}.t IN (${restrictIds.join(',')})`;
+          whereClause += ` AND ${firstReqAlias}.id IN (${restrictIds.join(',')})`;
         }
       } else if (restrictIds.length > 0) {
         // No requisites — fall back to filtering by vals.id
@@ -8464,7 +8613,9 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
           searchConcat = `CONCAT(${searchConcat}, '/', COALESCE(a${rq.reqId}.val, ''))`;
         }
         searchClause = ` AND ${searchConcat} LIKE ?`;
-        searchParams.push(`%${searchQuery}%`);
+        // PHP: preg_replace("( ?\/ ?)","%/%",$_REQUEST["q"]) — normalize slashes for LIKE
+        const normalizedSearch = searchQuery.includes('%') ? searchQuery : searchQuery.replace(/\s?\/\s?/g, '%/%');
+        searchParams.push(`%${normalizedSearch}%`);
       }
     }
 
@@ -8501,20 +8652,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       result[row.id] = displayValue;
     }
 
-    // Grant mask filtering: filter out requisites that the user's role masks as hidden
-    const { grants } = req.legacyUser || {};
-    if (grants && grants.mask) {
-      // Get the parent type ID for mask lookup
-      const typeId = refRows[0].dic;
-      if (grants.mask[typeId]) {
-        const mask = grants.mask[typeId];
-        for (const objId of Object.keys(result)) {
-          if (mask[objId] === 'HIDE') {
-            delete result[objId];
-          }
-        }
-      }
-    }
+    // PHP does NOT apply grant mask filtering on _ref_reqs (#429)
 
     logger.info('[Legacy _ref_reqs] Retrieved', { db, id, count: Object.keys(result).length, hasReqs: refReqs.length > 0 });
 
@@ -8541,7 +8679,12 @@ router.all('/:db/_connect/:id?', legacyAuthMiddleware, async (req, res) => {
   try {
     const pool = getPool();
 
-    // PHP: if $id == 0 → error; else fetch CONNECT requisite URL and proxy
+    // PHP: if($id == 0) my_die("Invalid id (0)") — index.php:9089
+    if (!objectId) {
+      const locale = getLocale(req, db);
+      return res.status(200).json([{ error: t9n('[RU]Неверный id (0)[EN]Invalid id (0)', locale) }]);
+    }
+
     if (objectId) {
       const { rows: [row] } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CONNECT} LIMIT 1`, [objectId], { label: 'query_select' });
       if (!row || !row.val) {
@@ -8747,9 +8890,19 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
       return res.status(200).json([{ error: 'No fields to update'  }]);
     }
 
-    // PHP parity: duplicate name check — cannot rename type to an existing name
-    if (val !== undefined) {
-      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? AND id != ? LIMIT 1`, [val, id], { label: 'unique_select' });
+    // PHP parity: duplicate name check (index.php:8586-8588)
+    // PHP: LEFT JOIN dup ON dup.id!=$id AND dup.id!=dup.t AND dup.val='$val' AND dup.t=$t WHERE dup.id IS NULL
+    // Checks same name AND same base type, excluding self and self-referential rows
+    if (val !== undefined && t !== undefined) {
+      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id != ? AND id != t AND val = ? AND t = ? LIMIT 1`, [id, val, t], { label: 'unique_select' });
+      if (dupeRows.length > 0) {
+        return res.status(200).json([{ error: `Type with name "${val}" already exists` }]);
+      }
+    } else if (val !== undefined) {
+      // When base type not changing, check against current base type
+      const { rows: curRows } = await execSql(pool, `SELECT t FROM \`${db}\` WHERE id = ? LIMIT 1`, [id], { label: 'cur_type_select' });
+      const curT = curRows.length > 0 ? curRows[0].t : 0;
+      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id != ? AND id != t AND val = ? AND t = ? LIMIT 1`, [id, val, curT], { label: 'unique_select' });
       if (dupeRows.length > 0) {
         return res.status(200).json([{ error: `Type with name "${val}" already exists` }]);
       }
@@ -8794,9 +8947,10 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     // PHP parity: hard-block if type has existing instances (die() in PHP)
     const { rows: [instRow] } = await execSql(pool, `SELECT COUNT(id) AS cnt FROM \`${db}\` WHERE t = ?`, [id], { label: 'post_db_d_del_typeId_select' });
     if (instRow && instRow.cnt > 0) {
-      return res.status(400).json({
+      // PHP: die() → HTTP 200 (index.php:8744)
+      return res.status(200).json([{
         error: `Cannot delete the Type in case there are objects of this type (total objects: ${instRow.cnt})!`
-      });
+      }]);
     }
 
     // PHP parity: hard-block if type or its requisites are used in reports (my_die() in PHP)
@@ -8804,9 +8958,9 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
        WHERE \`${db}\`.t = ${TYPE.REP_COLS} AND \`${db}\`.val = reqs.id
        AND (reqs.up = ? OR reqs.id = ?) LIMIT 1`, [id, id], { label: 'post_db_d_del_typeId_select' });
     if (repRows.length > 0) {
-      return res.status(400).json({
+      return res.status(200).json([{
         error: `The type or its requisites are used in reports`
-      });
+      }]);
     }
 
     // PHP parity: hard-block if type or its requisites are used in roles (die() in PHP)
@@ -8814,9 +8968,9 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
        WHERE r.t = ${TYPE.ROLE} AND r.up = 1 AND objs.up = r.id
        AND objs.val = \`${db}\`.id AND (\`${db}\`.up = ? OR \`${db}\`.id = ?) LIMIT 1`, [id, id], { label: 'post_db_d_del_typeId_select' });
     if (roleRows.length > 0) {
-      return res.status(400).json({
+      return res.status(200).json([{
         error: `The type or its requisites are used in roles!`
-      });
+      }]);
     }
 
     // Use recursiveDelete — type may have requisites/children
@@ -9103,9 +9257,12 @@ router.post('/:db/_d_attrs/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     const modifiers = parseModifiers(obj.val);
 
     // Update modifiers from request (keep existing if not provided)
+    // PHP compat: PHP uses isset($_REQUEST["set_null"]) — presence alone enables NOT_NULL
     const newAlias = req.body.alias !== undefined ? (req.body.alias || null) : modifiers.alias;
-    const newRequired = req.body.required !== undefined
-      ? (req.body.required === '1' || req.body.required === true)
+    const hasSetNull = req.body.set_null !== undefined;
+    const hasRequired = req.body.required !== undefined;
+    const newRequired = hasSetNull ? true
+      : hasRequired ? (req.body.required === '1' || req.body.required === true)
       : modifiers.required;
     const newMulti = req.body.multi !== undefined
       ? (req.body.multi === '1' || req.body.multi === true)
@@ -9637,8 +9794,8 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
     const { rows: rows } = await execSql(pool, query, [objectId, objectId], { label: 'query_query' });
 
     if (rows.length === 0) {
-      // PHP returns HTTP 200 with error JSON, not 404
-      return res.status(200).json([{ error: 'Object not found' }]);
+      // PHP: $meta stays "{" → outputs "{}" (empty object) when no rows found
+      return res.status(200).json({});
     }
 
     // Build response matching PHP format (line 8838-8857)
@@ -9851,7 +10008,7 @@ router.post('/:db/jwt', async (req, res) => {
   }
 
   if (!jwtToken) {
-    return res.status(200).json([{ error: 'JWT verification failed' }]);
+    return res.status(200).json({ error: 'JWT verification failed' });
   }
 
   try {
@@ -9865,24 +10022,24 @@ router.post('/:db/jwt', async (req, res) => {
       // PHP: openssl_verify("$header.$payload", $sig, $publicKey, OPENSSL_ALGO_SHA256)
       const parts = jwtToken.split('.');
       if (parts.length !== 3) {
-        return res.status(200).json([{ error: 'JWT verification failed' }]);
+        return res.status(200).json({ error: 'JWT verification failed' });
       }
       const [headerB64, payloadB64, sigB64] = parts;
       const sigBuf = Buffer.from(sigB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
       const data = Buffer.from(`${headerB64}.${payloadB64}`);
       const ok = crypto.verify('SHA256', data, { key: publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, sigBuf);
       if (!ok) {
-        return res.status(200).json([{ error: 'JWT verification failed' }]);
+        return res.status(200).json({ error: 'JWT verification failed' });
       }
       const payload = JSON.parse(Buffer.from(payloadB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
       const now = Math.floor(Date.now() / 1000);
       if (!payload.iat || !payload.exp || now > payload.exp || now < payload.iat) {
-        return res.status(200).json([{ error: 'JWT expired' }]);
+        return res.status(200).json({ error: 'JWT expired' });
       }
       // PHP: $params->data->userId
       username = payload?.data?.userId || payload?.sub || null;
       if (!username) {
-        return res.status(200).json([{ error: 'JWT verification failed' }]);
+        return res.status(200).json({ error: 'JWT verification failed' });
       }
     }
 
@@ -9900,7 +10057,7 @@ router.post('/:db/jwt', async (req, res) => {
        WHERE ${whereClause} LIMIT 1`, [whereParam], { label: 'post_db_jwt_select' });
 
     if (!rows.length) {
-      return res.status(200).json([{ error: 'JWT verification failed' }]);
+      return res.status(200).json({ error: 'No user found' });
     }
 
     const user = rows[0];
@@ -9909,12 +10066,13 @@ router.post('/:db/jwt', async (req, res) => {
     const { token: newToken, xsrf: newXsrf } = await updateTokens(pool, db, {
       uid: user.uid,
       tok: user.tok_id,
+      tok_val: user.tok_val,
       xsrf: user.xsrf_id,
       act: null,
     });
 
-    // PHP: setcookie($z, $token, time() + 2592000*12, "/") — 360 days
-    res.cookie(db, newToken, { maxAge: 360 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
+    // PHP: setcookie($z, $token, 0, "/") — session cookie (expires on browser close) (#435)
+    res.cookie(db, newToken, { path: '/', httpOnly: false });
 
     logger.info('[Legacy jwt] JWT validated', { db, uid: user.uid });
 
@@ -9923,7 +10081,7 @@ router.post('/:db/jwt', async (req, res) => {
     res.status(200).json({ _xsrf: newXsrf, token: newToken, id: String(user.uid), user: user.uname });
   } catch (error) {
     logger.error('[Legacy jwt] Error', { error: error.message, db });
-    res.status(200).json([{ error: 'JWT verification failed' }]);
+    res.status(200).json({ error: 'JWT verification failed' });
   }
 });
 
@@ -10000,9 +10158,8 @@ router.all('/my/_new_db', async (req, res) => {
     return res.status(200).json([{ error: 'Invalid database name. Must be 3-15 characters, starting with a letter.' }]);
   }
 
-  // Check for reserved names
-  const reservedNames = ['my', 'admin', 'root', 'system', 'test', 'demo', 'api', 'health'];
-  if (reservedNames.includes(newDbName.toLowerCase())) {
+  // Check for reserved names — full MySQL reserved words list (PHP: checkDbNameReserved, index.php lines 435-464) (#436)
+  if (checkDbNameReserved(newDbName.toLowerCase())) {
     return res.status(200).json([{ error: `Database name "${newDbName}" is reserved` }]);
   }
 
@@ -10113,9 +10270,8 @@ router.all('/my/_new_db', async (req, res) => {
           // PHP also inserts date and template info
           await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 275, ?)`, [recordId, new Date().toISOString().slice(0, 10).replace(/-/g, '')], { label: 'query_insert' });
           await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 283, ?)`, [recordId, template], { label: 'query_insert' });
-          if (description) {
-            await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 276, ?)`, [recordId, description], { label: 'query_insert' });
-          }
+          // PHP always inserts description row, even if empty (index.php:8822)
+          await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 276, ?)`, [recordId, description], { label: 'query_insert' });
         }
       } catch (e) {
         logger.warn('[Legacy _new_db] Failed to register DB in my table', { error: e.message });
@@ -11576,23 +11732,18 @@ router.all('/:db/report/:reportId?', async (req, res) => {
           }
         }
         const cols = colEntries.map(e => e.def);
-        // PHP parity: rows is an object keyed by row index (string keys "0","1",...),
-        // each row is an object keyed by column ID → value
-        const rows = {};
-        for (let idx = 0; idx < results.data.length; idx++) {
-          const row = results.data[idx];
-          const r = {};
-          for (const e of colEntries) {
-            r[String(e.def.id)] = row[e.alias] !== undefined ? row[e.alias] : '';
-          }
-          rows[String(idx)] = r;
+        // PHP parity (#410): data is column-major — data[i] = array of all values for column i
+        // PHP: foreach($GLOBALS["STORED_REPS"][$id]["last_res"] as $rs) $json["data"][$i++] = $rs;
+        const data = colEntries.map(e => {
+          return results.data.map(row => row[e.alias] !== undefined ? row[e.alias] : '');
+        });
+        // PHP: columns[i].totals set from col_totals
+        for (let ci = 0; ci < cols.length; ci++) {
+          if (cols[ci].totals === null) delete cols[ci].totals;
         }
         return res.json({
           columns: cols,
-          rows,
-          totalCount: results.data.length,
-          header: report.header || '',
-          footer: [],
+          data,
         });
       }
 

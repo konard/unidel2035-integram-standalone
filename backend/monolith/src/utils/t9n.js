@@ -16,7 +16,7 @@ const dictionary = {
   auth_required:              { RU: 'Требуется авторизация',            EN: 'Authentication required' },
   auth_failed:                { RU: 'Ошибка авторизации',               EN: 'Authentication failed' },
   invalid_token:              { RU: 'Неверный или просроченный токен',   EN: 'Invalid or expired token' },
-  invalid_csrf:               { RU: 'Неверный или просроченный CSRF токен', EN: 'Invalid or expired CSRF token' },
+  invalid_csrf:               { RU: 'Неверный или устаревший токен CSRF<br/>', EN: 'Invalid or expired CSRF token<br/>' },
   invalid_secret:             { RU: 'Неверный секретный токен',         EN: 'Invalid secret token' },
   login_required:             { RU: 'Необходимо войти в систему',       EN: 'Login required' },
   login_password_required:    { RU: 'Необходимо указать логин и пароль', EN: 'Login and password required' },
