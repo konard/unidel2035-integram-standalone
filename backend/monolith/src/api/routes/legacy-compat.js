@@ -3253,7 +3253,8 @@ router.all('/:db/auth', async (req, res, next) => {
     }
 
     // Set session cookie; remove secret cookie
-    res.cookie(db, tokenVal, { maxAge: 30 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
+    // PHP: setcookie($z, $tok, 0, "/") — session cookie (expires on browser close)
+    res.cookie(db, tokenVal, { path: '/', httpOnly: false });
     res.clearCookie('secret', { path: '/' });
 
     logger.info('[Legacy SecretAuth] Success', { db, uid: user.uid, username: user.username });
@@ -9809,7 +9810,8 @@ router.post('/:db/jwt', async (req, res) => {
       act: null,
     });
 
-    res.cookie(db, newToken, { path: '/', httpOnly: false });
+    // PHP: setcookie($z, $token, time() + 2592000*12, "/") — 360 days
+    res.cookie(db, newToken, { maxAge: 360 * 24 * 60 * 60 * 1000, path: '/', httpOnly: false });
 
     logger.info('[Legacy jwt] JWT validated', { db, uid: user.uid });
 
