@@ -264,6 +264,15 @@ router.use((req, res, next) => {
   next();
 });
 
+// ── OPTIONS preflight — PHP parity (Issue #378) ─────────────────────────────
+// PHP (index.php:242-246) returns 200 with Allow + Content-Length: 0.
+// The cors middleware returns 204 with no Allow header; override it here.
+router.options('*', (req, res) => {
+  res.set('Allow', 'GET,POST,OPTIONS');
+  res.set('Content-Length', '0');
+  res.status(200).end();
+});
+
 // Get the directory path for serving static files
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
