@@ -632,6 +632,18 @@ function UnMaskDelimiters(v) {
   return s.replace(/\\;/g, ';').replace(/\\:/g, ':').replace(/\\\\/g, '\\');
 }
 
+// ── Semicolon escaping helpers (PHP index.php lines 3940-3947) ─────────
+// Slash_semi:   \;  →  \$L3sH   (protect escaped semicolons before splitting)
+function Slash_semi(str) {
+  if (!str && str !== 0) return '';
+  return String(str).replace(/\\;/g, '\\$L3sH');
+}
+// UnSlash_semi: \$L3sH  →  ;   (restore semicolons after splitting)
+function UnSlash_semi(str) {
+  if (!str && str !== 0) return '';
+  return String(str).replace(/\\\$L3sH/g, ';');
+}
+
 // PHP GetSha(i) = sha1(Salt(z, i)) = sha1(SALT + z.toUpperCase() + z + i)
 function fileGetSha(db, i) {
   return crypto.createHash('sha1').update(phpSalt(db, String(i), db)).digest('hex');
