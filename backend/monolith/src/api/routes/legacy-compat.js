@@ -2528,6 +2528,26 @@ async function legacyAuthMiddleware(req, res, next) {
 
         return next();
       }
+
+      // --- Admin backdoor token check (PHP parity: index.php lines 1205-1210) ---
+      // PHP: if cookie or token === sha1(ADMINHASH + $z), grant admin access
+      const ADMIN_HASH = process.env.INTEGRAM_ADMIN_HASH || '';
+      if (ADMIN_HASH && token) {
+        const expectedAdminToken = crypto.createHash('sha1').update(ADMIN_HASH + db).digest('hex');
+        if (token === expectedAdminToken) {
+          const adminXsrf = crypto.createHash('sha1').update(db + ADMIN_HASH).digest('hex');
+          req.legacyUser = {
+            uid: 0,
+            username: 'admin',
+            xsrf: adminXsrf,
+            role: 'admin',
+            roleId: 145,
+            grants: {},
+            isAdminBackdoor: true,
+          };
+          return next();
+        }
+      }
     }
 
     // --- Guest fallback (PHP parity: lines 1213–1243) ---
@@ -2598,6 +2618,13 @@ async function legacyAuthMiddleware(req, res, next) {
  */
 function legacyXsrfCheck(req, res, next) {
   if (req.method !== 'POST') {
+    return next();
+  }
+
+  // PHP parity (index.php:7443): admin backdoor XSRF is always accepted
+  // if($GLOBALS["GLOBAL_VARS"]["xsrf"] == ADMINHASH) return true;
+  const ADMIN_HASH = process.env.INTEGRAM_ADMIN_HASH || '';
+  if (ADMIN_HASH && req.legacyUser && req.legacyUser.isAdminBackdoor) {
     return next();
   }
 
