@@ -8026,7 +8026,7 @@ router.get('/:db/xsrf', async (req, res) => {
 
   if (!token || !isValidDbName(db)) {
     // No token — return minimal info (client will redirect to login)
-    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: 0, msg: '' });
+    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: '0', msg: '' });
   }
 
   try {
@@ -8066,7 +8066,7 @@ router.get('/:db/xsrf', async (req, res) => {
     });
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy xsrf] Error');
-    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: 0, msg: '' });
+    return res.status(200).json({ _xsrf: '', token: null, user: '', role: '', id: '0', msg: '' });
   }
 });
 
