@@ -977,6 +977,66 @@ async function checkValGranted(pool, db, grants, t, val, id = 0) {
 }
 
 /**
+ * Check if a value is barred by mask-level write restrictions.
+ * Port of PHP Val_barred_by_mask() (index.php:896-919).
+ *
+ * Returns true if the value is barred (should not be written), false otherwise.
+ * Throws an error if a required mask exists but the value doesn't match any.
+ *
+ * @param {Object} pool - MySQL pool
+ * @param {string} db - Database name
+ * @param {Object} grants - Loaded grants object
+ * @param {number} t - Type ID (requisite type) to check masks for
+ * @param {string|null} val - Value to check
+ * @returns {Promise<boolean>} true if barred, false if allowed
+ */
+async function valBarredByMask(pool, db, grants, t, val) {
+  if (!grants || !grants.mask || !grants.mask[t]) {
+    return false;
+  }
+
+  let reqMask = false;
+
+  for (const [grant, mask] of Object.entries(grants.mask[t])) {
+    logger.debug('[Grants] valBarredByMask checking', { t, grant, mask });
+
+    if (mask === '') {
+      // No level defined — required mask: value must match at least one such pattern
+      reqMask = true;
+      const sqlExpr = fetchWhereForMask(t, val, grant);
+      try {
+        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
+          return false; // Value matches required mask — not barred
+        }
+      } catch (error) {
+        logger.error('[Grants] Error in valBarredByMask SQL', { error: error.message, db, t, grant });
+      }
+    } else {
+      // Level defined — check if value matches the level pattern
+      const sqlExpr = fetchWhereForMask(t, val, mask);
+      try {
+        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
+          return grant !== 'WRITE'; // Barred unless grant key is "WRITE"
+        }
+      } catch (error) {
+        logger.error('[Grants] Error in valBarredByMask SQL', { error: error.message, db, t, mask });
+      }
+    }
+  }
+
+  if (reqMask) {
+    // PHP calls my_die() — all required masks failed to match
+    const err = new Error(`Not granted by requisite mask (${t})`);
+    err.isMaskError = true;
+    throw err;
+  }
+
+  return false;
+}
+
+/**
  * Check grant for report column operations.
  * Port of PHP CheckRepColGranted() (index.php:7476-7492).
  * @param {Object} pool - MySQL pool
@@ -4955,6 +5015,13 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
       }
 
+      // Mask-level write restriction: reject values barred by role mask
+      // Port of PHP Val_barred_by_mask() called before writing (index.php:896-919)
+      if (await valBarredByMask(pool, db, grants || {}, typeIdNum, finalValue)) {
+        warnings += `Field ${typeIdNum} is restricted by mask. `;
+        continue;
+      }
+
       // NOT_NULL enforcement: check attrs for :!NULL:
       if (meta) {
         const [attrAttrs] = await pool.query(
@@ -5304,6 +5371,12 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
       if (meta) {
         finalValue = String(formatVal(meta.base_type, finalValue, tzone));
+      }
+
+      // Mask-level write restriction: reject values barred by role mask
+      // Port of PHP Val_barred_by_mask() called before writing (index.php:896-919)
+      if (await valBarredByMask(pool, db, grants || {}, typeIdNum, finalValue)) {
+        continue; // Skip barred attribute silently
       }
 
       // Reference storage fix: if type is a reference (NOT in REV_BASE_TYPE), store in t column
