@@ -10,7 +10,7 @@
 
 | Category | Total | Full | Partial | Stub | Missing | N/A |
 |----------|-------|------|---------|------|---------|-----|
-| **Functions** | 96 | 46 | 11 | 3 | 15 | 21 |
+| **Functions** | 96 | 48 | 11 | 2 | 14 | 21 |
 | **Route Case Blocks** | 31 | 25 | 2 | 0 | 2 | 2 |
 | **Block Type Handlers** | 82 | 0 | 0 | 0 | 0 | 82 |
 | **Global Init Code** | 5 | 3 | 1 | 0 | 1 | 0 |
@@ -156,10 +156,10 @@
 |---|--------------|-------|-------------------|--------|----------------|
 | 69 | `trace()` | 498-506 | `logger.debug()` | **Full** | — |
 | 70 | `wlog()` | 493-496 | `logger.info()` | **Full** | — |
-| 71 | `t9n()` | 560-572 | Not implemented | **Stub** | i18n returns first language only |
+| 71 | `t9n()` | 560-572 | `t9n()` in `utils/t9n.js` | **Full** | i18n for error messages implemented in PR #289 |
 | 72 | `HintNeeded()` | 535-558 | `hintNeeded()` | **Full** | MySQL query optimizer hints implemented in PR #286 |
 | 73 | `htmlSafe()` / `htmlEsc()` | implicit | `htmlEsc()` | **Full** | — |
-| 74 | `NormalSize()` | 7250-7261 | Not implemented | **Missing** | Human-readable file sizes |
+| 74 | `NormalSize()` | 7250-7261 | `normalSize()` | **Full** | Human-readable file sizes implemented in PR #290 |
 | 75 | `die_info()` | 7072-7078 | `res.send()` | **Full** | — |
 | 76 | `myexit()` | 7458-7465 | Process exit inline | **N/A** | — |
 | 77 | `mywrite()` | 7467-7474 | `logger.*` | **Full** | — |
@@ -347,7 +347,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
 | 7 | ~~`HintNeeded()`~~ | ~~Search hints don't appear~~ | ~~UX~~ — **Implemented in PR #286** |
-| 8 | `NormalSize()` | File sizes show raw bytes | UX |
+| 8 | ~~`NormalSize()`~~ | ~~File sizes show raw bytes~~ | ~~UX~~ — **Implemented in PR #290** |
 | 9 | `RepoGrant()` | Repository-level access check | Advanced permissions |
 | 10 | `build_post_fields()` | External connector POST fails | Connectors |
 | 11 | `getJsonVal()` / `checkJson()` | JSON extraction in reports | Advanced reporting |
@@ -397,3 +397,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 11. ~~**HintNeeded**~~ — **Implemented in PR #286** — MySQL query optimizer hints for JOINs on reference requisites.
 
 12. ~~**RemoveDir**~~ — **Implemented in PR #287** — Recursive directory cleanup for file operations.
+
+13. ~~**t9n i18n**~~ — **Implemented in PR #289** — Full i18n support for error messages with dictionary and inline modes.
+
+14. ~~**NormalSize**~~ — **Implemented in PR #290** — Human-readable file size formatting.
