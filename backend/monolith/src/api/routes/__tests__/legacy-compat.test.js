@@ -598,7 +598,7 @@ describe('legacyXsrfCheck', () => {
     legacyXsrfCheck(req, res, next);
 
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalledWith([{ error: 'Invalid or expired CSRF token' }]);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid or expired CSRF token' });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -867,7 +867,7 @@ describe('Phase 2: middleware wiring', () => {
         .send({ _xsrf: 'wrong-xsrf', val: 'test' });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual([{ error: 'Invalid or expired CSRF token' }]);
+      expect(res.body).toEqual({ error: 'Invalid or expired CSRF token' });
     });
   });
 

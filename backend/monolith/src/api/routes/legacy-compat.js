@@ -1036,7 +1036,7 @@ function legacyXsrfCheck(req, res, next) {
 
   if (!xsrf || bodyXsrf !== xsrf) {
     // HTTP 200 matching PHP my_die() behavior
-    return res.status(200).json([{ error: 'Invalid or expired CSRF token' }]);
+    return res.status(200).json({ error: 'Invalid or expired CSRF token' });
   }
 
   next();
@@ -1056,12 +1056,12 @@ async function legacyDdlGrantCheck(req, res, next) {
     const pool = getPool();
     const hasGrant = await checkGrant(pool, db, grants || {}, 0, 0, 'WRITE', username || '');
     if (!hasGrant) {
-      return res.status(200).json([{ error: 'Insufficient privileges for type modification' }]);
+      return res.status(200).json({ error: 'Insufficient privileges for type modification' });
     }
     next();
   } catch (error) {
     logger.error({ error: error.message, db }, '[legacyDdlGrantCheck] Error');
-    return res.status(200).json([{ error: 'Grant check failed' }]);
+    return res.status(200).json({ error: 'Grant check failed' });
   }
 }
 
@@ -1298,9 +1298,9 @@ router.get('/:db/auth', async (req, res, next) => {
   if (req.query.secret !== undefined) return next();
   const { db } = req.params;
   if (!isApiRequest(req)) return next();
-  if (!isValidDbName(db)) return res.status(200).json([{ error: 'Invalid database name' }]);
+  if (!isValidDbName(db)) return res.status(200).json({ error: 'Invalid database name' });
   const token = extractToken(req, db);
-  if (!token) return res.status(200).json([{ error: 'not logged' }]);
+  if (!token) return res.status(200).json({ error: 'not logged' });
   try {
     const pool = getPool();
     const [rows] = await pool.query(
@@ -1311,13 +1311,13 @@ router.get('/:db/auth', async (req, res, next) => {
        WHERE u.t = ${TYPE.USER} LIMIT 1`,
       [token]
     );
-    if (rows.length === 0) return res.status(200).json([{ error: 'not logged' }]);
+    if (rows.length === 0) return res.status(200).json({ error: 'not logged' });
     const u = rows[0];
     const xsrf = u.xsrf_val || generateXsrf(token, u.uname || '', db);
     return res.status(200).json({ _xsrf: xsrf, token, id: Number(u.uid), msg: '' });
   } catch (err) {
     logger.error('[GET /:db/auth] DB error', { error: err.message, db });
-    return res.status(200).json([{ error: 'server error' }]);
+    return res.status(200).json({ error: 'server error' });
   }
 });
 
@@ -1329,7 +1329,7 @@ router.all('/:db/auth', async (req, res, next) => {
   const isJSON = isApiRequest(req);
 
   if (!isValidDbName(db)) {
-    if (isJSON) return res.status(200).json([{ error: 'Invalid database name' }]);
+    if (isJSON) return res.status(200).json({ error: 'Invalid database name' });
     return res.status(400).send('Invalid database');
   }
 
@@ -1353,7 +1353,7 @@ router.all('/:db/auth', async (req, res, next) => {
 
     if (rows.length === 0) {
       logger.warn('[Legacy SecretAuth] Invalid secret token', { db });
-      if (isJSON) return res.status(200).json([{ error: 'Invalid secret token' }]);
+      if (isJSON) return res.status(200).json({ error: 'Invalid secret token' });
       return res.status(401).send('Invalid secret token');
     }
 
@@ -1397,7 +1397,7 @@ router.all('/:db/auth', async (req, res, next) => {
     return res.redirect(String(uri).replace(/[<>"']/g, ''));
   } catch (error) {
     logger.error('[Legacy SecretAuth] Error', { error: error.message, db });
-    if (isJSON) return res.status(200).json([{ error: error.message }]);
+    if (isJSON) return res.status(200).json({ error: error.message });
     return res.status(500).send('Server error');
   }
 });
@@ -1433,7 +1433,7 @@ router.post('/:db/auth', async (req, res, next) => {
   // Validate DB name
   if (!isValidDbName(db)) {
     if (isJSON) {
-      return res.status(200).json([{ error: 'Invalid database name' }]);
+      return res.status(200).json({ error: 'Invalid database name' });
     }
     return res.status(400).send('Invalid database');
   }
@@ -1452,7 +1452,7 @@ router.post('/:db/auth', async (req, res, next) => {
 
   if (!login || !password) {
     if (isJSON) {
-      return res.status(200).json([{ error: 'Login and password required' }]);
+      return res.status(200).json({ error: 'Login and password required' });
     }
     return res.status(400).send('Login and password required');
   }
@@ -1461,7 +1461,7 @@ router.post('/:db/auth', async (req, res, next) => {
     // Check if database exists
     if (!await dbExists(db)) {
       if (isJSON) {
-        return res.status(200).json([{ error: `${db} does not exist` }]);
+        return res.status(200).json({ error: `${db} does not exist` });
       }
       return res.status(404).send(`${db} does not exist`);
     }
@@ -1538,7 +1538,7 @@ router.post('/:db/auth', async (req, res, next) => {
       logger.warn('[Legacy Auth] User not found', { db, login });
       if (isJSON) {
         // PHP: my_die("Wrong credentials...") → HTTP 200 [{"error":"..."}]
-        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}. Please send login and password as POST-parameters.` }]);
+        return res.status(200).json({ error: `Wrong credentials for user ${login} in ${db}. Please send login and password as POST-parameters.` });
       }
       return res.status(401).send('Invalid credentials');
     }
@@ -1594,7 +1594,7 @@ router.post('/:db/auth', async (req, res, next) => {
 
       logger.warn('[Legacy Auth] Password mismatch', { db, login });
       if (isJSON) {
-        return res.status(200).json([{ error: `Wrong credentials for user ${login} in ${db}. Please send login and password as POST-parameters.` }]);
+        return res.status(200).json({ error: `Wrong credentials for user ${login} in ${db}. Please send login and password as POST-parameters.` });
       }
       return res.status(401).send('Invalid credentials');
     }
@@ -1689,7 +1689,7 @@ router.post('/:db/auth', async (req, res, next) => {
     logger.error('[Legacy Auth] Error', { error: error.message, db, login });
 
     if (isJSON) {
-      return res.status(200).json([{ error: 'Authentication failed' }]);
+      return res.status(200).json({ error: 'Authentication failed' });
     }
     return res.status(500).send('Authentication failed');
   }
@@ -1909,7 +1909,7 @@ router.post('/:db/auth', async (req, res, next) => {
   logger.info({ db, u }, '[Legacy Reset] Password reset request');
 
   if (!u) {
-    if (isJSON) return res.status(200).json([{ error: 'Login required' }]);
+    if (isJSON) return res.status(200).json({ error: 'Login required' });
     return res.redirect(`/${db}`);
   }
 
@@ -1928,7 +1928,7 @@ router.post('/:db/auth', async (req, res, next) => {
 
     if (rows.length === 0) {
       // PHP: my_die("Wrong credentials") — in API mode returns [{"error":"..."}]
-      if (isJSON) return res.status(200).json([{ error: `Wrong credentials for user ${u} in ${db}. Please send login and password as POST-parameters.` }]);
+      if (isJSON) return res.status(200).json({ error: `Wrong credentials for user ${u} in ${db}. Please send login and password as POST-parameters.` });
       return res.redirect(`/${db}`);
     }
 
@@ -1946,7 +1946,7 @@ router.post('/:db/auth', async (req, res, next) => {
     });
   } catch (error) {
     logger.error({ error: error.message, db, u }, '[Legacy Reset] Error');
-    if (isJSON) return res.status(200).json([{ error: 'Reset failed' }]);
+    if (isJSON) return res.status(200).json({ error: 'Reset failed' });
     return res.redirect(`/${db}`);
   }
 });
@@ -1964,27 +1964,27 @@ router.post('/my/register', async (req, res) => {
   // Validate input
   if (!email || !/^.+@.+\..+$/.test(email)) {
     if (isJSON) {
-      return res.json([{ error: 'Please provide a valid email' }]);
+      return res.json({ error: 'Please provide a valid email' });
     }
     return res.status(400).send('Please provide a valid email');
   }
 
   if (!regpwd || regpwd.length < 6) {
     if (isJSON) {
-      return res.json([{ error: 'Password must be at least 6 characters' }]);
+      return res.json({ error: 'Password must be at least 6 characters' });
     }
     return res.status(400).send('Password must be at least 6 characters');
   }
 
   if (regpwd !== regpwd1) {
     if (isJSON) {
-      return res.json([{ error: 'Passwords do not match' }]);
+      return res.json({ error: 'Passwords do not match' });
     }
     return res.status(400).send('Passwords do not match');
   }
 
   if (!agree) {
-    if (isJSON) return res.json([{ error: 'Please accept the terms' }]);
+    if (isJSON) return res.json({ error: 'Please accept the terms' });
     return res.status(400).send('Please accept the terms');
   }
 
@@ -2005,7 +2005,7 @@ router.post('/my/register', async (req, res) => {
         [email.toLowerCase()]
       );
       if (existing.length > 0) {
-        if (isJSON) return res.json([{ error: 'This email is already registered. [errMailExists]' }]);
+        if (isJSON) return res.json({ error: 'This email is already registered. [errMailExists]' });
         return res.status(400).send('This email is already registered.');
       }
 
@@ -2066,7 +2066,7 @@ router.post('/my/register', async (req, res) => {
     }
   } catch (err) {
     logger.error('[Legacy Register] DB error', { error: err.message, email });
-    if (isJSON) return res.json([{ error: 'Registration failed: ' + err.message }]);
+    if (isJSON) return res.json({ error: 'Registration failed: ' + err.message });
     return res.status(500).send('Registration failed');
   }
 
@@ -3639,7 +3639,7 @@ router.get('/:db/:page*', async (req, res, next) => {
     } catch (err) {
       logger.error('[Legacy page JSON] Error', { error: err.message, stack: err.stack, db, page });
       console.error('[DEBUG JSON Error]', err);
-      return res.status(200).json([{ error: err.message }]);
+      return res.status(200).json({ error: err.message });
     }
   }
 
@@ -3802,7 +3802,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
   const { db, up } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -3827,10 +3827,10 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 
     // Reject invalid parentId and typeId
     if (parentId === 0) {
-      return res.status(200).json([{ error: 'Parent ID cannot be 0' }]);
+      return res.status(200).json({ error: 'Parent ID cannot be 0' });
     }
     if (!typeId || typeId === 0) {
-      return res.status(200).json([{ error: 'Type ID (t or type) is required'  }]);
+      return res.status(200).json({ error: 'Type ID (t or type) is required'  });
     }
 
     // Verify type and parent exist
@@ -3838,24 +3838,24 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId]
     );
     if (typeCheck.length === 0) {
-      return res.status(200).json([{ error: `Type ${typeId} does not exist` }]);
+      return res.status(200).json({ error: `Type ${typeId} does not exist` });
     }
     const [parentCheck] = await pool.query(
       `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId]
     );
     if (parentCheck.length === 0) {
-      return res.status(200).json([{ error: `Parent ${parentId} does not exist` }]);
+      return res.status(200).json({ error: `Parent ${parentId} does not exist` });
     }
 
     // Grant check + grant1Level when parentId === 1
     if (parentId === 1) {
       const level = await grant1Level(pool, db, grants || {}, typeId, username || '');
       if (!level || level === false) {
-        return res.status(200).json([{ error: 'Insufficient privileges' }]);
+        return res.status(200).json({ error: 'Insufficient privileges' });
       }
     } else {
       if (!await checkGrant(pool, db, grants || {}, parentId, typeId, 'WRITE', username || '')) {
-        return res.status(200).json([{ error: 'Insufficient privileges' }]);
+        return res.status(200).json({ error: 'Insufficient privileges' });
       }
     }
 
@@ -4053,7 +4053,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     return res.redirect(`/${db}/${next_act}${idPart}${argPart}${hashPart}`);
   } catch (error) {
     logger.error({ error: error.message, db }, '[Legacy _m_new] Error');
-    return res.status(200).json([{ error: error.message }]);
+    return res.status(200).json({ error: error.message });
   }
 });
 
@@ -4078,7 +4078,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -4094,15 +4094,15 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [originalId]
     );
     if (existCheck.length === 0) {
-      return res.status(200).json([{ error: 'Object not found' }]);
+      return res.status(200).json({ error: 'Object not found' });
     }
     if (existCheck[0].up === 0) {
-      return res.status(200).json([{ error: 'Cannot modify metadata object' }]);
+      return res.status(200).json({ error: 'Cannot modify metadata object' });
     }
 
     // Grant check — PHP checks WRITE grant before saving
     if (!await checkGrant(pool, db, grants || {}, originalId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      return res.status(200).json({ error: 'Insufficient privileges' });
     }
 
     // Check if this is a copy operation (PHP: isset($_REQUEST["copybtn"]))
@@ -4128,7 +4128,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       `, [originalId]);
 
       if (objRows.length === 0) {
-        return res.status(200).json([{ error: 'Object not found' }]);
+        return res.status(200).json({ error: 'Object not found' });
       }
 
       const original = objRows[0];
@@ -4431,7 +4431,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     legacyRespond(req, res, db, response);
   } catch (error) {
     logger.error('[Legacy _m_save] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -4443,7 +4443,7 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -4452,17 +4452,17 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     const { grants, username, uid } = req.legacyUser || {};
 
     if (!objectId) {
-      return res.status(200).json([{ error: `Wrong id: ${id}` }]);
+      return res.status(200).json({ error: `Wrong id: ${id}` });
     }
 
     // Grant check — PHP checks WRITE grant before deletion
     if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      return res.status(200).json({ error: 'Insufficient privileges' });
     }
 
     // Self-deletion prevention: user cannot delete themselves
     if (objectId === uid) {
-      return res.status(200).json([{ error: 'You cannot delete yourself' }]);
+      return res.status(200).json({ error: 'You cannot delete yourself' });
     }
 
     // PHP: SELECT count(r.id), obj.up, obj.ord, obj.t, obj.val, par.up pup, type.up tup
@@ -4483,19 +4483,19 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     );
 
     if (!row || row.pup == null) {
-      return res.status(200).json([{ error: 'Object not found' }]);
+      return res.status(200).json({ error: 'Object not found' });
     }
 
     // PHP: if pup==0 → can't delete metadata
     if (String(row.pup) === '0') {
-      return res.status(200).json([{ error: `You can't delete metadata (type ${objectId})!` }]);
+      return res.status(200).json({ error: `You can't delete metadata (type ${objectId})!` });
     }
 
     // PHP: if refCount > 0 → can't delete (has references)
     const cascade = req.body.cascade === '1' || req.body.cascade === true ||
                     req.query.forced !== undefined;
     if (!cascade && row.refCount > 0) {
-      return res.status(200).json([{ error: `You can't delete an object that has links to it (total: ${row.refCount})!` }]);
+      return res.status(200).json({ error: `You can't delete an object that has links to it (total: ${row.refCount})!` });
     }
 
     // PHP: adjust peer orders for array or multiselect elements
@@ -4533,7 +4533,7 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     });
   } catch (error) {
     logger.error('[Legacy _m_del] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -4547,7 +4547,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -4557,7 +4557,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
 
     // Grant check — PHP checks WRITE grant before setting attributes
     if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      return res.status(200).json({ error: 'Insufficient privileges' });
     }
 
     // Merge query+body: smartq.js line 959 sends &t{ref}=value in URL query string for select2 inline edit
@@ -4576,7 +4576,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
     }
 
     if (Object.keys(attributes).length === 0) {
-      return res.status(200).json([{ error: 'No attributes provided'  }]);
+      return res.status(200).json({ error: 'No attributes provided'  });
     }
 
     let uploadedFilePath = null;
@@ -4699,7 +4699,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
     });
   } catch (error) {
     logger.error('[Legacy _m_set] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -4712,7 +4712,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -4724,10 +4724,10 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
 
     // Grant check on source object and target parent
     if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      return res.status(200).json({ error: 'Insufficient privileges' });
     }
     if (!await checkGrant(pool, db, grants || {}, newParentId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges for target parent' }]);
+      return res.status(200).json({ error: 'Insufficient privileges for target parent' });
     }
 
     // Fetch full object info (t, up, ord) before moving
@@ -4735,7 +4735,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
       `SELECT t, up, ord FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
     );
     if (objInfo.length === 0) {
-      return res.status(200).json([{ error: 'Object not found' }]);
+      return res.status(200).json({ error: 'Object not found' });
     }
     const objType = objInfo[0].t;
     const oldParentId = objInfo[0].up;
@@ -4743,7 +4743,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
 
     // Metadata protection: can't move root-level types
     if (oldParentId === 0) {
-      return res.status(200).json([{ error: 'Cannot move metadata object' }]);
+      return res.status(200).json({ error: 'Cannot move metadata object' });
     }
 
     // Order adjustment in old parent: shift down peers after removed object
@@ -4768,7 +4768,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     });
   } catch (error) {
     logger.error('[Legacy _m_move] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -4784,7 +4784,7 @@ router.all('/:db/_dict/:typeId?', async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -4841,7 +4841,7 @@ router.all('/:db/_dict/:typeId?', async (req, res) => {
     res.json(types);
   } catch (error) {
     logger.error('[Legacy _dict] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -4854,7 +4854,7 @@ router.all('/:db/_list/:typeId', async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -4984,7 +4984,7 @@ router.all('/:db/_list/:typeId', async (req, res) => {
     });
   } catch (error) {
     logger.error('[Legacy _list] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5000,7 +5000,7 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5093,7 +5093,7 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
     });
   } catch (error) {
     logger.error('[Legacy _list_join] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5105,7 +5105,7 @@ router.all('/:db/_d_main/:typeId', async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5182,7 +5182,7 @@ router.all('/:db/_d_main/:typeId', async (req, res) => {
     res.json(result);
   } catch (error) {
     logger.error('[Legacy _d_main] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5198,7 +5198,7 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
   const { db } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5283,7 +5283,7 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
     res.json(types);
   } catch (error) {
     logger.error('[Legacy terms] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5366,7 +5366,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
   const { db, refId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5618,7 +5618,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     res.json(result);
   } catch (error) {
     logger.error('[Legacy _ref_reqs] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5630,7 +5630,7 @@ router.all('/:db/_connect/:id?', legacyAuthMiddleware, async (req, res) => {
   const { db, id: idParam } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   const objectId = parseInt(idParam || '0', 10);
@@ -5670,7 +5670,7 @@ router.all('/:db/_connect/:id?', legacyAuthMiddleware, async (req, res) => {
       res.status(404).json({ error: 'Database not found' });
     }
   } catch (error) {
-    res.status(200).json([{ error: 'Connection failed'  }]);
+    res.status(200).json({ error: 'Connection failed'  });
   }
 });
 
@@ -5731,7 +5731,7 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
   const { db, parentTypeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5740,7 +5740,7 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
     const name = req.body.val || req.body.name || '';
 
     if (!name) {
-      return res.status(200).json([{ error: 'Type name (val) is required'  }]);
+      return res.status(200).json({ error: 'Type name (val) is required'  });
     }
 
     // PHP parity: duplicate name check — cannot create type with existing name
@@ -5751,7 +5751,7 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
         [name]
       );
       if (dupeRows.length > 0) {
-        return res.status(200).json([{ error: `Type with name "${name}" already exists` }]);
+        return res.status(200).json({ error: `Type with name "${name}" already exists` });
       }
     }
 
@@ -5773,7 +5773,7 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
     legacyRespond(req, res, db, { id: '', obj: id, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_new] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5786,7 +5786,7 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5802,7 +5802,7 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
     const unique = (req.body.unique !== undefined || req.query.unique !== undefined) ? 1 : 0;
 
     if (val === undefined && t === undefined) {
-      return res.status(200).json([{ error: 'No fields to update'  }]);
+      return res.status(200).json({ error: 'No fields to update'  });
     }
 
     // PHP parity: duplicate name check — cannot rename type to an existing name
@@ -5812,7 +5812,7 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
         [val, id]
       );
       if (dupeRows.length > 0) {
-        return res.status(200).json([{ error: `Type with name "${val}" already exists` }]);
+        return res.status(200).json({ error: `Type with name "${val}" already exists` });
       }
     }
 
@@ -5833,7 +5833,7 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
     legacyRespond(req, res, db, { id, obj: id, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_save] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5845,7 +5845,7 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5890,7 +5890,7 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     legacyRespond(req, res, db, { id, obj: null, next_act: 'edit_types', args: 'ext', warnings });
   } catch (error) {
     logger.error('[Legacy _d_del] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5903,7 +5903,7 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5916,7 +5916,7 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     const pool = getPool();
 
     if (!name) {
-      return res.status(200).json([{ error: 'Requisite name (val) is required'  }]);
+      return res.status(200).json({ error: 'Requisite name (val) is required'  });
     }
 
     // PHP parity (Add_Req): validate before adding requisite
@@ -5925,17 +5925,17 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
       `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId]
     );
     if (targetRows.length === 0) {
-      return res.status(200).json([{ error: `Type ${parentId} does not exist` }]);
+      return res.status(200).json({ error: `Type ${parentId} does not exist` });
     }
 
     // 2. Target is metadata row (up = 0) — cannot add requisite to instance
     if (targetRows[0].up !== 0) {
-      return res.status(200).json([{ error: 'Cannot add requisite to an instance, only to type definitions' }]);
+      return res.status(200).json({ error: 'Cannot add requisite to an instance, only to type definitions' });
     }
 
     // 3. Not self-referencing (type cannot reference itself)
     if (reqType === parentId) {
-      return res.status(200).json([{ error: 'Type cannot reference itself' }]);
+      return res.status(200).json({ error: 'Type cannot reference itself' });
     }
 
     // 4. Not duplicate — check if requisite of this type already exists
@@ -5944,7 +5944,7 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
       [parentId, reqType]
     );
     if (dupeRows.length > 0) {
-      return res.status(200).json([{ error: `Requisite of type ${reqType} already exists on type ${parentId}` }]);
+      return res.status(200).json({ error: `Requisite of type ${reqType} already exists on type ${parentId}` });
     }
 
     // Build value with modifiers
@@ -5962,7 +5962,7 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     legacyRespond(req, res, db, { id, obj: parentId, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_req] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -5975,7 +5975,7 @@ router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -5985,7 +5985,7 @@ router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
 
     // PHP parity: reject colons in alias — reserved for internal markers like :MULTI:
     if (newAlias.includes(':')) {
-      return res.status(200).json([{ error: 'Alias cannot contain colon character' }]);
+      return res.status(200).json({ error: 'Alias cannot contain colon character' });
     }
 
     // Get current value
@@ -6009,7 +6009,7 @@ router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_alias] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6022,7 +6022,7 @@ router.post('/:db/_d_null/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacy
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6040,7 +6040,7 @@ router.post('/:db/_d_null/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacy
       `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up]
     );
     if (parentRows.length === 0 || parentRows[0].up !== 0) {
-      return res.status(200).json([{ error: 'Can only toggle NULL on type definitions, not instances' }]);
+      return res.status(200).json({ error: 'Can only toggle NULL on type definitions, not instances' });
     }
 
     // Parse existing modifiers
@@ -6063,7 +6063,7 @@ router.post('/:db/_d_null/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     legacyRespond(req, res, db, { id, obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_null] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6076,7 +6076,7 @@ router.post('/:db/_d_multi/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6094,7 +6094,7 @@ router.post('/:db/_d_multi/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
       `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up]
     );
     if (parentRows.length === 0 || parentRows[0].up !== 0) {
-      return res.status(200).json([{ error: 'Can only toggle MULTI on type definitions, not instances' }]);
+      return res.status(200).json({ error: 'Can only toggle MULTI on type definitions, not instances' });
     }
 
     // Parse existing modifiers
@@ -6117,7 +6117,7 @@ router.post('/:db/_d_multi/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     legacyRespond(req, res, db, { id, obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_multi] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6130,7 +6130,7 @@ router.post('/:db/_d_attrs/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6171,7 +6171,7 @@ router.post('/:db/_d_attrs/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     legacyRespond(req, res, db, { id, obj: String(parentTypeId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_attrs] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6183,7 +6183,7 @@ router.post('/:db/_d_up/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDd
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6223,7 +6223,7 @@ router.post('/:db/_d_up/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDd
     legacyRespond(req, res, db, { id: String(obj.up), obj: String(obj.up), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_up] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6236,7 +6236,7 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6245,7 +6245,7 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
     const newOrd = parseInt(req.body.order || req.query.order, 10);
 
     if (isNaN(newOrd) || newOrd < 1) {
-      return res.status(200).json([{ error: 'Invalid order'  }]);
+      return res.status(200).json({ error: 'Invalid order'  });
     }
 
     const pool = getPool();
@@ -6257,7 +6257,7 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
     );
 
     if (!reqRow) {
-      return res.status(200).json([{ error: `Id=${id} not found`  }]);
+      return res.status(200).json({ error: `Id=${id} not found`  });
     }
 
     const parentId = reqRow.up;
@@ -6283,7 +6283,7 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
     legacyRespond(req, res, db, { id: String(parentId), obj: String(parentId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ord] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6295,7 +6295,7 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
   const { db, reqId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6306,7 +6306,7 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
     // Fetch requisite info BEFORE deleting
     const obj = await getObjectById(db, id);
     if (!obj) {
-      return res.status(200).json([{ error: 'Requisite not found' }]);
+      return res.status(200).json({ error: 'Requisite not found' });
     }
     const typeId = obj.up;
 
@@ -6317,7 +6317,7 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
         [id]
       );
       if (usageRow && usageRow.cnt > 0) {
-        return res.status(200).json([{ error: `Cannot delete: ${usageRow.cnt} instance(s) of this requisite exist` }]);
+        return res.status(200).json({ error: `Cannot delete: ${usageRow.cnt} instance(s) of this requisite exist` });
       }
     }
 
@@ -6345,7 +6345,7 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
     legacyRespond(req, res, db, { id: String(typeId), obj: String(typeId), next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_del_req] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6361,14 +6361,14 @@ router.post('/:db/_d_ref/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
     const id = parseInt(typeId, 10);
 
     if (!id) {
-      return res.status(200).json([{ error: `Invalid link (${id})`  }]);
+      return res.status(200).json({ error: `Invalid link (${id})`  });
     }
 
     const pool = getPool();
@@ -6380,12 +6380,12 @@ router.post('/:db/_d_ref/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     );
 
     if (!row) {
-      return res.status(200).json([{ error: `${id} type not found`  }]);
+      return res.status(200).json({ error: `${id} type not found`  });
     }
 
     // PHP: if(($row["up"] != 0) || ($row["t"] == $id)) die("Invalid $id type")
     if (row.up !== 0 || row.t === id) {
-      return res.status(200).json([{ error: `Invalid ${id} type`  }]);
+      return res.status(200).json({ error: `Invalid ${id} type`  });
     }
 
     let refId;
@@ -6403,7 +6403,7 @@ router.post('/:db/_d_ref/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     legacyRespond(req, res, db, { id, obj: refId, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_ref] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6419,7 +6419,7 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6429,7 +6429,7 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
 
     // Grant check — PHP checks WRITE grant before move-up
     if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      return res.status(200).json({ error: 'Insufficient privileges' });
     }
 
     // Get current object
@@ -6465,7 +6465,7 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     legacyRespond(req, res, db, { id: String(obj.t), obj: null, next_act: 'object', args: `F_U=${obj.up}` });
   } catch (error) {
     logger.error('[Legacy _m_up] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6478,7 +6478,7 @@ router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6496,7 +6496,7 @@ router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
 
     // Grant check — PHP checks WRITE grant before reordering
     if (!await checkGrant(pool, db, grants || {}, objectId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      return res.status(200).json({ error: 'Insufficient privileges' });
     }
 
     // PHP: SELECT obj.ord, obj.up FROM $z obj, $z par
@@ -6510,7 +6510,7 @@ router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     );
 
     if (!row) {
-      return res.status(200).json([{ error: `Id=${objectId} not found` }]);
+      return res.status(200).json({ error: `Id=${objectId} not found` });
     }
 
     const parentId = row.up;
@@ -6541,7 +6541,7 @@ router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     legacyRespond(req, res, db, { id: String(parentId), obj: String(parentId), next_act: nextAct, args: '' });
   } catch (error) {
     logger.error('[Legacy _m_ord] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6553,7 +6553,7 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database' }]);
+    return res.status(200).json({ error: 'Invalid database' });
   }
 
   try {
@@ -6563,15 +6563,15 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     const { grants, username } = req.legacyUser || {};
 
     if (!newId || newId <= 0) {
-      return res.status(200).json([{ error: 'new_id must be a positive integer' }]);
+      return res.status(200).json({ error: 'new_id must be a positive integer' });
     }
     if (oldId === newId) {
-      return res.status(200).json([{ error: 'new_id must differ from current id' }]);
+      return res.status(200).json({ error: 'new_id must differ from current id' });
     }
 
     // Grant check — PHP checks WRITE grant before ID change
     if (!await checkGrant(pool, db, grants || {}, oldId, 0, 'WRITE', username || '')) {
-      return res.status(200).json([{ error: 'Insufficient privileges' }]);
+      return res.status(200).json({ error: 'Insufficient privileges' });
     }
 
     // Check that the old object exists and get its parent
@@ -6579,13 +6579,13 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
       `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [oldId]
     );
     if (objRows.length === 0) {
-      return res.status(200).json([{ error: 'Object not found' }]);
+      return res.status(200).json({ error: 'Object not found' });
     }
     const up = objRows[0].up;
 
     // Metadata guard: can't change ID of metadata (root-level types)
     if (objRows[0].up === 0) {
-      return res.status(200).json([{ error: 'Cannot change ID of metadata object' }]);
+      return res.status(200).json({ error: 'Cannot change ID of metadata object' });
     }
 
     // Check that new_id is not already in use
@@ -6593,7 +6593,7 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
       `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [newId]
     );
     if (existRows.length > 0) {
-      return res.status(200).json([{ error: `ID ${newId} is already in use` }]);
+      return res.status(200).json({ error: `ID ${newId} is already in use` });
     }
 
     // PHP: 3 UPDATEs to rename the id everywhere it appears — wrap in transaction
@@ -6618,7 +6618,7 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     legacyRespond(req, res, db, { id: newId, obj: newId, next_act: nextAct, args: '' });
   } catch (error) {
     logger.error('[Legacy _m_id] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message }]);
+    res.status(200).json({ error: error.message });
   }
 });
 
@@ -6634,7 +6634,7 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
   const { db, id } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6711,7 +6711,7 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
     res.json(meta);
   } catch (error) {
     logger.error('[Legacy obj_meta] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6723,7 +6723,7 @@ router.all('/:db/metadata/:typeId?', legacyAuthMiddleware, async (req, res) => {
   const { db, typeId } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -6860,7 +6860,7 @@ router.all('/:db/metadata/:typeId?', legacyAuthMiddleware, async (req, res) => {
     }
   } catch (error) {
     logger.error('[Legacy metadata] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -6881,7 +6881,7 @@ router.post('/:db/jwt', async (req, res) => {
   const jwtToken = req.body.jwt || req.body.token || '';
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database' }]);
+    return res.status(200).json({ error: 'Invalid database' });
   }
 
   if (!jwtToken) {
@@ -6987,7 +6987,7 @@ router.post('/:db/confirm', async (req, res) => {
   const p = req.body.p || '';
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database' }]);
+    return res.status(200).json({ error: 'Invalid database' });
   }
 
   try {
@@ -7039,13 +7039,13 @@ router.all('/my/_new_db', async (req, res) => {
   // Validate new database name (3-15 chars, starts with letter)
   const USER_DB_MASK = /^[a-z][a-z0-9]{2,14}$/i;
   if (!newDbName || !USER_DB_MASK.test(newDbName)) {
-    return res.status(200).json([{ error: 'Invalid database name. Must be 3-15 characters, starting with a letter.' }]);
+    return res.status(200).json({ error: 'Invalid database name. Must be 3-15 characters, starting with a letter.' });
   }
 
   // Check for reserved names
   const reservedNames = ['my', 'admin', 'root', 'system', 'test', 'demo', 'api', 'health'];
   if (reservedNames.includes(newDbName.toLowerCase())) {
-    return res.status(200).json([{ error: `Database name "${newDbName}" is reserved` }]);
+    return res.status(200).json({ error: `Database name "${newDbName}" is reserved` });
   }
 
   try {
@@ -7056,7 +7056,7 @@ router.all('/my/_new_db', async (req, res) => {
     const [existingTables] = await pool.query(existsQuery);
 
     if (existingTables.length > 0) {
-      return res.status(200).json([{ error: `Database "${newDbName}" already exists` }]);
+      return res.status(200).json({ error: `Database "${newDbName}" already exists` });
     }
 
     // Create new database table with standard schema
@@ -7183,7 +7183,7 @@ router.all('/my/_new_db', async (req, res) => {
     });
   } catch (error) {
     logger.error('[Legacy _new_db] Error', { error: error.message, dbName: newDbName });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -7226,13 +7226,13 @@ function createDiskUpload(db) {
 router.post('/:db/upload', (req, res, next) => {
   const { db } = req.params;
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database' }]);
+    return res.status(200).json({ error: 'Invalid database' });
   }
   // Instantiate multer with disk storage for this specific db
   createDiskUpload(db).single('file')(req, res, (err) => {
     if (err) {
       logger.error('[Legacy upload] Multer error', { error: err.message, db });
-      return res.status(200).json([{ error: err.message }]);
+      return res.status(200).json({ error: err.message });
     }
     next();
   });
@@ -7240,7 +7240,7 @@ router.post('/:db/upload', (req, res, next) => {
   const { db } = req.params;
 
   if (!req.file) {
-    return res.status(200).json([{ error: 'No file uploaded' }]);
+    return res.status(200).json({ error: 'No file uploaded' });
   }
 
   // MIME-type verification using file magic bytes (PHP uses finfo_file)
@@ -7273,7 +7273,7 @@ router.post('/:db/upload', (req, res, next) => {
       if (!matches) {
         fs.unlinkSync(filePath); // Remove the invalid file
         logger.warn('[Legacy upload] MIME mismatch', { db, filename: req.file.originalname, fileExt });
-        return res.status(200).json([{ error: `File content does not match extension ${fileExt}` }]);
+        return res.status(200).json({ error: `File content does not match extension ${fileExt}` });
       }
     }
   } catch (mimeErr) {
@@ -7299,7 +7299,7 @@ router.get('/:db/download/:filename', async (req, res) => {
   const { db, filename } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -7315,10 +7315,10 @@ router.get('/:db/download/:filename', async (req, res) => {
     res.download(filePath, path.basename(filePath));
   } catch (error) {
     if (error.message === 'Invalid path') {
-      return res.status(200).json([{ error: 'Invalid filename'  }]);
+      return res.status(200).json({ error: 'Invalid filename'  });
     }
     logger.error('[Legacy download] Error', { error: error.message, db });
-    res.status(200).json([{ error: 'Download failed'  }]);
+    res.status(200).json({ error: 'Download failed'  });
   }
 });
 
@@ -7331,7 +7331,7 @@ router.get('/:db/dir_admin', async (req, res) => {
   const { download, add_path, gf } = req.query;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -7347,7 +7347,7 @@ router.get('/:db/dir_admin', async (req, res) => {
     try {
       fullPath = safePath(basePath, add_path || '');
     } catch {
-      return res.status(200).json([{ error: 'Invalid path'  }]);
+      return res.status(200).json({ error: 'Invalid path'  });
     }
 
     // Handle file download request
@@ -7356,7 +7356,7 @@ router.get('/:db/dir_admin', async (req, res) => {
       try {
         filePath = safePath(fullPath, gf);
       } catch {
-        return res.status(200).json([{ error: 'Invalid filename'  }]);
+        return res.status(200).json({ error: 'Invalid filename'  });
       }
       if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
         return res.download(filePath, path.basename(filePath));
@@ -7402,7 +7402,7 @@ router.get('/:db/dir_admin', async (req, res) => {
     });
   } catch (error) {
     logger.error('[Legacy dir_admin] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -7681,7 +7681,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
   const { execute, format } = req.query;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -7995,7 +7995,7 @@ router.all('/:db/report/:reportId?', async (req, res) => {
     });
   } catch (error) {
     logger.error('[Legacy report] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -8008,7 +8008,7 @@ router.get('/:db/export/:typeId', async (req, res) => {
   const { format = 'csv', include_reqs = '1' } = req.query;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -8106,7 +8106,7 @@ router.get('/:db/export/:typeId', async (req, res) => {
     res.send(csv);
   } catch (error) {
     logger.error('[Legacy export] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -8122,7 +8122,7 @@ router.get('/:db/grants', async (req, res) => {
   const { db } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   try {
@@ -8169,7 +8169,7 @@ router.get('/:db/grants', async (req, res) => {
     });
   } catch (error) {
     logger.error('[Legacy grants] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -8182,11 +8182,11 @@ router.post('/:db/check_grant', async (req, res) => {
   const { id, t, grant = 'READ' } = req.body;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   if (!id) {
-    return res.status(200).json([{ error: 'Object ID required'  }]);
+    return res.status(200).json({ error: 'Object ID required'  });
   }
 
   try {
@@ -8232,7 +8232,7 @@ router.post('/:db/check_grant', async (req, res) => {
     });
   } catch (error) {
     logger.error('[Legacy check_grant] Error', { error: error.message, db });
-    res.status(200).json([{ error: error.message  }]);
+    res.status(200).json({ error: error.message  });
   }
 });
 
@@ -8712,7 +8712,7 @@ router.post('/:db/restore', (req, res, next) => {
   const { db } = req.params;
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database' }]);
+    return res.status(200).json({ error: 'Invalid database' });
   }
 
   try {
@@ -8990,12 +8990,12 @@ router.post('/:db', async (req, res, next) => {
   }
 
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database' }]);
+    return res.status(200).json({ error: 'Invalid database' });
   }
 
   const reportId = parseInt(req.body.id || req.query.id, 10);
   if (!reportId) {
-    return res.status(200).json([{ error: 'Report ID required' }]);
+    return res.status(200).json({ error: 'Report ID required' });
   }
 
   try {
@@ -9124,7 +9124,7 @@ router.post('/:db', async (req, res, next) => {
     });
   } catch (error) {
     logger.error('[Legacy action=report] Error', { error: error.message, db, reportId });
-    return res.status(200).json([{ error: error.message }]);
+    return res.status(200).json({ error: error.message });
   }
 });
 
@@ -9137,7 +9137,7 @@ router.post('/:db/:action', async (req, res) => {
 
   // Validate DB name
   if (!isValidDbName(db)) {
-    return res.status(200).json([{ error: 'Invalid database'  }]);
+    return res.status(200).json({ error: 'Invalid database'  });
   }
 
   logger.warn('[Legacy API] Unknown action', { db, action, body: req.body });
