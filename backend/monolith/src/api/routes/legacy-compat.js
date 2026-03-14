@@ -594,9 +594,10 @@ const grantStore = new Map();
  * @param {Object} pool - MySQL pool
  * @param {string} db - Database name
  * @param {number} roleId - User's role ID
+ * @param {Object} [userCtx] - User context for BuiltIn resolution { username, uid, role, roleId, tzone, ip }
  * @returns {Object} grants object
  */
-async function getGrants(pool, db, roleId) {
+async function getGrants(pool, db, roleId, userCtx) {
   const grants = {};
 
   try {
@@ -624,7 +625,9 @@ async function getGrants(pool, db, roleId) {
       if (row.mask && row.mask.length > 0) {
         if (!grants.mask) grants.mask = {};
         if (!grants.mask[row.obj]) grants.mask[row.obj] = {};
-        grants.mask[row.obj][row.mask] = row.lev;
+        // PHP parity: resolve [USER], [ROLE], etc. in mask values (index.php:1296-1310)
+        const resolvedMask = userCtx ? resolveMaskBuiltIn(row.mask, userCtx) : row.mask;
+        grants.mask[row.obj][resolvedMask] = row.lev;
       }
       if (row.exp && row.exp.length > 0) {
         if (!grants.EXPORT) grants.EXPORT = {};
@@ -974,6 +977,66 @@ async function checkValGranted(pool, db, grants, t, val, id = 0) {
   }
 
   return ok;
+}
+
+/**
+ * Check if a value is barred by mask-level write restrictions.
+ * Port of PHP Val_barred_by_mask() (index.php:896-919).
+ *
+ * Returns true if the value is barred (should not be written), false otherwise.
+ * Throws an error if a required mask exists but the value doesn't match any.
+ *
+ * @param {Object} pool - MySQL pool
+ * @param {string} db - Database name
+ * @param {Object} grants - Loaded grants object
+ * @param {number} t - Type ID (requisite type) to check masks for
+ * @param {string|null} val - Value to check
+ * @returns {Promise<boolean>} true if barred, false if allowed
+ */
+async function valBarredByMask(pool, db, grants, t, val) {
+  if (!grants || !grants.mask || !grants.mask[t]) {
+    return false;
+  }
+
+  let reqMask = false;
+
+  for (const [grant, mask] of Object.entries(grants.mask[t])) {
+    logger.debug('[Grants] valBarredByMask checking', { t, grant, mask });
+
+    if (mask === '') {
+      // No level defined — required mask: value must match at least one such pattern
+      reqMask = true;
+      const sqlExpr = fetchWhereForMask(t, val, grant);
+      try {
+        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
+          return false; // Value matches required mask — not barred
+        }
+      } catch (error) {
+        logger.error('[Grants] Error in valBarredByMask SQL', { error: error.message, db, t, grant });
+      }
+    } else {
+      // Level defined — check if value matches the level pattern
+      const sqlExpr = fetchWhereForMask(t, val, mask);
+      try {
+        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
+          return grant !== 'WRITE'; // Barred unless grant key is "WRITE"
+        }
+      } catch (error) {
+        logger.error('[Grants] Error in valBarredByMask SQL', { error: error.message, db, t, mask });
+      }
+    }
+  }
+
+  if (reqMask) {
+    // PHP calls my_die() — all required masks failed to match
+    const err = new Error(`Not granted by requisite mask (${t})`);
+    err.isMaskError = true;
+    throw err;
+  }
+
+  return false;
 }
 
 /**
@@ -1602,7 +1665,9 @@ async function legacyAuthMiddleware(req, res, next) {
     const user = rows[0];
     const xsrf = user.xsrf_val || generateXsrf(token, db, db);
     const roleId = user.roleId || 0;
-    const grants = roleId ? await getGrants(pool, db, roleId) : {};
+    const grants = roleId ? await getGrants(pool, db, roleId, {
+      username: user.uname, uid: user.uid, role: (user.role_val || '').toLowerCase(), roleId,
+    }) : {};
 
     req.legacyUser = {
       uid: user.uid,
@@ -1695,6 +1760,53 @@ function resolveBuiltIn(val, user, db, tzone = 0, ip = '') {
     .replace(/%DATE%/g, dateStr)
     .replace(/%DATETIME%/g, datetimeStr)
     .replace(/%TIME%/g, timeStr);
+}
+
+/**
+ * Resolve bracket-syntax BuiltIn placeholders in mask values.
+ * Port of PHP BuiltIn() (index.php:1576-1618) — bracket syntax used in getGrants masks.
+ *
+ * @param {string} val - Mask value potentially containing [PLACEHOLDER]
+ * @param {Object} userCtx - User context { username, uid, role, roleId, tzone }
+ * @returns {string} Resolved value
+ */
+function resolveMaskBuiltIn(val, userCtx) {
+  if (!val || typeof val !== 'string') return val || '';
+  const m = val.match(/(\[.+\])/);
+  if (!m) return val;
+
+  const placeholder = m[1];
+  const tzone = (userCtx.tzone || 0) * 1000;
+  const now = new Date(Date.now() + tzone);
+  const pad = (n) => String(n).padStart(2, '0');
+  const fmtDate = (d) => `${pad(d.getUTCDate())}.${pad(d.getUTCMonth() + 1)}.${d.getUTCFullYear()}`;
+  const fmtDateTime = (d) => `${fmtDate(d)} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+
+  let resolved;
+  switch (placeholder) {
+    case '[TODAY]':       resolved = fmtDate(now); break;
+    case '[NOW]':         resolved = fmtDateTime(now); break;
+    case '[YESTERDAY]':   resolved = fmtDate(new Date(now.getTime() - 86400000)); break;
+    case '[TOMORROW]':    resolved = fmtDate(new Date(now.getTime() + 86400000)); break;
+    case '[MONTH_AGO]': {
+      const d = new Date(now); d.setUTCMonth(d.getUTCMonth() - 1);
+      resolved = fmtDate(d); break;
+    }
+    case '[WEEK_AGO]':    resolved = fmtDate(new Date(now.getTime() - 7 * 86400000)); break;
+    case '[MONTH_PLUS]': {
+      const d = new Date(now); d.setUTCMonth(d.getUTCMonth() + 1);
+      resolved = fmtDate(d); break;
+    }
+    case '[USER]':        resolved = userCtx.username || ''; break;
+    case '[USER_ID]':     resolved = String(userCtx.uid || ''); break;
+    case '[ROLE]':        resolved = userCtx.role || ''; break;
+    case '[ROLE_ID]':     resolved = String(userCtx.roleId || ''); break;
+    case '[TSHIFT]':      resolved = String(userCtx.tzone || 0); break;
+    case '[REMOTE_ADDR]': resolved = userCtx.ip || ''; break;
+    default:              return val; // Unresolved — return as-is
+  }
+
+  return val.replace(/(\[.+\])/, resolved);
 }
 
 /**
@@ -4955,6 +5067,13 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
       }
 
+      // Mask-level write restriction: reject values barred by role mask
+      // Port of PHP Val_barred_by_mask() called before writing (index.php:896-919)
+      if (await valBarredByMask(pool, db, grants || {}, typeIdNum, finalValue)) {
+        warnings += `Field ${typeIdNum} is restricted by mask. `;
+        continue;
+      }
+
       // NOT_NULL enforcement: check attrs for :!NULL:
       if (meta) {
         const [attrAttrs] = await pool.query(
@@ -5304,6 +5423,12 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       finalValue = resolveBuiltIn(finalValue, req.legacyUser || {}, db, tzone, clientIp);
       if (meta) {
         finalValue = String(formatVal(meta.base_type, finalValue, tzone));
+      }
+
+      // Mask-level write restriction: reject values barred by role mask
+      // Port of PHP Val_barred_by_mask() called before writing (index.php:896-919)
+      if (await valBarredByMask(pool, db, grants || {}, typeIdNum, finalValue)) {
+        continue; // Skip barred attribute silently
       }
 
       // Reference storage fix: if type is a reference (NOT in REV_BASE_TYPE), store in t column
@@ -5897,7 +6022,9 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
 
         if (userRows.length > 0) {
           username = userRows[0].username;
-          grants = await getGrants(pool, db, userRows[0].role_id);
+          grants = await getGrants(pool, db, userRows[0].role_id, {
+            username: userRows[0].username, roleId: userRows[0].role_id,
+          });
         }
       } catch (e) {
         logger.warn('[Legacy terms] Failed to load grants', { error: e.message });
@@ -8428,7 +8555,9 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       `, [token]);
       if (userRows.length > 0) {
         username = userRows[0].username;
-        grants = await getGrants(pool, db, userRows[0].role_id);
+        grants = await getGrants(pool, db, userRows[0].role_id, {
+          username: userRows[0].username, roleId: userRows[0].role_id,
+        });
       }
     }
     for (const col of report.columns) {
@@ -8851,7 +8980,9 @@ router.get('/:db/grants', async (req, res) => {
     const user = userRows[0];
 
     // Get grants for the user's role
-    const grants = await getGrants(pool, db, user.role_id);
+    const grants = await getGrants(pool, db, user.role_id, {
+      username: user.username, uid: user.id, role: (user.role_name || '').toLowerCase(), roleId: user.role_id,
+    });
 
     // Convert internal grants object {typeId: level, mask:{}, EXPORT:{}, DELETE:{}}
     // to PHP-compatible array [{id, type}]
@@ -8915,7 +9046,9 @@ router.post('/:db/check_grant', async (req, res) => {
     const user = userRows[0];
 
     // Get grants
-    const grants = await getGrants(pool, db, user.role_id);
+    const grants = await getGrants(pool, db, user.role_id, {
+      username: user.username, uid: user.id, roleId: user.role_id,
+    });
 
     // Check specific grant
     const hasGrant = await checkGrant(pool, db, grants, parseInt(id), parseInt(t) || 0, grant.toUpperCase(), user.username);
@@ -8976,7 +9109,9 @@ router.get('/:db/csv_all', async (req, res) => {
 
       if (userRows.length > 0) {
         username = userRows[0].username;
-        grants = await getGrants(pool, db, userRows[0].role_id);
+        grants = await getGrants(pool, db, userRows[0].role_id, {
+          username: userRows[0].username, roleId: userRows[0].role_id,
+        });
       }
     }
 
@@ -9294,7 +9429,9 @@ router.get('/:db/backup', async (req, res) => {
 
       if (userRows.length > 0) {
         username = userRows[0].username;
-        grants = await getGrants(pool, db, userRows[0].role_id);
+        grants = await getGrants(pool, db, userRows[0].role_id, {
+          username: userRows[0].username, roleId: userRows[0].role_id,
+        });
       }
     }
 
@@ -9434,7 +9571,9 @@ router.post('/:db/restore', (req, res, next) => {
 
       if (userRows.length > 0) {
         username = userRows[0].username;
-        grants = await getGrants(pool, db, userRows[0].role_id);
+        grants = await getGrants(pool, db, userRows[0].role_id, {
+          username: userRows[0].username, roleId: userRows[0].role_id,
+        });
       }
     }
 
