@@ -6595,7 +6595,11 @@ async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt
   }
 
   // ── Query 2: Stored values (PHP GetObjectReqs query 2) ─────────────────
-  const q2 = `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
+  // PHP conditionally builds the second SELECT: the COUNT/GROUP BY variant
+  // is only used when array types exist (isset($GLOBALS["ARR_typs"])).
+  const hasArrayTypes = Object.keys(arrTyps).length > 0;
+  const q2 = hasArrayTypes
+    ? `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
                 CASE WHEN typs.up=0 THEN 0 ELSE reqs.val END AS val,
                 reqs.ord, typs.id AS t, COUNT(1) AS arr_num,
                 origs.t AS bt, typs.val AS ref_val
@@ -6604,6 +6608,15 @@ async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt
          LEFT JOIN ${z} origs ON origs.id = typs.t
          WHERE reqs.up = ?
          GROUP BY val, id, t
+         ORDER BY reqs.ord`
+    : `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
+                CASE WHEN typs.up=0 THEN 0 ELSE reqs.val END AS val,
+                reqs.ord, typs.id AS t, 1 AS arr_num,
+                origs.t AS bt, typs.val AS ref_val
+         FROM ${z} reqs
+         JOIN ${z} typs  ON typs.id  = reqs.t
+         LEFT JOIN ${z} origs ON origs.id = typs.t
+         WHERE reqs.up = ?
          ORDER BY reqs.ord`;
   const { rows: storedRows } = await execSql(pool, q2, [id], { label: 'getCurrentValues_q2', db });
 
@@ -6634,7 +6647,13 @@ async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt
 
     // Reverse base-type mapping
     const baseTypId = meta.base_typ;
-    revBt[key] = REV_BASE_TYPE[baseTypId] || revBt[baseTypId] || '';
+    const mappedType = REV_BASE_TYPE[baseTypId] || revBt[baseTypId] || '';
+    if (!mappedType) {
+      logger.warn('[getCurrentValues] Unknown base type mapping — falling back to empty string', {
+        db, reqKey: key, baseTypId,
+      });
+    }
+    revBt[key] = mappedType;
 
     if (rows[key] !== undefined) {
       // Direct match — stored value keyed by req type id
@@ -6802,10 +6821,14 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     const currentRefTyps = {};
     const currentArrTyps = {};
     const currentRevBt = {};
-    const currentValues = await getCurrentValues(
-      pool, db, objectId, objTypeEarly,
-      currentReqs, currentRefTyps, currentArrTyps, currentRevBt
-    );
+    // getCurrentValues mutates the passed-in objects AND returns a clean result
+    // object.  Destructure so every property is available to downstream logic.
+    const { reqs: currentReqVals, reqTyps: currentReqTyps,
+            notNull: currentNotNull, booleans: currentBooleans } =
+      await getCurrentValues(
+        pool, db, objectId, objTypeEarly,
+        currentReqs, currentRefTyps, currentArrTyps, currentRevBt
+      );
 
     // Normal save (not copy)
     // Update value if provided
