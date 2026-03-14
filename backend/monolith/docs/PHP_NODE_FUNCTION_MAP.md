@@ -10,7 +10,7 @@
 
 | Category | Total | Full | Partial | Stub | Missing | N/A |
 |----------|-------|------|---------|------|---------|-----|
-| **Functions** | 96 | 44 | 12 | 3 | 16 | 21 |
+| **Functions** | 96 | 46 | 11 | 3 | 15 | 21 |
 | **Route Case Blocks** | 31 | 25 | 2 | 0 | 2 | 2 |
 | **Block Type Handlers** | 82 | 0 | 0 | 0 | 0 | 82 |
 | **Global Init Code** | 5 | 3 | 1 | 0 | 1 | 0 |
@@ -65,7 +65,7 @@
 | 22 | `Update_Val()` | 7067-7069 | `updateRowValue()` | **Full** | — |
 | 23 | `UpdateTyp()` | 7061-7064 | Inline SQL in handlers | **Full** | — |
 | 24 | `Delete()` | 1514-1527 | `recursiveDelete()` | **Full** | — |
-| 25 | `BatchDelete()` | 1529-1574 | `deleteChildren()` | **Partial** | Non-recursive flat delete only |
+| 25 | `BatchDelete()` | 1529-1574 | `recursiveDelete()` | **Full** | Batch DELETE with file cleanup implemented in PR #285 |
 | 26 | `Get_Ord()` | 7012-7017 | `getNextOrder()` | **Full** | — |
 | 27 | `GetRefOrd()` | 7019-7024 | Inline in handlers | **Full** | — |
 | 28 | `Calc_Order()` | 6931-6940 | `getNextOrder()` | **Full** | — |
@@ -120,7 +120,7 @@
 | 52 | `GetSha()` | 580-584 | `fileGetSha()` | **Full** | — |
 | 53 | `GetSubdir()` | 586-589 | `getSubdir()` | **Full** | — |
 | 54 | `GetFilename()` | 591-594 | `getFilename()` | **Full** | — |
-| 55 | `RemoveDir()` | 596-615 | `fs.rmSync()` inline | **Full** | — |
+| 55 | `RemoveDir()` | 596-615 | `removeDir()` | **Full** | Recursive directory cleanup implemented in PR #287 |
 | 56 | `BlackList()` | 574-578 | `isBlacklisted()` | **Full** | — |
 
 ### 1.9 Database Operations
@@ -157,7 +157,7 @@
 | 69 | `trace()` | 498-506 | `logger.debug()` | **Full** | — |
 | 70 | `wlog()` | 493-496 | `logger.info()` | **Full** | — |
 | 71 | `t9n()` | 560-572 | Not implemented | **Stub** | i18n returns first language only |
-| 72 | `HintNeeded()` | 535-558 | Not implemented | **Missing** | Search hint UI feature |
+| 72 | `HintNeeded()` | 535-558 | `hintNeeded()` | **Full** | MySQL query optimizer hints implemented in PR #286 |
 | 73 | `htmlSafe()` / `htmlEsc()` | implicit | `htmlEsc()` | **Full** | — |
 | 74 | `NormalSize()` | 7250-7261 | Not implemented | **Missing** | Human-readable file sizes |
 | 75 | `die_info()` | 7072-7078 | `res.send()` | **Full** | — |
@@ -346,7 +346,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
-| 7 | `HintNeeded()` | Search hints don't appear | UX |
+| 7 | ~~`HintNeeded()`~~ | ~~Search hints don't appear~~ | ~~UX~~ — **Implemented in PR #286** |
 | 8 | `NormalSize()` | File sizes show raw bytes | UX |
 | 9 | `RepoGrant()` | Repository-level access check | Advanced permissions |
 | 10 | `build_post_fields()` | External connector POST fails | Connectors |
@@ -391,3 +391,9 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 8. ~~**BKI export functions**~~ — **Implemented in PR #282** — `constructHeader`, `exportHeader`, `exportTerms`, `Export_reqs` are now integrated into backup/export route.
 
 9. ~~**csv_all optimizations**~~ — **Implemented in PR #283** — Large export queries now use type-specific JOINs instead of N+1 per-object queries.
+
+10. ~~**BatchDelete**~~ — **Implemented in PR #285** — Batch DELETE with file cleanup for large object trees.
+
+11. ~~**HintNeeded**~~ — **Implemented in PR #286** — MySQL query optimizer hints for JOINs on reference requisites.
+
+12. ~~**RemoveDir**~~ — **Implemented in PR #287** — Recursive directory cleanup for file operations.
