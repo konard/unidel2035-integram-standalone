@@ -6577,22 +6577,42 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
 
   try {
     const parentId = parseInt(parentTypeId || req.body.up || '0', 10);
-    const baseType = parseInt(req.body.t || '8', 10); // Default to CHARS type (8)
     const name = req.body.val || req.body.name || '';
 
+    // PHP line 8630-8631: if($val == "") my_die("Empty type")
     if (!name) {
       return res.status(200).json({ error: 'Type name (val) is required'  });
     }
 
-    // PHP parity: duplicate name check — cannot create type with existing name
+    // PHP line 8632-8633: if(!isset($_REQUEST["t"])) my_die("Base type is not set")
+    if (req.body.t === undefined && req.query.t === undefined) {
+      return res.status(200).json({ error: 'Base type is not set' });
+    }
+
+    const baseType = parseInt(req.body.t ?? req.query.t, 10);
+
+    // PHP line 8634-8635: if(!isset($GLOBALS["basics"][$_REQUEST["t"]]) && ($_REQUEST["t"] !== "0"))
+    //   my_die("Base type is invalid: ...")
+    if (!REV_BASE_TYPE[baseType] && baseType !== 0) {
+      return res.status(200).json({ error: `Base type is invalid: ${baseType}` });
+    }
+
+    // PHP line 8636-8641: duplicate (val, t) check at root level
+    // SELECT id FROM $z WHERE val='...' AND t=$t AND id!=t
+    // If duplicate found: return existing id with warning (not an error)
     if (parentId === 0) {
       const pool = getPool();
       const [dupeRows] = await pool.query(
-        `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? LIMIT 1`,
-        [name]
+        `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND id != t LIMIT 1`,
+        [name, baseType]
       );
       if (dupeRows.length > 0) {
-        return res.status(200).json({ error: `Type with name "${name}" already exists` });
+        const existingId = dupeRows[0].id;
+        logger.info('[Legacy _d_new] Type already exists, returning existing', { db, existingId, name, baseType });
+        return legacyRespond(req, res, db, {
+          id: '', obj: existingId, next_act: 'edit_types', args: 'ext',
+          warnings: `The Type ${name} already exists!`
+        });
       }
     }
 
