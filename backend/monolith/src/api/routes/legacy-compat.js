@@ -3314,23 +3314,87 @@ router.post('/:db/auth', async (req, res, next) => {
     const { rows: rows } = await execSql(pool, query, [login], { label: 'login_query' });
 
     if (rows.length === 0) {
-      // PHP cabinet fallback: when user not found in target DB, query 'my' database
+      // PHP cabinet fallback (index.php lines 7638-7656):
+      // 1. Verify user in 'my' DB with email+pwd AND check DATABASE record for target DB
+      // 2. Re-query target DB for DB-owner user and establish full session
       if (db !== 'my') {
         try {
-          const { rows: myRows } = await execSql(pool, `SELECT user.id AS uid, user.val AS username, pwd.val AS password_hash
-             FROM my user
-             LEFT JOIN my pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
-             WHERE user.val = ? AND user.t = ${TYPE.USER}
-             LIMIT 1`, [login], { label: 'login_select' });
+          // PHP: Salt($u, $p) with $z temporarily set to "my" for password hashing
+          const myExpectedHash = phpCompatibleHash(login, password, 'my');
+
+          // Step 1: Check 'my' DB — email + password + DATABASE record for target DB
+          // PHP: SELECT 1 FROM my email JOIN my pwd ... JOIN my db ON db.up=email.up AND db.val='$z' AND db.t=DATABASE
+          const { rows: myRows } = await execSql(pool, `
+            SELECT 1
+            FROM my email
+            JOIN my pwd ON pwd.up = email.up AND pwd.val = ?
+            JOIN my db ON db.up = email.up AND db.val = ? AND db.t = ${TYPE.DATABASE}
+            WHERE email.t = ${TYPE.EMAIL} AND email.val = ?
+          `, [myExpectedHash, db, login], { label: 'cabinet_auth_check' });
+
           if (myRows.length > 0) {
-            const myUser = myRows[0];
-            const myExpectedHash = phpCompatibleHash(login, password, 'my');
-            if (myUser.password_hash === myExpectedHash) {
-              logger.info('[Legacy Auth] Cabinet fallback to my DB', { db, login });
-              if (isJSON) {
-                return res.status(200).json({ message: 'CABINET', db: 'my', login: myUser.username, details: '' });
+            // Step 2: Re-query target DB for the DB-owner user (user.val = db name)
+            // PHP: SELECT u.id uid, u.val, ... WHERE u.t=USER AND u.val='$z' AND pwd.up=u.id
+            const { rows: dbOwnerRows } = await execSql(pool, `
+              SELECT
+                u.id AS uid,
+                u.val AS username,
+                pwd.id AS pwd_id,
+                pwd.val AS password_hash,
+                tok.id AS token_id,
+                tok.val AS token,
+                act.id AS act_id,
+                xsrf.id AS xsrf_id,
+                xsrf.val AS xsrf
+              FROM ${db} u
+              LEFT JOIN ${db} pwd ON pwd.up = u.id AND pwd.t = ${TYPE.PASSWORD}
+              LEFT JOIN ${db} act ON act.up = u.id AND act.t = ${TYPE.ACTIVITY}
+              LEFT JOIN ${db} tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN}
+              LEFT JOIN ${db} xsrf ON xsrf.up = u.id AND xsrf.t = ${TYPE.XSRF}
+              WHERE u.t = ${TYPE.USER} AND u.val = ?
+              LIMIT 1
+            `, [db], { label: 'cabinet_db_owner_query' });
+
+            if (dbOwnerRows.length > 0) {
+              const dbOwner = dbOwnerRows[0];
+              logger.info('[Legacy Auth] Cabinet fallback — logging in as DB owner', { db, login, ownerUid: dbOwner.uid });
+
+              // Reuse existing token or generate new (same logic as normal login)
+              let cabinetToken;
+              if (dbOwner.token_id && dbOwner.token) {
+                cabinetToken = dbOwner.token;
+              } else {
+                cabinetToken = generateToken();
+                await execSql(pool,
+                  `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
+                  [dbOwner.uid, cabinetToken],
+                  { label: 'cabinet_insertToken', db }
+                );
               }
-              return res.redirect('/my');
+              const cabinetXsrf = generateXsrf(cabinetToken, db, db);
+
+              if (!dbOwner.xsrf_id) {
+                await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [dbOwner.uid, cabinetXsrf], { label: 'cabinet_insertXsrf' });
+              } else {
+                await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [cabinetXsrf, dbOwner.xsrf_id], { label: 'cabinet_updateXsrf' });
+              }
+
+              // Set cookie like PHP: setcookie($z, $token, time() + COOKIES_EXPIRE, "/")
+              res.cookie(db, cabinetToken, {
+                maxAge: 30 * 24 * 60 * 60 * 1000,
+                path: '/',
+                httpOnly: false,
+              });
+
+              if (isJSON) {
+                return res.status(200).json({
+                  _xsrf: cabinetXsrf,
+                  token: cabinetToken,
+                  id: String(dbOwner.uid),
+                  msg: '',
+                });
+              }
+              return res.redirect(uri);
             }
           }
         } catch (myErr) {
