@@ -6879,17 +6879,24 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         continue;
       }
 
-      // Empty→DELETE: if value empty and field allows null → delete the requisite
+      // Empty→DELETE: if value empty → delete the requisite and its children
+      // PHP parity (index.php:8147-8155): no :!NULL: guard in PHP at this point;
+      // PHP simply checks if the value was cleared and it's not a multi-ref.
       if ((finalValue === '' || finalValue === 'NULL') && meta) {
-        const { rows: attrAttrs2 } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeIdNum], { label: 'query_select' });
-        const attrs2 = attrAttrs2.length > 0 ? String(attrAttrs2[0].val) : '';
-        if (!attrs2.includes(':!NULL:')) {
-          const existing = await getRequisiteByType(db, objectId, typeIdNum);
-          if (existing) {
-            await deleteRow(db, existing.id);
-          }
+        const existing = await getRequisiteByType(db, objectId, typeIdNum);
+        if (!existing) {
+          // PHP: $req_id == 0 → warning
+          warnings += 'Empty attribute type<br>';
           continue;
         }
+        // PHP parity (index.php:8151): if type is the object's own type, skip deletion
+        if (typeIdNum === objTypeEarly) {
+          warnings += 'Object name cannot be blank!<br>';
+          continue;
+        }
+        // PHP parity (index.php:8152): cascade delete — "DELETE FROM $z WHERE id=$req_id OR up=$req_id"
+        await execSql(pool, `DELETE FROM \`${db}\` WHERE id = ? OR up = ?`, [existing.id, existing.id], { label: 'delete_empty_cascade' });
+        continue;
       }
 
       const existing = await getRequisiteByType(db, objectId, typeIdNum);
