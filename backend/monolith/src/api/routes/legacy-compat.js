@@ -40,19 +40,48 @@ function sanitizeIdentifier(name) {
   return `\`${name}\``;
 }
 
+// PHP's original checkInjection (index.php:617) blocks only 3 keywords:
+//   FROM, SELECT, TABLE
+// The Node port intentionally expands this to 15 keywords as defense-in-depth
+// security hardening. The broader list protects against a wider range of SQL
+// injection patterns (e.g. UNION-based, stacked queries, DDL attacks).
+//
+// Tradeoff: the expanded list increases false-positive risk for legitimate
+// search values that happen to contain whole words like "where", "union",
+// "create", etc. Word-boundary matching (\b) mitigates this — substrings
+// inside longer words (e.g. "timetable", "autoupdate") are NOT flagged.
+// If false positives arise, callers can pass strictMode=true to fall back
+// to the original PHP 3-keyword list.
+
+/** @type {RegExp} Expanded 15-keyword SQL injection pattern (Node hardening) */
+const SQL_KEYWORDS_EXPANDED_RE = /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|UNION|FROM|TABLE|WHERE|INTO|EXEC|EXECUTE|CREATE|TRUNCATE)\b/i;
+
+/** @type {RegExp} Original PHP 3-keyword SQL injection pattern */
+const SQL_KEYWORDS_STRICT_RE = /\b(FROM|SELECT|TABLE)\b/i;
+
 /**
  * Check user-supplied search values for SQL injection attempts.
  * Port of PHP checkInjection() (index.php:617) with expanded keyword list.
  *
+ * The PHP original checks only 3 SQL keywords: `FROM`, `SELECT`, `TABLE`.
+ * This Node port intentionally expands the list to 15 keywords for broader
+ * defense-in-depth protection. All matching is word-boundary delimited to
+ * avoid false positives on substrings (e.g. "information" won't match "from").
+ *
  * @param {string} value - The user-supplied value to check
+ * @param {object} [options] - Optional configuration
+ * @param {boolean} [options.strictMode=false] - When true, use the original
+ *   PHP 3-keyword list (FROM, SELECT, TABLE) for backward compatibility.
+ *   Useful when the expanded list causes false positives on legitimate values.
  * @returns {string} The original value if safe
  * @throws {Error} If a SQL keyword is detected
  */
-function checkInjection(value) {
+function checkInjection(value, options) {
   if (typeof value !== 'string') return value;
-  // Match whole SQL keywords (word-boundary delimited, case-insensitive)
-  const SQL_KEYWORDS_RE = /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|UNION|FROM|TABLE|WHERE|INTO|EXEC|EXECUTE|CREATE|TRUNCATE)\b/i;
-  const match = value.match(SQL_KEYWORDS_RE);
+  const re = options && options.strictMode
+    ? SQL_KEYWORDS_STRICT_RE
+    : SQL_KEYWORDS_EXPANDED_RE;
+  const match = value.match(re);
   if (match) {
     throw new Error(`No SQL clause allowed in search fields. Found: ${match[0]}`);
   }
@@ -110,7 +139,7 @@ async function getFile(db, file, fatal = true) {
   try {
     return await fsPromises.readFile(defaultPath, 'utf-8');
   } catch {
-    if (!fatal) return false;
+    if (!fatal) return '';
     throw new Error(`Template ${file} is not found!`);
   }
 }
@@ -726,14 +755,10 @@ function safePath(base, userInput) {
 function localize(text, locale) {
   if (!text || !text.includes('<t9n>')) return text || '';
   const loc = (locale || 'EN').toUpperCase();
-  return text.replace(/<t9n>[\s\S]*?<\/t9n>/g, (match) => {
-    const marker = `[${loc}]`;
-    const idx = match.indexOf(marker);
-    if (idx === -1) return '';
-    const rest = match.slice(idx + marker.length);
-    const m = rest.match(/^([\s\S]*?)(?:\[[A-Z]{2}\]|<\/t9n>)/);
-    return m ? m[1] : '';
-  });
+  const re = new RegExp(`<t9n>(?:(?!</?t9n>).)*?\\[${loc}\\]((?:(?!\\[[A-Z]{2}\\])(?!</t9n>).)*)(?:\\[[A-Z]{2}\\](?:(?!</t9n>).)*)?</t9n>`, 'gs');
+  // Two-pass: extract locale content, then strip any unmatched <t9n> blocks
+  const result = text.replace(re, '$1');
+  return result.replace(/<t9n>.*?<\/t9n>/gs, '');
 }
 
 /**
@@ -753,11 +778,15 @@ function localize(text, locale) {
  * @param {object}  reportData  - Dataset rows keyed by block path
  * @param {object}  globalVars  - Global template variables (db, user, token, etc.)
  * @param {number}  [depth=0]   - Current recursion depth (infinite-loop guard)
+ * @param {object}  [options={}] - Additional options for PHP parity
+ * @param {object}  [options.requestVars]  - $_GET/$_POST vars for {_request_.xxx} namespace
+ * @param {object}  [options.parentVars]   - Parent block's current row vars for {_parent_.xxx}
+ * @param {Function} [options.getBlockData] - Callback(blockPath) returning array of row objects
  * @returns {string} Rendered HTML for this block (all iterations concatenated)
  */
 const MAX_PARSE_DEPTH = 100;
 
-function parseBlock(blocks, blockPath, reportData, globalVars, depth = 0) {
+function parseBlock(blocks, blockPath, reportData, globalVars, depth = 0, options = {}) {
   if (depth > MAX_PARSE_DEPTH) {
     throw new Error(
       `Parse_block: maximum recursion depth (${MAX_PARSE_DEPTH}) exceeded at "${blockPath}"`
@@ -769,64 +798,152 @@ function parseBlock(blocks, blockPath, reportData, globalVars, depth = 0) {
     return '';
   }
 
-  // 1. Get data rows for this block from reportData
-  const rows = (reportData && reportData[blockPath]) || [];
+  const { requestVars, parentVars, getBlockData } = options;
+
+  // 1. Get data rows for this block from reportData, with getBlockData fallback
+  //    PHP calls Get_block_data() dynamically when data is not pre-populated.
+  let rows = (reportData && reportData[blockPath]) || [];
+  if (rows.length === 0 && typeof getBlockData === 'function') {
+    const dynamicRows = getBlockData(blockPath);
+    if (Array.isArray(dynamicRows)) {
+      rows = dynamicRows;
+    }
+  }
+
+  // Use dequeuing model (array_shift) — PHP uses while(!isset($end)) with array_shift.
+  // Clone the array so we can shift from it without mutating the original.
+  const queue = rows.length > 0 ? [...rows] : null;
 
   // 2. Identify child blocks — any block whose PARENT equals this blockPath
   const childPaths = Object.keys(blocks).filter(
     (key) => blocks[key].PARENT === blockPath
   );
 
-  // If there are no data rows, render the block once with just global vars
-  // (structural / layout blocks that don't correspond to a query).
-  const iterations = rows.length > 0 ? rows : [{}];
-
   let output = '';
 
-  for (const row of iterations) {
-    // Start with the raw block content
-    let content = block.CONTENT;
-
-    // 2a. Replace {colname} data placeholders from the current row.
-    //     PHP does this via str_replace on CUR_VARS keys.
-    //     We match {word} tokens but skip reserved namespaces (_global_, _block_).
-    content = content.replace(/\{([^{}]+)\}/g, (match, key) => {
-      // Skip namespace-prefixed placeholders — handled separately
-      if (key.startsWith('_global_.') || key.startsWith('_block_.')) {
-        return match;
-      }
-      // Replace with row value if present, otherwise leave placeholder
-      if (row && Object.prototype.hasOwnProperty.call(row, key)) {
-        const val = row[key];
-        return val != null ? String(val) : '';
-      }
-      return match;
-    });
-
-    // 2b. Replace {_global_.varname} with global variables
-    if (globalVars) {
-      content = content.replace(/\{_global_\.([^{}]+)\}/g, (match, varName) => {
-        if (Object.prototype.hasOwnProperty.call(globalVars, varName)) {
-          const val = globalVars[varName];
-          return val != null ? String(val) : '';
-        }
-        return match;
-      });
-    }
-
-    // 2c. Recursively render child blocks and insert at {_block_.childpath} points
-    for (const childPath of childPaths) {
-      const childHtml = parseBlock(
-        blocks, childPath, reportData, globalVars, depth + 1
+  // PHP dequeuing model: shift rows one at a time; if no rows, render once with empty row
+  if (queue) {
+    while (queue.length > 0) {
+      const row = queue.shift();
+      const rendered = _renderIteration(
+        block, blocks, blockPath, row, globalVars, childPaths,
+        reportData, depth, options
       );
-      const insertionPoint = `{_block_.${childPath}}`;
-      content = content.split(insertionPoint).join(childHtml);
+      if (rendered === null) break; // early-exit on missing placeholder
+      output += rendered;
     }
+  } else {
+    // Structural / layout blocks with no data — render once
+    const rendered = _renderIteration(
+      block, blocks, blockPath, {}, globalVars, childPaths,
+      reportData, depth, options
+    );
+    if (rendered !== null) {
+      output += rendered;
+    }
+  }
 
-    output += content;
+  // Root-level unescape: restore &#123; → { when processing &main or root block (depth === 0)
+  if (depth === 0) {
+    output = output.replace(/&#123;/g, '{');
   }
 
   return output;
+}
+
+/**
+ * Render a single iteration of a block with the given row data.
+ * Returns null if a data placeholder is missing (early-exit signal).
+ * @private
+ */
+function _renderIteration(
+  block, blocks, blockPath, row, globalVars, childPaths,
+  reportData, depth, options
+) {
+  const { requestVars, parentVars, getBlockData } = options;
+  let content = block.CONTENT;
+  let missingPlaceholder = false;
+
+  // 2a. Replace {colname} data placeholders from the current row.
+  //     Also handles {_parent_.xxx} and {_request_.xxx} namespaces.
+  //     HTML-escape `{` in data values → &#123; to prevent recursive placeholder injection.
+  content = content.replace(/\{([^{}]+)\}/g, (match, key) => {
+    // Skip namespace-prefixed placeholders handled separately
+    if (key.startsWith('_global_.') || key.startsWith('_block_.')) {
+      return match;
+    }
+
+    // {_parent_.varname} — resolve from parent block's variables
+    if (key.startsWith('_parent_.')) {
+      const parentKey = key.slice('_parent_.'.length);
+      if (parentVars && Object.prototype.hasOwnProperty.call(parentVars, parentKey)) {
+        const val = parentVars[parentKey];
+        return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+      }
+      return match;
+    }
+
+    // {_request_.varname} — resolve from $_GET/$_POST equivalent
+    if (key.startsWith('_request_.')) {
+      const reqKey = key.slice('_request_.'.length);
+      if (requestVars && Object.prototype.hasOwnProperty.call(requestVars, reqKey)) {
+        const val = requestVars[reqKey];
+        return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+      }
+      return match;
+    }
+
+    // Replace with row value if present, otherwise signal missing placeholder
+    if (row && Object.prototype.hasOwnProperty.call(row, key)) {
+      const val = row[key];
+      // HTML-escape { in values to prevent recursive placeholder injection
+      return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+    }
+
+    // Early-exit: if row has data (non-empty) but this key is missing, break
+    if (row && Object.keys(row).length > 0) {
+      missingPlaceholder = true;
+    }
+    return match;
+  });
+
+  // Early-exit on missing data placeholder (PHP breaks on first missing)
+  if (missingPlaceholder) {
+    return null;
+  }
+
+  // 2b. Replace {_global_.varname} with global variables, with resolveBuiltIn fallback
+  if (globalVars || true) {
+    content = content.replace(/\{_global_\.([^{}]+)\}/g, (match, varName) => {
+      if (globalVars && Object.prototype.hasOwnProperty.call(globalVars, varName)) {
+        const val = globalVars[varName];
+        return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+      }
+      // BuiltIn() fallback: call resolveBuiltIn for system variables like today, now, etc.
+      const builtInResult = resolveBuiltIn(`%${varName.toUpperCase()}%`, {}, '', 0, '', {});
+      // If resolveBuiltIn resolved it (returned something different from the input), use it
+      if (builtInResult !== `%${varName.toUpperCase()}%`) {
+        return String(builtInResult).replace(/\{/g, '&#123;');
+      }
+      return match;
+    });
+  }
+
+  // 2c. Recursively render child blocks and insert at {_block_.childpath} points
+  //     Pass current row as parentVars so children can use {_parent_.xxx}
+  for (const childPath of childPaths) {
+    const childOptions = {
+      ...options,
+      parentVars: row, // current row becomes parent vars for child blocks
+    };
+    const childHtml = parseBlock(
+      blocks, childPath, reportData, globalVars, depth + 1, childOptions
+    );
+    const insertionPoint = `{_block_.${childPath}}`;
+    content = content.split(insertionPoint).join(childHtml);
+  }
+
+  return content;
 }
 
 /**
@@ -2536,18 +2653,19 @@ function legacyXsrfCheck(req, res, next) {
  * Port of PHP Check_Types_Grant() (index.php:967).
  *
  * Admin users always get 'WRITE'. Otherwise, checks grants[0] (the type-system
- * grant at ID 0) for 'READ' or 'WRITE'. When fatal is true and the user lacks
- * access, throws an object with status 403 so callers can translate it into an
- * HTTP response.
+ * grant at ID 0) for 'READ' or 'WRITE'. When fatal is true, returns an error
+ * object with HTTP 200 status and JSON error body (matching PHP's die() behavior).
  *
  * @param {Object} grants   - Loaded grants object (from loadGrants)
  * @param {string} username - Current username
- * @param {boolean} [fatal=true] - If true, throw on insufficient grant
- * @returns {string|undefined} 'READ' or 'WRITE', or undefined when non-fatal and no grant
+ * @param {boolean} [fatal=true] - If true, return error object on insufficient grant
+ * @param {string} [role=''] - Current user role name (included in error message for PHP parity)
+ * @returns {string|{error: string, status: number}|undefined} 'READ' or 'WRITE', error object when fatal, or undefined when non-fatal
  */
-function checkTypesGrant(grants, username, fatal = true) {
+function checkTypesGrant(grants, username, fatal = true, role = '') {
   // Admin always has WRITE access — mirrors PHP: if($GLOBALS["GLOBAL_VARS"]["user"] == "admin") return "WRITE"
-  if (username && username.toLowerCase() === 'admin') {
+  // PHP uses exact match (==) against "admin", no case folding
+  if (username && username === 'admin') {
     return 'WRITE';
   }
 
@@ -2558,11 +2676,10 @@ function checkTypesGrant(grants, username, fatal = true) {
     }
   }
 
-  // No valid grant found
+  // No valid grant found — mirrors PHP die() which returns HTTP 200 with error JSON body
   if (fatal) {
-    const err = new Error('You do not have the grant to view and edit the metadata');
-    err.status = 403;
-    throw err;
+    const rolePrefix = role ? `[${role}] ` : '';
+    return { error: `${rolePrefix}You do not have the grant to view and edit the metadata`, status: 200 };
   }
 
   return undefined;
@@ -2577,20 +2694,20 @@ function checkTypesGrant(grants, username, fatal = true) {
  */
 async function legacyDdlGrantCheck(req, res, next) {
   const db = req.params.db;
-  const { grants, username } = req.legacyUser || {};
+  const { grants, username, role } = req.legacyUser || {};
 
   try {
-    const grantLevel = checkTypesGrant(grants || {}, username || '', true);
+    const grantLevel = checkTypesGrant(grants || {}, username || '', true, role || '');
+    if (grantLevel && typeof grantLevel === 'object' && grantLevel.error) {
+      // checkTypesGrant returned an error object (PHP die() parity — HTTP 200 with JSON error body)
+      return res.status(200).json({ error: grantLevel.error });
+    }
     if (grantLevel !== 'WRITE') {
       const locale = getLocale(req, db);
       return res.status(403).json({ error: t9n('insufficient_type_mod', locale) });
     }
     next();
   } catch (error) {
-    if (error.status === 403) {
-      const locale = getLocale(req, db);
-      return res.status(403).json({ error: error.message });
-    }
     logger.error({ error: error.message, db }, '[legacyDdlGrantCheck] Error');
     const locale = getLocale(req, db);
     return res.status(200).json({ error: t9n('grant_check_failed', locale) });
@@ -6566,7 +6683,11 @@ async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt
   }
 
   // ── Query 2: Stored values (PHP GetObjectReqs query 2) ─────────────────
-  const q2 = `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
+  // PHP conditionally builds the second SELECT: the COUNT/GROUP BY variant
+  // is only used when array types exist (isset($GLOBALS["ARR_typs"])).
+  const hasArrayTypes = Object.keys(arrTyps).length > 0;
+  const q2 = hasArrayTypes
+    ? `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
                 CASE WHEN typs.up=0 THEN 0 ELSE reqs.val END AS val,
                 reqs.ord, typs.id AS t, COUNT(1) AS arr_num,
                 origs.t AS bt, typs.val AS ref_val
@@ -6575,6 +6696,15 @@ async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt
          LEFT JOIN ${z} origs ON origs.id = typs.t
          WHERE reqs.up = ?
          GROUP BY val, id, t
+         ORDER BY reqs.ord`
+    : `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
+                CASE WHEN typs.up=0 THEN 0 ELSE reqs.val END AS val,
+                reqs.ord, typs.id AS t, 1 AS arr_num,
+                origs.t AS bt, typs.val AS ref_val
+         FROM ${z} reqs
+         JOIN ${z} typs  ON typs.id  = reqs.t
+         LEFT JOIN ${z} origs ON origs.id = typs.t
+         WHERE reqs.up = ?
          ORDER BY reqs.ord`;
   const { rows: storedRows } = await execSql(pool, q2, [id], { label: 'getCurrentValues_q2', db });
 
@@ -6605,7 +6735,13 @@ async function getCurrentValues(pool, db, id, typ, reqs, refTyps, arrTyps, revBt
 
     // Reverse base-type mapping
     const baseTypId = meta.base_typ;
-    revBt[key] = REV_BASE_TYPE[baseTypId] || revBt[baseTypId] || '';
+    const mappedType = REV_BASE_TYPE[baseTypId] || revBt[baseTypId] || '';
+    if (!mappedType) {
+      logger.warn('[getCurrentValues] Unknown base type mapping — falling back to empty string', {
+        db, reqKey: key, baseTypId,
+      });
+    }
+    revBt[key] = mappedType;
 
     if (rows[key] !== undefined) {
       // Direct match — stored value keyed by req type id
@@ -6773,10 +6909,14 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     const currentRefTyps = {};
     const currentArrTyps = {};
     const currentRevBt = {};
-    const currentValues = await getCurrentValues(
-      pool, db, objectId, objTypeEarly,
-      currentReqs, currentRefTyps, currentArrTyps, currentRevBt
-    );
+    // getCurrentValues mutates the passed-in objects AND returns a clean result
+    // object.  Destructure so every property is available to downstream logic.
+    const { reqs: currentReqVals, reqTyps: currentReqTyps,
+            notNull: currentNotNull, booleans: currentBooleans } =
+      await getCurrentValues(
+        pool, db, objectId, objTypeEarly,
+        currentReqs, currentRefTyps, currentArrTyps, currentRevBt
+      );
 
     // Normal save (not copy)
     // Update value if provided
@@ -10829,16 +10969,38 @@ async function compileReport(pool, db, reportId) {
 /**
  * Check whether a given type is a reference type within a compiled report.
  *
- * PHP equivalent (index.php:1750):
- *   function isRef($id, $par, $typ) {
- *     if(isset($GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ]))
- *       return $GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ];
- *     return false;
- *   }
+ * ### Signature mapping (PHP 3-param → Node 2-param)
  *
- * @param {object} report - compiled report object (from compileReport)
- * @param {number|string} typ - type ID to check
- * @returns {number|false} the reference target type ID, or false
+ * PHP signature (index.php:1750):
+ * ```php
+ * function isRef($id, $par, $typ) {
+ *   if(isset($GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ]))
+ *     return $GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ];
+ *   return false;
+ * }
+ * ```
+ *
+ * | PHP param | Node equivalent           | Notes                                    |
+ * |-----------|---------------------------|------------------------------------------|
+ * | `$id`     | `report.id`               | Report ID, embedded in the report object |
+ * | `$par`    | `report.parentType`       | Parent type, embedded in the report obj  |
+ * | `$typ`    | `typ` (2nd param)         | Type ID to look up — kept as-is          |
+ *
+ * **Why the signature changed:** In PHP, `$id` is used to index into the
+ * global `$GLOBALS["STORED_REPS"]` array, and `$par` is available on that
+ * same stored entry but is never used inside the function body. In the Node
+ * port, `compileReport()` returns a self-contained report object that already
+ * carries `id`, `parentType`, and `refTyp` — so the caller passes the report
+ * object directly instead of a bare ID. This collapses the first two PHP
+ * parameters into a single `report` object, reducing the arity from 3 to 2.
+ *
+ * @see {@link https://github.com/unidel2035/integram-standalone/issues/336}
+ *
+ * @param {object} report - Compiled report object (from compileReport).
+ *   Must contain `report.refTyp` — a map of type-ID → reference-target-type.
+ * @param {number|string} typ - Type ID to check for reference status.
+ * @returns {number|false} The reference target type ID, or `false` if `typ`
+ *   is not a reference type in this report.
  */
 function isRef(report, typ) {
   const key = String(typ);
@@ -13903,6 +14065,7 @@ export {
   getFile,
   makeTree,
   parseBlock,
+  localize,
 };
 
 export default router;

@@ -1,5 +1,5 @@
 /**
- * checkTypesGrant — Unit tests (Issue #297)
+ * checkTypesGrant — Unit tests (Issue #297, #333)
  *
  * Port of PHP Check_Types_Grant() (index.php:967).
  * Authorization gate for type/metadata operations.
@@ -10,7 +10,7 @@ import { checkTypesGrant } from '../legacy-compat.js';
 
 describe('checkTypesGrant', () => {
   describe('admin bypass', () => {
-    it('returns WRITE for admin user regardless of grants', () => {
+    it('returns WRITE for exact "admin" username regardless of grants', () => {
       expect(checkTypesGrant({}, 'admin')).toBe('WRITE');
     });
 
@@ -18,9 +18,12 @@ describe('checkTypesGrant', () => {
       expect(checkTypesGrant({}, 'admin', true)).toBe('WRITE');
     });
 
-    it('returns WRITE for Admin (case-insensitive)', () => {
-      expect(checkTypesGrant({}, 'Admin')).toBe('WRITE');
-      expect(checkTypesGrant({}, 'ADMIN')).toBe('WRITE');
+    it('does NOT bypass for "Admin" or "ADMIN" (case-sensitive, PHP parity)', () => {
+      // PHP uses exact match: $GLOBALS["GLOBAL_VARS"]["user"] == "admin"
+      const resultAdmin = checkTypesGrant({}, 'Admin', false);
+      const resultADMIN = checkTypesGrant({}, 'ADMIN', false);
+      expect(resultAdmin).toBeUndefined();
+      expect(resultADMIN).toBeUndefined();
     });
 
     it('returns WRITE for admin even when grants[0] is READ', () => {
@@ -37,9 +40,12 @@ describe('checkTypesGrant', () => {
       expect(checkTypesGrant({ 0: 'READ' }, 'someuser')).toBe('READ');
     });
 
-    it('throws 403 when grants[0] has invalid value (fatal=true)', () => {
-      expect(() => checkTypesGrant({ 0: 'NONE' }, 'someuser', true))
-        .toThrow('You do not have the grant to view and edit the metadata');
+    it('returns error object with status 200 when grants[0] has invalid value (fatal=true)', () => {
+      const result = checkTypesGrant({ 0: 'NONE' }, 'someuser', true);
+      expect(result).toEqual({
+        error: 'You do not have the grant to view and edit the metadata',
+        status: 200,
+      });
     });
 
     it('returns undefined when grants[0] has invalid value (fatal=false)', () => {
@@ -47,20 +53,32 @@ describe('checkTypesGrant', () => {
     });
   });
 
-  describe('no grant', () => {
-    it('throws with status 403 when fatal=true and no grants', () => {
-      try {
-        checkTypesGrant({}, 'someuser', true);
-        expect.fail('Should have thrown');
-      } catch (err) {
-        expect(err.message).toBe('You do not have the grant to view and edit the metadata');
-        expect(err.status).toBe(403);
-      }
+  describe('no grant — fatal (PHP die() parity)', () => {
+    it('returns error object with status 200 when fatal=true and no grants', () => {
+      const result = checkTypesGrant({}, 'someuser', true);
+      expect(result).toEqual({
+        error: 'You do not have the grant to view and edit the metadata',
+        status: 200,
+      });
     });
 
-    it('throws when fatal defaults to true', () => {
-      expect(() => checkTypesGrant({}, 'someuser'))
-        .toThrow('You do not have the grant to view and edit the metadata');
+    it('returns error object when fatal defaults to true', () => {
+      const result = checkTypesGrant({}, 'someuser');
+      expect(result).toHaveProperty('error');
+      expect(result).toHaveProperty('status', 200);
+    });
+
+    it('includes role prefix in error message when role is provided', () => {
+      const result = checkTypesGrant({}, 'someuser', true, 'Manager');
+      expect(result).toEqual({
+        error: '[Manager] You do not have the grant to view and edit the metadata',
+        status: 200,
+      });
+    });
+
+    it('omits role prefix when role is empty', () => {
+      const result = checkTypesGrant({}, 'someuser', true, '');
+      expect(result.error).toBe('You do not have the grant to view and edit the metadata');
     });
 
     it('returns undefined when fatal=false and no grants', () => {
