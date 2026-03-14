@@ -592,6 +592,23 @@ const REV_BASE_TYPE = {
   [TYPE.PATH]: 'PATH',                   // 17
 };
 
+// ── Mask constants & removeMasks (PHP index.php:7553-7557) ──────────────
+const NOT_NULL_MASK = /:!NULL:/g;
+const MULTI_MASK    = /:MULTI:/g;
+const ALIAS_MASK    = /:ALIAS=[^:]*:/g;
+
+/**
+ * Strip mask markers from an attrs/val string.
+ * PHP: removeMasks($attrs) — strips NOT_NULL_MASK, MULTI_MASK, ALIAS_MASK.
+ */
+function removeMasks(attrs) {
+  if (!attrs) return '';
+  return attrs
+    .replace(NOT_NULL_MASK, '')
+    .replace(MULTI_MASK, '')
+    .replace(ALIAS_MASK, '');
+}
+
 // Format a raw DB value for PHP-compatible object list display
 function formatObjVal(base, rawVal) {
   if (rawVal === null || rawVal === undefined) return '';
@@ -5798,10 +5815,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       }
 
       // removeMasks: strip :!NULL:, :MULTI:, :ALIAS=...:
-      let stripped = reqVal
-        .replace(/:!NULL:/g, '')
-        .replace(/:MULTI:/g, '')
-        .replace(/:ALIAS=.*?:/g, '');
+      let stripped = removeMasks(reqVal);
 
       if (stripped === '') continue;
 
@@ -7037,7 +7051,7 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
       const aliasMatch = r.val.match(/:ALIAS=([^:]+):/);
       return {
         id: r.id,
-        name: r.val.replace(/:ALIAS=[^:]+:/g, '').replace(/:!NULL:/g, '').replace(/:MULTI:/g, '').trim(),
+        name: removeMasks(r.val).trim(),
         alias: aliasMatch ? aliasMatch[1] : `req_${r.id}`,
         type: r.t
       };
@@ -7459,11 +7473,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     // PHP tries Get_block_data but finds no block and falls through to the normal query.
     // Node.js: only treat as formula when it genuinely starts with '&'.
     const rawAttr = refRows[0].attr || '';
-    const attrsFormula = rawAttr
-      .replace(/:ALIAS=[^:]*:/g, '')
-      .replace(/:!NULL:/g, '')
-      .replace(/:MULTI:/g, '')
-      .trim();
+    const attrsFormula = removeMasks(rawAttr).trim();
 
     if (attrsFormula.startsWith('&')) {
       // Dynamic formula: the attr value is a report block reference (e.g. "&my_dropdown_report").
@@ -10974,7 +10984,7 @@ router.get('/:db/export/:typeId', async (req, res) => {
       const aliasMatch = r.val.match(/:ALIAS=([^:]+):/);
       return {
         id: r.id,
-        name: r.val.replace(/:ALIAS=[^:]+:/g, '').replace(/:!NULL:/g, '').replace(/:MULTI:/g, '').trim(),
+        name: removeMasks(r.val).trim(),
         alias: aliasMatch ? aliasMatch[1] : null,
         type: r.t
       };
