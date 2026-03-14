@@ -3431,21 +3431,24 @@ router.post('/:db/auth', async (req, res, next) => {
       }
     }
 
-    // PHP: always generates fresh token on every login (prevents session fixation)
-    // Delete old token if exists, then insert new one
-    const token = generateToken();
+    // PHP: reuses existing token if present, only generates new when none exists
+    // (updateTokens, index.php lines 363-383)
+    let token;
+    if (user.token_id && user.token) {
+      // Reuse existing token (PHP: if($row["tok"]) $token = $row["token"])
+      token = user.token;
+    } else {
+      // Generate new token only when none exists (PHP: md5(microtime(TRUE)))
+      token = generateToken();
+      await execSql(pool,
+        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
+        [user.uid, token],
+        { label: 'insertToken', db }
+      );
+    }
     const xsrf = generateXsrf(token, db, db);
 
-    if (user.token_id) {
-      await execSql(pool, `DELETE FROM ${db} WHERE id = ?`, [user.token_id], { label: 'deleteOldToken', db });
-    }
-    await execSql(pool,
-      `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
-      [user.uid, token],
-      { label: 'insertToken', db }
-    );
-
-    if (!user.xsrf) {
+    if (!user.xsrf_id) {
       await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [user.uid, xsrf], { label: 'query_insert' });
     } else {
       // Update xsrf to keep it in sync with token
