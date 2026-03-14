@@ -753,11 +753,15 @@ function localize(text, locale) {
  * @param {object}  reportData  - Dataset rows keyed by block path
  * @param {object}  globalVars  - Global template variables (db, user, token, etc.)
  * @param {number}  [depth=0]   - Current recursion depth (infinite-loop guard)
+ * @param {object}  [options={}] - Additional options for PHP parity
+ * @param {object}  [options.requestVars]  - $_GET/$_POST vars for {_request_.xxx} namespace
+ * @param {object}  [options.parentVars]   - Parent block's current row vars for {_parent_.xxx}
+ * @param {Function} [options.getBlockData] - Callback(blockPath) returning array of row objects
  * @returns {string} Rendered HTML for this block (all iterations concatenated)
  */
 const MAX_PARSE_DEPTH = 100;
 
-function parseBlock(blocks, blockPath, reportData, globalVars, depth = 0) {
+function parseBlock(blocks, blockPath, reportData, globalVars, depth = 0, options = {}) {
   if (depth > MAX_PARSE_DEPTH) {
     throw new Error(
       `Parse_block: maximum recursion depth (${MAX_PARSE_DEPTH}) exceeded at "${blockPath}"`
@@ -769,64 +773,152 @@ function parseBlock(blocks, blockPath, reportData, globalVars, depth = 0) {
     return '';
   }
 
-  // 1. Get data rows for this block from reportData
-  const rows = (reportData && reportData[blockPath]) || [];
+  const { requestVars, parentVars, getBlockData } = options;
+
+  // 1. Get data rows for this block from reportData, with getBlockData fallback
+  //    PHP calls Get_block_data() dynamically when data is not pre-populated.
+  let rows = (reportData && reportData[blockPath]) || [];
+  if (rows.length === 0 && typeof getBlockData === 'function') {
+    const dynamicRows = getBlockData(blockPath);
+    if (Array.isArray(dynamicRows)) {
+      rows = dynamicRows;
+    }
+  }
+
+  // Use dequeuing model (array_shift) — PHP uses while(!isset($end)) with array_shift.
+  // Clone the array so we can shift from it without mutating the original.
+  const queue = rows.length > 0 ? [...rows] : null;
 
   // 2. Identify child blocks — any block whose PARENT equals this blockPath
   const childPaths = Object.keys(blocks).filter(
     (key) => blocks[key].PARENT === blockPath
   );
 
-  // If there are no data rows, render the block once with just global vars
-  // (structural / layout blocks that don't correspond to a query).
-  const iterations = rows.length > 0 ? rows : [{}];
-
   let output = '';
 
-  for (const row of iterations) {
-    // Start with the raw block content
-    let content = block.CONTENT;
-
-    // 2a. Replace {colname} data placeholders from the current row.
-    //     PHP does this via str_replace on CUR_VARS keys.
-    //     We match {word} tokens but skip reserved namespaces (_global_, _block_).
-    content = content.replace(/\{([^{}]+)\}/g, (match, key) => {
-      // Skip namespace-prefixed placeholders — handled separately
-      if (key.startsWith('_global_.') || key.startsWith('_block_.')) {
-        return match;
-      }
-      // Replace with row value if present, otherwise leave placeholder
-      if (row && Object.prototype.hasOwnProperty.call(row, key)) {
-        const val = row[key];
-        return val != null ? String(val) : '';
-      }
-      return match;
-    });
-
-    // 2b. Replace {_global_.varname} with global variables
-    if (globalVars) {
-      content = content.replace(/\{_global_\.([^{}]+)\}/g, (match, varName) => {
-        if (Object.prototype.hasOwnProperty.call(globalVars, varName)) {
-          const val = globalVars[varName];
-          return val != null ? String(val) : '';
-        }
-        return match;
-      });
-    }
-
-    // 2c. Recursively render child blocks and insert at {_block_.childpath} points
-    for (const childPath of childPaths) {
-      const childHtml = parseBlock(
-        blocks, childPath, reportData, globalVars, depth + 1
+  // PHP dequeuing model: shift rows one at a time; if no rows, render once with empty row
+  if (queue) {
+    while (queue.length > 0) {
+      const row = queue.shift();
+      const rendered = _renderIteration(
+        block, blocks, blockPath, row, globalVars, childPaths,
+        reportData, depth, options
       );
-      const insertionPoint = `{_block_.${childPath}}`;
-      content = content.split(insertionPoint).join(childHtml);
+      if (rendered === null) break; // early-exit on missing placeholder
+      output += rendered;
     }
+  } else {
+    // Structural / layout blocks with no data — render once
+    const rendered = _renderIteration(
+      block, blocks, blockPath, {}, globalVars, childPaths,
+      reportData, depth, options
+    );
+    if (rendered !== null) {
+      output += rendered;
+    }
+  }
 
-    output += content;
+  // Root-level unescape: restore &#123; → { when processing &main or root block (depth === 0)
+  if (depth === 0) {
+    output = output.replace(/&#123;/g, '{');
   }
 
   return output;
+}
+
+/**
+ * Render a single iteration of a block with the given row data.
+ * Returns null if a data placeholder is missing (early-exit signal).
+ * @private
+ */
+function _renderIteration(
+  block, blocks, blockPath, row, globalVars, childPaths,
+  reportData, depth, options
+) {
+  const { requestVars, parentVars, getBlockData } = options;
+  let content = block.CONTENT;
+  let missingPlaceholder = false;
+
+  // 2a. Replace {colname} data placeholders from the current row.
+  //     Also handles {_parent_.xxx} and {_request_.xxx} namespaces.
+  //     HTML-escape `{` in data values → &#123; to prevent recursive placeholder injection.
+  content = content.replace(/\{([^{}]+)\}/g, (match, key) => {
+    // Skip namespace-prefixed placeholders handled separately
+    if (key.startsWith('_global_.') || key.startsWith('_block_.')) {
+      return match;
+    }
+
+    // {_parent_.varname} — resolve from parent block's variables
+    if (key.startsWith('_parent_.')) {
+      const parentKey = key.slice('_parent_.'.length);
+      if (parentVars && Object.prototype.hasOwnProperty.call(parentVars, parentKey)) {
+        const val = parentVars[parentKey];
+        return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+      }
+      return match;
+    }
+
+    // {_request_.varname} — resolve from $_GET/$_POST equivalent
+    if (key.startsWith('_request_.')) {
+      const reqKey = key.slice('_request_.'.length);
+      if (requestVars && Object.prototype.hasOwnProperty.call(requestVars, reqKey)) {
+        const val = requestVars[reqKey];
+        return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+      }
+      return match;
+    }
+
+    // Replace with row value if present, otherwise signal missing placeholder
+    if (row && Object.prototype.hasOwnProperty.call(row, key)) {
+      const val = row[key];
+      // HTML-escape { in values to prevent recursive placeholder injection
+      return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+    }
+
+    // Early-exit: if row has data (non-empty) but this key is missing, break
+    if (row && Object.keys(row).length > 0) {
+      missingPlaceholder = true;
+    }
+    return match;
+  });
+
+  // Early-exit on missing data placeholder (PHP breaks on first missing)
+  if (missingPlaceholder) {
+    return null;
+  }
+
+  // 2b. Replace {_global_.varname} with global variables, with resolveBuiltIn fallback
+  if (globalVars || true) {
+    content = content.replace(/\{_global_\.([^{}]+)\}/g, (match, varName) => {
+      if (globalVars && Object.prototype.hasOwnProperty.call(globalVars, varName)) {
+        const val = globalVars[varName];
+        return val != null ? String(val).replace(/\{/g, '&#123;') : '';
+      }
+      // BuiltIn() fallback: call resolveBuiltIn for system variables like today, now, etc.
+      const builtInResult = resolveBuiltIn(`%${varName.toUpperCase()}%`, {}, '', 0, '', {});
+      // If resolveBuiltIn resolved it (returned something different from the input), use it
+      if (builtInResult !== `%${varName.toUpperCase()}%`) {
+        return String(builtInResult).replace(/\{/g, '&#123;');
+      }
+      return match;
+    });
+  }
+
+  // 2c. Recursively render child blocks and insert at {_block_.childpath} points
+  //     Pass current row as parentVars so children can use {_parent_.xxx}
+  for (const childPath of childPaths) {
+    const childOptions = {
+      ...options,
+      parentVars: row, // current row becomes parent vars for child blocks
+    };
+    const childHtml = parseBlock(
+      blocks, childPath, reportData, globalVars, depth + 1, childOptions
+    );
+    const insertionPoint = `{_block_.${childPath}}`;
+    content = content.split(insertionPoint).join(childHtml);
+  }
+
+  return content;
 }
 
 /**
