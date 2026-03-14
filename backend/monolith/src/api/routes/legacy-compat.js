@@ -10033,6 +10033,11 @@ router.post('/:db/jwt', async (req, res) => {
 
     const publicKey = process.env.INTEGRAM_JWT_PUBLIC_KEY || '';
 
+    if (!publicKey) {
+      // PHP: without JWT_PUBLIC_KEY, openssl_verify fails → die('JWT verification failed')
+      return res.status(200).json({ error: 'JWT verification failed' });
+    }
+
     if (publicKey) {
       // Full RSA-SHA256 verification — matches PHP verifyJWT()
       // PHP: openssl_verify("$header.$payload", $sig, $publicKey, OPENSSL_ALGO_SHA256)
