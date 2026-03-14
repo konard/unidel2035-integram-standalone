@@ -7867,8 +7867,8 @@ router.get('/:db/xsrf', async (req, res) => {
       user: user.uname,
       // PHP: strtolower($row["role"]) where role = role_def.val
       role: (user.role_val || '').toLowerCase(),
-      // PHP: "id":123 (integer, no quotes)
-      id: Number(user.uid),
+      // PHP: "id":"123" (string from mysqli_fetch_array)
+      id: String(user.uid),
       msg: '',
     });
   } catch (error) {
