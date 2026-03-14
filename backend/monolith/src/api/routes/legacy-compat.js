@@ -305,18 +305,48 @@ function isApiRequest(req) {
 }
 
 /**
- * Extract Bearer/plain token from request headers and cookie.
+ * Extract authentication token from request.
+ *
+ * PHP parity (index.php:1114-1128 — Validate_Token):
+ *   1. $_POST["secret"] / $_GET["secret"]  → SECRET type lookup
+ *   2. $_POST["token"]                     → TOKEN type lookup
+ *   3. $_COOKIE[$z]                        → TOKEN type lookup
+ *   4. Authorization / X-Authorization     → Bearer/Basic (TOKEN type)
+ *
  * @param {object} req - Express request
  * @param {string} db  - database name (cookie key)
- * @returns {string}   - token or ''
+ * @returns {{token: string, tokenType: number}} - token value and DB type constant
  */
 function extractToken(req, db) {
+  // 1. Secret from POST body or query string (PHP: $_POST["secret"] || $_GET["secret"])
+  const secret = req.body?.secret || req.query?.secret;
+  if (secret) {
+    return { token: String(secret), tokenType: TYPE.SECRET };
+  }
+
+  // 2. Token from POST body (PHP: $_POST["token"])
+  if (req.body?.token) {
+    return { token: String(req.body.token), tokenType: TYPE.TOKEN };
+  }
+
+  // 3. Cookie (PHP: $_COOKIE[$z])
+  const cookieToken = req.cookies?.[db];
+  if (cookieToken) {
+    return { token: String(cookieToken), tokenType: TYPE.TOKEN };
+  }
+
+  // 4. Authorization headers (Bearer)
   const authHeader  = req.headers.authorization   || '';
   const xAuthHeader = req.headers['x-authorization'] || '';
-  return req.cookies?.[db] ||
+  const headerToken =
     (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader) ||
     (xAuthHeader.startsWith('Bearer ') ? xAuthHeader.slice(7) : xAuthHeader) ||
     '';
+  if (headerToken) {
+    return { token: headerToken, tokenType: TYPE.TOKEN };
+  }
+
+  return { token: '', tokenType: TYPE.TOKEN };
 }
 
 /**
@@ -2492,17 +2522,18 @@ async function legacyAuthMiddleware(req, res, next) {
     return res.status(401).json([{ error: t9n('invalid_database', locale) }]);
   }
 
-  const token = extractToken(req, db);
+  const { token, tokenType } = extractToken(req, db);
 
   try {
     const pool = getPool();
 
     // --- Attempt token-based authentication ---
+    // PHP parity: uses TYPE.SECRET (130) for secret auth, TYPE.TOKEN (125) for token/cookie/header
     if (token) {
       const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
                 role_def.val role_val, role_def.id roleId
          FROM ${db} u
-         JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
+         JOIN ${db} tok ON tok.up=u.id AND tok.t=${tokenType} AND tok.val=?
          LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
          LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
            ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
@@ -2511,8 +2542,13 @@ async function legacyAuthMiddleware(req, res, next) {
 
       if (rows.length > 0) {
         const user = rows[0];
-        const xsrf = user.xsrf_val || generateXsrf(token, db, db);
+        const xsrf = user.xsrf_val || generateXsrf(token, user.uname || '', db);
         const roleId = user.roleId || 0;
+
+        // PHP parity: secret auth sets a session-only cookie (index.php:1120)
+        if (tokenType === TYPE.SECRET) {
+          res.cookie(db, token, { path: '/' }); // session cookie (no maxAge)
+        }
         const grants = roleId ? await getGrants(pool, db, roleId, {
           username: user.uname, uid: user.uid, role: (user.role_val || '').toLowerCase(), roleId,
         }) : {};
@@ -3119,7 +3155,7 @@ router.get('/:db/auth', async (req, res, next) => {
   if (!isApiRequest(req)) return next();
   const locale = getLocale(req, db);
   if (!isValidDbName(db)) return res.status(200).json([{ error: t9n('invalid_database_name', locale) }]);
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
   if (!token) return res.status(200).json([{ error: t9n('not_logged', locale) }]);
   try {
     const pool = getPool();
@@ -4435,7 +4471,7 @@ router.all('/:db/exit', async (req, res) => {
   const { db } = req.params;
 
   // Delete ALL user tokens (PHP: DELETE FROM $z WHERE up=user_id AND t=TOKEN)
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
   if (token && isValidDbName(db)) {
     try {
       const pool = getPool();
@@ -4521,7 +4557,7 @@ router.post('/:db', async (req, res, next) => {
   const action = req.body?.action || req.query?.action;
   if (action === 'report') return next();
 
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   if (!token) {
     // Not authenticated — serve login page (same as GET /:db without token)
@@ -4587,7 +4623,7 @@ router.get('/:db', async (req, res, next) => {
     return next();
   }
 
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   logger.info('[Legacy Page] Request', { db, hasToken: !!token });
 
@@ -4717,7 +4753,7 @@ router.get('/:db/:page*', async (req, res, next) => {
     return next();
   }
 
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   // If no token and not auth-related, redirect to login
   // JSON API requests get a 401 instead of a redirect
@@ -7943,7 +7979,7 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
  */
 router.get('/:db/xsrf', async (req, res) => {
   const { db } = req.params;
-  const token = extractToken(req, db);
+  const { token } = extractToken(req, db);
 
   if (!token || !isValidDbName(db)) {
     // No token — return minimal info (client will redirect to login)
