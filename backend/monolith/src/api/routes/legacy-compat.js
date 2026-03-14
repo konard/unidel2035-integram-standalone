@@ -4944,9 +4944,21 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       });
     }
 
+    // Fetch object's type early — needed to detect when t{objType}=val means "update a.val"
+    // (smartq sends t{parentType}=newName when inline-editing the main column)
+    const [objInfoEarly] = await pool.query(
+      `SELECT t, up, val FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
+    );
+    const objTypeEarly = objInfoEarly.length > 0 ? objInfoEarly[0].t : 0;
+    const objValEarly = objInfoEarly.length > 0 ? objInfoEarly[0].val : '';
+
     // Normal save (not copy)
     // Update value if provided
     if (req.body.val !== undefined) {
+      // PHP line 8098: prevent renaming the admin user (val === db name)
+      if (objTypeEarly === TYPE.USER && objValEarly === db && String(req.body.val) !== db) {
+        return res.status(200).json({ error: 'Please create another user instead of renaming the admin' });
+      }
       await updateRowValue(db, objectId, req.body.val);
     }
 
@@ -4989,13 +5001,6 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       req.body[`t${refTypeId}`] = String(refId);
     }
 
-    // Fetch object's type early — needed to detect when t{objType}=val means "update a.val"
-    // (smartq sends t{parentType}=newName when inline-editing the main column)
-    const [objInfoEarly] = await pool.query(
-      `SELECT t, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
-    );
-    const objTypeEarly = objInfoEarly.length > 0 ? objInfoEarly[0].t : 0;
-
     // Track boolean type IDs to handle unchecked booleans later
     const booleanTypeIds = new Set();
     const processedTypeIds = new Set();
@@ -5010,6 +5015,11 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       // When smartq inline-edits the main column, it sends t{objType}=newName.
       // This means "update a.val", not a child requisite row.
       if (typeIdNum === objTypeEarly) {
+        // PHP line 8098: prevent renaming the admin user
+        // The admin user's val equals the database name ($z)
+        if (objTypeEarly === TYPE.USER && objValEarly === db && String(attrValue) !== db) {
+          return res.status(200).json({ error: 'Please create another user instead of renaming the admin' });
+        }
         await updateRowValue(db, objectId, String(attrValue));
         continue;
       }
