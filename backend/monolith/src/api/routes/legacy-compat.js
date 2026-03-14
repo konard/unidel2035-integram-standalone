@@ -440,10 +440,35 @@ function safePath(base, userInput) {
 }
 
 /**
+ * Extract locale-specific text from inline <t9n> translation tags in HTML.
+ * PHP parity: index.php line 7245 — function localize($text).
+ *
+ * Format: <t9n>[RU]Русский текст[EN]English text</t9n>
+ * Given locale="EN", returns the string with <t9n> blocks replaced by "English text".
+ * If no <t9n> tags are present, returns the text unchanged.
+ *
+ * @param {string} text   - HTML string potentially containing <t9n> tags
+ * @param {string} locale - locale code: 'RU', 'EN', etc.
+ * @returns {string} text with <t9n> tags resolved to the requested locale
+ */
+function localize(text, locale) {
+  if (!text || !text.includes('<t9n>')) return text || '';
+  const loc = (locale || 'EN').toUpperCase();
+  return text.replace(/<t9n>[\s\S]*?<\/t9n>/g, (match) => {
+    const marker = `[${loc}]`;
+    const idx = match.indexOf(marker);
+    if (idx === -1) return '';
+    const rest = match.slice(idx + marker.length);
+    const m = rest.match(/^([\s\S]*?)(?:\[[A-Z]{2}\]|<\/t9n>)/);
+    return m ? m[1] : '';
+  });
+}
+
+/**
  * Render main.html template with PHP-style global variables.
  * PHP replaces {_global_.xxx} placeholders before serving the template.
  */
-async function renderMainPage(db, token) {
+async function renderMainPage(db, token, locale) {
   const mainPage = path.join(legacyPath, 'templates/main.html');
   if (!fs.existsSync(mainPage)) return null;
 
@@ -485,6 +510,9 @@ async function renderMainPage(db, token) {
 
   // Remove PHP template loop blocks (leave empty arrays)
   html = html.replace(/<!--\s*Begin:[^>]*-->[^]*?<!--\s*End:[^>]*-->/g, '');
+
+  // Resolve inline <t9n> translation tags (PHP parity: localize())
+  html = localize(html, locale || 'RU');
 
   return html;
 }
@@ -3968,7 +3996,8 @@ router.post('/:db', async (req, res, next) => {
       return res.redirect(302, '/' + db);
     }
 
-    const rendered = await renderMainPage(db, token);
+    const locale = getLocale(req, db);
+    const rendered = await renderMainPage(db, token, locale);
     if (rendered) {
       return res.type('html').send(rendered);
     }
@@ -4109,7 +4138,8 @@ router.get('/:db', async (req, res, next) => {
     }
 
     // Valid token - render main page with template variables
-    const rendered = await renderMainPage(db, token);
+    const locale = getLocale(req, db);
+    const rendered = await renderMainPage(db, token, locale);
     if (rendered) {
       return res.type('html').send(rendered);
     }
