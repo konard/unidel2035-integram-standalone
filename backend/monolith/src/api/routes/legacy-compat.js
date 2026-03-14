@@ -2536,18 +2536,19 @@ function legacyXsrfCheck(req, res, next) {
  * Port of PHP Check_Types_Grant() (index.php:967).
  *
  * Admin users always get 'WRITE'. Otherwise, checks grants[0] (the type-system
- * grant at ID 0) for 'READ' or 'WRITE'. When fatal is true and the user lacks
- * access, throws an object with status 403 so callers can translate it into an
- * HTTP response.
+ * grant at ID 0) for 'READ' or 'WRITE'. When fatal is true, returns an error
+ * object with HTTP 200 status and JSON error body (matching PHP's die() behavior).
  *
  * @param {Object} grants   - Loaded grants object (from loadGrants)
  * @param {string} username - Current username
- * @param {boolean} [fatal=true] - If true, throw on insufficient grant
- * @returns {string|undefined} 'READ' or 'WRITE', or undefined when non-fatal and no grant
+ * @param {boolean} [fatal=true] - If true, return error object on insufficient grant
+ * @param {string} [role=''] - Current user role name (included in error message for PHP parity)
+ * @returns {string|{error: string, status: number}|undefined} 'READ' or 'WRITE', error object when fatal, or undefined when non-fatal
  */
-function checkTypesGrant(grants, username, fatal = true) {
+function checkTypesGrant(grants, username, fatal = true, role = '') {
   // Admin always has WRITE access — mirrors PHP: if($GLOBALS["GLOBAL_VARS"]["user"] == "admin") return "WRITE"
-  if (username && username.toLowerCase() === 'admin') {
+  // PHP uses exact match (==) against "admin", no case folding
+  if (username && username === 'admin') {
     return 'WRITE';
   }
 
@@ -2558,11 +2559,10 @@ function checkTypesGrant(grants, username, fatal = true) {
     }
   }
 
-  // No valid grant found
+  // No valid grant found — mirrors PHP die() which returns HTTP 200 with error JSON body
   if (fatal) {
-    const err = new Error('You do not have the grant to view and edit the metadata');
-    err.status = 403;
-    throw err;
+    const rolePrefix = role ? `[${role}] ` : '';
+    return { error: `${rolePrefix}You do not have the grant to view and edit the metadata`, status: 200 };
   }
 
   return undefined;
@@ -2577,20 +2577,20 @@ function checkTypesGrant(grants, username, fatal = true) {
  */
 async function legacyDdlGrantCheck(req, res, next) {
   const db = req.params.db;
-  const { grants, username } = req.legacyUser || {};
+  const { grants, username, role } = req.legacyUser || {};
 
   try {
-    const grantLevel = checkTypesGrant(grants || {}, username || '', true);
+    const grantLevel = checkTypesGrant(grants || {}, username || '', true, role || '');
+    if (grantLevel && typeof grantLevel === 'object' && grantLevel.error) {
+      // checkTypesGrant returned an error object (PHP die() parity — HTTP 200 with JSON error body)
+      return res.status(200).json({ error: grantLevel.error });
+    }
     if (grantLevel !== 'WRITE') {
       const locale = getLocale(req, db);
       return res.status(403).json({ error: t9n('insufficient_type_mod', locale) });
     }
     next();
   } catch (error) {
-    if (error.status === 403) {
-      const locale = getLocale(req, db);
-      return res.status(403).json({ error: error.message });
-    }
     logger.error({ error: error.message, db }, '[legacyDdlGrantCheck] Error');
     const locale = getLocale(req, db);
     return res.status(200).json({ error: t9n('grant_check_failed', locale) });
