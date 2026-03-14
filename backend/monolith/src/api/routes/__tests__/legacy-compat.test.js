@@ -86,6 +86,7 @@ const {
   constructWhere,
   formatDateForStorage,
   updateTokens,
+  filterTermsRows,
 } = await import('../legacy-compat.js');
 
 // ─── app factory ─────────────────────────────────────────────────────────────
@@ -230,6 +231,88 @@ describe('GET /:db/terms', () => {
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
+  });
+
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// filterTermsRows — PHP terms filtering algorithm (Issue #389)
+// Verified against PHP index.php lines 8919–8941.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('filterTermsRows (#389)', () => {
+
+  it('keeps normal types and maps id→val and id→t', () => {
+    const rows = [
+      { id: 100, val: 'Client', t: 8, reqs_t: null },
+      { id: 101, val: 'Product', t: 8, reqs_t: null },
+    ];
+    const { typ, base } = filterTermsRows(rows);
+    expect([...typ.entries()]).toEqual([[100, 'Client'], [101, 'Product']]);
+    expect(base.get(100)).toBe(8);
+    expect(base.get(101)).toBe(8);
+  });
+
+  it('filters out CALCULATABLE (t=15) and BUTTON (t=7) base types', () => {
+    const rows = [
+      { id: 100, val: 'Client', t: 8, reqs_t: null },      // SHORT — keep
+      { id: 101, val: 'CalcField', t: 15, reqs_t: null },   // CALCULATABLE — skip
+      { id: 102, val: 'BtnField', t: 7, reqs_t: null },     // BUTTON — skip
+      { id: 103, val: 'Product', t: 8, reqs_t: null },      // SHORT — keep
+    ];
+    const { typ } = filterTermsRows(rows);
+    expect([...typ.keys()]).toEqual([100, 103]);
+  });
+
+  it('removes types used as requisites of other types', () => {
+    // PHP: if($row["reqs_t"]) { unset($typ[$row["reqs_t"]]); $req[$row["reqs_t"]] = ""; }
+    const rows = [
+      { id: 100, val: 'Status', t: 8, reqs_t: null },
+      { id: 200, val: 'Order', t: 8, reqs_t: 100 },  // reqs_t=100 → remove Status
+    ];
+    const { typ } = filterTermsRows(rows);
+    expect([...typ.keys()]).toEqual([200]);
+    expect(typ.has(100)).toBe(false);
+  });
+
+  it('does not re-add a type after it was marked as requisite', () => {
+    // PHP: if(!isset($req[$row["id"]])) $typ[$row["id"]] = $row["val"];
+    // If id=100 appears first, then reqs_t=100 removes it.
+    // If id=100 appears again (from LEFT JOIN), it should NOT be re-added.
+    const rows = [
+      { id: 100, val: 'Status', t: 8, reqs_t: null },
+      { id: 200, val: 'Order', t: 8, reqs_t: 100 },
+      { id: 100, val: 'Status', t: 8, reqs_t: null },  // duplicate from JOIN
+    ];
+    const { typ } = filterTermsRows(rows);
+    expect(typ.has(100)).toBe(false);
+    expect([...typ.keys()]).toEqual([200]);
+  });
+
+  it('preserves insertion order (Map) matching PHP array order', () => {
+    // SQL ORDER BY a.val gives alphabetical; Map preserves this
+    const rows = [
+      { id: 300, val: 'Alpha', t: 8, reqs_t: null },
+      { id: 100, val: 'Beta', t: 8, reqs_t: null },
+      { id: 200, val: 'Gamma', t: 8, reqs_t: null },
+    ];
+    const { typ } = filterTermsRows(rows);
+    expect([...typ.keys()]).toEqual([300, 100, 200]);
+  });
+
+  it('handles empty input', () => {
+    const { typ, base } = filterTermsRows([]);
+    expect(typ.size).toBe(0);
+    expect(base.size).toBe(0);
+  });
+
+  it('handles all types being CALCULATABLE or BUTTON', () => {
+    const rows = [
+      { id: 100, val: 'Calc', t: 15, reqs_t: null },
+      { id: 101, val: 'Btn', t: 7, reqs_t: null },
+    ];
+    const { typ } = filterTermsRows(rows);
+    expect(typ.size).toBe(0);
   });
 });
 

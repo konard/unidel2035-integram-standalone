@@ -1057,6 +1057,41 @@ const REV_BASE_TYPE = {
   [TYPE.PATH]: 'PATH',                   // 17
 };
 
+// ── filterTermsRows — PHP terms filtering algorithm (Issue #389) ────────
+// Extracted from the GET /:db/terms handler for testability.
+// PHP: index.php lines 8923–8933
+// Filters SQL rows from the LEFT JOIN terms query:
+//   - Skips CALCULATABLE (t=15) and BUTTON (t=7) base types
+//   - Tracks which type IDs are used as requisite types ($req)
+//   - Removes types that appear as requisites of other types
+// Returns { typ: Map<id, val>, base: Map<id, t> } preserving SQL ORDER BY a.val.
+
+/**
+ * @param {Array<{id:number, val:string, t:number, reqs_t:number|null}>} rows
+ * @returns {{ typ: Map<number, string>, base: Map<number, number> }}
+ */
+function filterTermsRows(rows) {
+  const base   = new Map(); // id -> t
+  const typ    = new Map(); // id -> val (insertion-ordered, like PHP array)
+  const reqMap = new Set(); // ids used as requisites
+
+  for (const row of rows) {
+    const revBt = REV_BASE_TYPE[row.t] || null;
+    if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
+
+    base.set(row.id, row.t);
+    if (!reqMap.has(row.id)) {
+      typ.set(row.id, row.val);
+    }
+    if (row.reqs_t) {
+      typ.delete(row.reqs_t);
+      reqMap.add(row.reqs_t);
+    }
+  }
+
+  return { typ, base };
+}
+
 // ── isDbVacant — database name uniqueness check (Issue #303) ────────────
 // PHP: isDbVacant($db) — index.php:7493
 // Returns true if `dbName` is not yet registered in the master table, false if taken.
@@ -7837,8 +7872,9 @@ router.all('/:db/_d_main/:typeId', async (req, res) => {
  * GET /:db/terms
  *
  * PHP: index.php lines 8919–8942
- * PHP filters types through Grant_1level($id) — shows only those the user has access to.
- * Node.js now replicates this behavior using the grant1Level function.
+ * Verified (#389): SQL, CALCULATABLE/BUTTON filtering, requisite exclusion,
+ * Grant_1level check, and output format [{id, type, name}] all match PHP.
+ * Filtering logic extracted to filterTermsRows() for testability.
  */
 router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
   const { db } = req.params;
@@ -7886,29 +7922,13 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
        WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
        ORDER BY a.val`, [], { label: 'get_db_terms_select' });
 
-    // Replicate PHP terms filtering logic:
+    // Replicate PHP terms filtering logic (Issue #389 verified):
     // - Skip CALCULATABLE (t=15) and BUTTON (t=7) base types
     // - Track which type IDs are used as requisite types ($req)
     // - Only show types not used as requisites elsewhere
     // Use Map to preserve insertion order (SQL ORDER BY a.val → alphabetical like PHP)
     // Plain objects in JS sort numeric keys ascending, breaking PHP ordering.
-    const base   = new Map(); // id -> t
-    const typ    = new Map(); // id -> val (insertion-ordered, like PHP array)
-    const reqMap = new Set(); // ids used as requisites
-
-    for (const row of rows) {
-      const revBt = REV_BASE_TYPE[row.t] || null;
-      if (revBt === 'CALCULATABLE' || revBt === 'BUTTON') continue;
-
-      base.set(row.id, row.t);
-      if (!reqMap.has(row.id)) {
-        typ.set(row.id, row.val);
-      }
-      if (row.reqs_t) {
-        typ.delete(row.reqs_t);
-        reqMap.add(row.reqs_t);
-      }
-    }
+    const { typ, base } = filterTermsRows(rows);
 
     // Build response array matching PHP: [{id, type, name}]
     // PHP line 8939: {"id":$id,"type":$base[$id],"name":htmlspecialchars($val)}
@@ -13732,6 +13752,7 @@ export {
   parseBlock,
   localize,
   removeMasks,
+  filterTermsRows,
 };
 
 export default router;
