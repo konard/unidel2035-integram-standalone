@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import zlib from 'zlib';
 import path from 'path';
 import fs from 'fs';
+import fsPromises from 'fs/promises';
 import { fileURLToPath } from 'url';
 import logger from '../../utils/logger.js';
 import cookieParser from 'cookie-parser';
@@ -56,6 +57,62 @@ function checkInjection(value) {
     throw new Error(`No SQL clause allowed in search fields. Found: ${match[0]}`);
   }
   return value;
+}
+
+// ── Template File Loader (Issue #307) ────────────────────────────────────────
+
+/**
+ * Port of PHP Get_file() (index.php:1492).
+ * Loads a template file with DB-specific override support.
+ *
+ * Priority chain:
+ *   1. templates/custom/{db}/{file}   (DB-specific override)
+ *   2. templates/{file}               (default template)
+ *
+ * @param {string} db    - Database name (used for custom override directory)
+ * @param {string} file  - Template filename to load
+ * @param {boolean} [fatal=true] - If true, throw when not found; if false, return false
+ * @returns {Promise<string|false>} File contents, or false if non-fatal and not found
+ * @throws {Error} If file is not provided, contains path traversal, or is not found (fatal mode)
+ */
+const TEMPLATES_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../public/templates'
+);
+
+async function getFile(db, file, fatal = true) {
+  if (!file || typeof file !== 'string') {
+    throw new Error('Set file name!');
+  }
+
+  // Path traversal protection: reject ".." or absolute paths
+  if (file.includes('..') || path.isAbsolute(file)) {
+    throw new Error(`Invalid template path: "${file}"`);
+  }
+
+  // Sanitize db as well — it becomes a directory component
+  if (db && (String(db).includes('..') || String(db).includes('/'))) {
+    throw new Error(`Invalid database name: "${db}"`);
+  }
+
+  // 1. Check DB-specific override: templates/custom/{db}/{file}
+  if (db) {
+    const customPath = path.join(TEMPLATES_DIR, 'custom', String(db), file);
+    try {
+      return await fsPromises.readFile(customPath, 'utf-8');
+    } catch {
+      // Fall through to default
+    }
+  }
+
+  // 2. Check default: templates/{file}
+  const defaultPath = path.join(TEMPLATES_DIR, file);
+  try {
+    return await fsPromises.readFile(defaultPath, 'utf-8');
+  } catch {
+    if (!fatal) return false;
+    throw new Error(`Template ${file} is not found!`);
+  }
 }
 
 const router = express.Router();
@@ -13647,6 +13704,7 @@ export {
   isDbVacant,
   updateTokens,
   getCurrentValues,
+  getFile,
 };
 
 export default router;
