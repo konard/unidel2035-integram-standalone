@@ -3065,30 +3065,67 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
 
         // Column filters: F_{colId}=value, FR_{colId}=from, TO_{colId}=to
-        const colFilters = {}, colFrom = {}, colTo = {};
+        // Build consolidated filter dict: { reqId: {F: val, FR: from, TO: to} }
+        const colFilterDict = {};
         for (const [k, v] of Object.entries(allObjParams)) {
+          if (v === undefined || String(v) === '') continue;
           const fm = k.match(/^F_(\d+)$/);
-          if (fm && String(fm[1]) !== String(subId) && v !== undefined && String(v) !== '') {
-            colFilters[fm[1]] = String(v);
+          if (fm && String(fm[1]) !== String(subId)) {
+            if (!colFilterDict[fm[1]]) colFilterDict[fm[1]] = {};
+            colFilterDict[fm[1]].F = String(v);
           }
           const frm = k.match(/^FR_(\d+)$/);
-          if (frm && v !== undefined && String(v) !== '') colFrom[frm[1]] = String(v);
-          const tom = k.match(/^TO_(\d+)$/);
-          if (tom && v !== undefined && String(v) !== '') colTo[tom[1]] = String(v);
-        }
-        for (const [colId, val] of Object.entries(colFilters)) {
-          const pattern = val.includes('%') ? val : `%${val}%`;
-          objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val LIKE ?)`);
-          objWhereParams.push(parseInt(colId, 10), pattern);
-        }
-        for (const colId of new Set([...Object.keys(colFrom), ...Object.keys(colTo)])) {
-          if (colFrom[colId]) {
-            objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val >= ?)`);
-            objWhereParams.push(parseInt(colId, 10), colFrom[colId]);
+          if (frm) {
+            if (!colFilterDict[frm[1]]) colFilterDict[frm[1]] = {};
+            colFilterDict[frm[1]].FR = String(v);
           }
-          if (colTo[colId]) {
-            objWhereParts.push(`EXISTS (SELECT 1 FROM \`${db}\` r WHERE r.up = a.id AND r.t = ? AND r.val <= ?)`);
-            objWhereParams.push(parseInt(colId, 10), colTo[colId]);
+          const tom = k.match(/^TO_(\d+)$/);
+          if (tom) {
+            if (!colFilterDict[tom[1]]) colFilterDict[tom[1]] = {};
+            colFilterDict[tom[1]].TO = String(v);
+          }
+        }
+
+        // If we have column filters, load requisite metadata for constructWhere context
+        let objJoinStr = '';
+        let objDistinct = false;
+        const filterKeys = Object.keys(colFilterDict);
+        if (filterKeys.length > 0) {
+          // Load lightweight req type metadata (base type + ref type)
+          const [reqMeta] = await pool.query(
+            `SELECT a.t AS req_id,
+                    CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ,
+                    refs.id AS ref_id, arrs.id AS arr_id
+             FROM \`${db}\` a, \`${db}\` typs
+             LEFT JOIN \`${db}\` refs ON refs.id=typs.t AND refs.t!=refs.id
+             LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
+             WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`,
+            [subId]
+          );
+
+          const revBT = {};
+          const refTyps = {};
+          const multiKeys = new Set();
+          for (const rm of reqMeta) {
+            const k = String(rm.req_id);
+            revBT[k] = rm.base_typ === 0 ? 'TAB_DELIMITER' : (REV_BASE_TYPE[rm.base_typ] || 'SHORT');
+            if (rm.ref_id != null) refTyps[k] = String(rm.ref_id);
+            if (rm.arr_id != null) multiKeys.add(k);
+          }
+
+          const cwCtx = { revBT, refTyps, multi: multiKeys, db };
+          for (const [colId, filterObj] of Object.entries(colFilterDict)) {
+            const cw = constructWhere(colId, filterObj, String(subId), colId, cwCtx);
+            if (cw.where) {
+              // constructWhere output uses "vals" alias; replace with "a" for object list query
+              objWhereParts.push(cw.where.replace(/^ AND /, '').replace(/\bvals\./g, 'a.'));
+              objWhereParams.push(...cw.params);
+            }
+            if (cw.join) {
+              // Replace "vals" with "a" in JOIN clauses
+              objJoinStr += cw.join.replace(/\bvals\./g, 'a.');
+            }
+            if (cw.distinct) objDistinct = true;
           }
         }
 
@@ -3107,15 +3144,16 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
         const objLimitStr = ` LIMIT ${objOffset}, ${objLimit}`;
 
-        // Total count (same WHERE, no LIMIT)
+        // Total count (same WHERE, no LIMIT); uses JOIN when constructWhere produced JOINs
+        const distinctKw = objDistinct ? 'DISTINCT ' : '';
         const [[countRow]] = await pool.query(
-          `SELECT COUNT(*) AS cnt FROM \`${db}\` a WHERE ${whereStr}`,
+          `SELECT COUNT(${distinctKw}a.id) AS cnt FROM \`${db}\` a${objJoinStr} WHERE ${whereStr}`,
           objWhereParams
         );
         const objTotal = countRow ? Number(countRow.cnt) : 0;
 
         const [objRows] = await pool.query(
-          `SELECT a.id, a.val, a.up, a.t AS base, a.ord FROM \`${db}\` a WHERE ${whereStr} ORDER BY ${objOrderStr}${objLimitStr}`,
+          `SELECT ${distinctKw}a.id, a.val, a.up, a.t AS base, a.ord FROM \`${db}\` a${objJoinStr} WHERE ${whereStr} ORDER BY ${objOrderStr}${objLimitStr}`,
           objWhereParams
         );
 
