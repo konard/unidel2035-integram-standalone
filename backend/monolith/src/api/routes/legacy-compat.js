@@ -1417,6 +1417,9 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
 
   for (const f of Object.keys(filter)) {
     let value = String(filter[f]);
+    // PHP parity (index.php:535-558): USE INDEX (PRIMARY) hint for CROSS JOINs
+    // when the filter is non-selective (negation, wildcard, or empty).
+    const useIdx = hintNeeded(String(filter[f])) ? ' USE INDEX (PRIMARY)' : '';
     let NOT_flag = false;
     let NOT = '';
     let NOT_EQ = '';
@@ -1503,7 +1506,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
         let joinTable, joinCond;
         if (NOT_flag) {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
             joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
             params.push(joinReq);
           } else {
@@ -1515,7 +1518,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
           params.push(idVal);
         } else {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
             joinCond = ` AND r${key}.t=?`;
             params.push(joinReq, idVal);
           } else {
@@ -1542,7 +1545,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
         let joinTable, joinCond;
         if (NOT_flag) {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
             joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
             params.push(joinReq);
           } else {
@@ -1553,7 +1556,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
           whereStr += ` AND (a${key}.id ${search_val} OR a${key}.id IS NULL)`;
         } else {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
             joinCond = ` AND r${key}.t ${search_val}`;
             params.push(joinReq);
           } else {
@@ -1571,9 +1574,9 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
 
     // ── Type-aware WHERE construction ──
     if (ctx.refTyps && ctx.refTyps[key]) {
-      // Reference type — CROSS JOIN pattern
+      // Reference type — CROSS JOIN pattern (PHP parity: USE INDEX hint when non-selective filter)
       if (join) {
-        const jt = ` LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=? AND a${key}.t=?`;
+        const jt = ` LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=? AND a${key}.t=?`;
         if (!joinStr.includes(`a${key}`)) {
           joinStr += jt;
           params.push(joinReq, parseInt(ctx.refTyps[key], 10));
@@ -2049,27 +2052,85 @@ function resolveAllBracketBuiltIns(val, userCtx) {
 }
 
 /**
- * Recursively delete object and all descendants.
- * PHP parity: PHP Delete() — current Node uses flat deleteChildren which misses nested levels.
+ * Recursively delete object and all descendants using batch DELETE.
+ * PHP parity: PHP BatchDelete() (index.php lines 1529–1573).
+ *
+ * Instead of deleting one row at a time, this collects all descendant IDs
+ * first, then deletes in batches using DELETE ... WHERE id IN (...).
+ * Batches flush every BATCH_DELETE_THRESHOLD IDs to bound memory and query size.
  *
  * @param {Object} pool - MySQL pool
  * @param {string} db   - database name
  * @param {number} id   - object ID to delete
  */
-async function recursiveDelete(pool, db, id) {
-  // Get all children first
-  const [children] = await pool.query(
-    `SELECT id FROM ${db} WHERE up = ?`,
-    [id]
-  );
+const BATCH_DELETE_THRESHOLD = 1000;
 
-  // Recurse for each child
-  for (const child of children) {
-    await recursiveDelete(pool, db, child.id);
+async function recursiveDelete(pool, db, id) {
+  // Collect all IDs to delete (children-first / bottom-up order)
+  const idsToDelete = [];
+  await _collectDescendants(pool, db, id, idsToDelete);
+  // Root node last
+  idsToDelete.push(id);
+
+  // Clean up upload files/directories for all objects being deleted.
+  // PHP parity: PHP RemoveDir(GetSubdir($id)."/".GetFilename($id).".".$ext)
+  // removes associated files when deleting objects with FILE requisites.
+  // Group by subdir (floor(id/1000)) to batch cleanup and avoid redundant checks.
+  const subdirsSeen = new Set();
+  for (const objId of idsToDelete) {
+    const subdir = getSubdir(db, objId);
+    const baseName = getFilename(db, objId);
+    const uploadDir = path.join(legacyPath, 'download', db, subdir);
+    // Remove any files matching this object's baseName pattern (any extension)
+    try {
+      if (fs.existsSync(uploadDir)) {
+        const files = fs.readdirSync(uploadDir);
+        for (const file of files) {
+          if (file.startsWith(baseName)) {
+            removeDir(path.join(uploadDir, file));
+          }
+        }
+      }
+    } catch (_e) { /* ignore — dir may not exist */ }
+    subdirsSeen.add(uploadDir);
   }
 
-  // Delete self
-  await pool.query(`DELETE FROM ${db} WHERE id = ?`, [id]);
+  // Clean up empty subdirectories left behind
+  for (const uploadDir of subdirsSeen) {
+    try {
+      if (fs.existsSync(uploadDir)) {
+        const remaining = fs.readdirSync(uploadDir);
+        if (remaining.length === 0) {
+          removeDir(uploadDir);
+        }
+      }
+    } catch (_e) { /* ignore */ }
+  }
+
+  // Delete in batches
+  for (let i = 0; i < idsToDelete.length; i += BATCH_DELETE_THRESHOLD) {
+    const batch = idsToDelete.slice(i, i + BATCH_DELETE_THRESHOLD);
+    const placeholders = batch.map(() => '?').join(',');
+    await pool.query(`DELETE FROM ${db} WHERE id IN (${placeholders})`, batch);
+  }
+}
+
+/**
+ * Recursively collect all descendant IDs (children-first).
+ * @param {Object} pool
+ * @param {string} db
+ * @param {number} parentId
+ * @param {number[]} acc - accumulator array, mutated in-place
+ */
+async function _collectDescendants(pool, db, parentId, acc) {
+  const [children] = await pool.query(
+    `SELECT id FROM ${db} WHERE up = ?`,
+    [parentId]
+  );
+  for (const child of children) {
+    await _collectDescendants(pool, db, child.id, acc);
+    acc.push(child.id);
+  }
 }
 
 /**
@@ -2137,6 +2198,25 @@ function getSubdir(db, id) {
 function getFilename(db, id) {
   const fileNum = ('00' + id).slice(-3);
   return `${fileNum}${fileGetSha(db, id).slice(0, 8)}`;
+}
+
+/**
+ * Recursively remove a file or directory from the filesystem.
+ * PHP parity: PHP RemoveDir() (index.php lines 596–616).
+ *
+ * Uses fs.rmSync with recursive+force to mirror the PHP behaviour:
+ *  - If path is a directory, remove it and all contents recursively.
+ *  - If path is a file, remove the file.
+ *  - If path does not exist, silently do nothing (force: true).
+ *
+ * @param {string} dirPath - absolute path to file or directory to remove
+ */
+function removeDir(dirPath) {
+  try {
+    fs.rmSync(dirPath, { recursive: true, force: true });
+  } catch (err) {
+    logger.warn('[removeDir] Failed to remove path', { dirPath, error: err.message });
+  }
 }
 
 /**
@@ -6179,12 +6259,13 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       }
 
       // File deletion: when value cleared and type is FILE, delete old file
+      // PHP parity: RemoveDir() handles both files and directories recursively
       if (meta && meta.base_type === TYPE.FILE && !finalValue && !uploadedFile) {
         const existing = await getRequisiteByType(db, objectId, typeIdNum);
         if (existing && existing.val) {
           const subdir = getSubdir(db, objectId);
           const oldPath = path.join(legacyPath, 'download', db, subdir, path.basename(existing.val));
-          try { fs.unlinkSync(oldPath); } catch (_e) { /* ignore missing */ }
+          removeDir(oldPath);
         }
       }
 
@@ -7223,7 +7304,9 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
       if (rq.isRef) {
         // Reference type - join through intermediate table (PHP: LEFT JOIN (z r{req} CROSS JOIN z a{req}) ON ...)
-        joinClauses += ` LEFT JOIN (\`${db}\` r${rq.reqId} CROSS JOIN \`${db}\` ${reqAlias}) ON r${rq.reqId}.up = vals.id AND ${reqAlias}.id = r${rq.reqId}.t AND ${reqAlias}.t = ${rq.base}`;
+        // PHP parity (index.php:535-558): apply USE INDEX (PRIMARY) hint when no selective filter
+        const refHint = hintNeeded(searchQuery) ? ' USE INDEX (PRIMARY)' : '';
+        joinClauses += ` LEFT JOIN (\`${db}\` r${rq.reqId} CROSS JOIN \`${db}\` ${reqAlias}${refHint}) ON r${rq.reqId}.up = vals.id AND ${reqAlias}.id = r${rq.reqId}.t AND ${reqAlias}.t = ${rq.base}`;
       } else {
         // Direct requisite (PHP: LEFT JOIN z a{req} ON a{req}.up=vals.id AND a{req}.t={req_id})
         joinClauses += ` LEFT JOIN \`${db}\` ${reqAlias} ON ${reqAlias}.up = vals.id AND ${reqAlias}.t = ${rq.reqId}`;
@@ -9382,6 +9465,71 @@ function escapeRegex(str) {
 }
 
 /**
+ * HintNeeded — MySQL query optimizer hint for JOINs on reference requisites.
+ * PHP parity: index.php lines 535–558.
+ *
+ * When a CROSS JOIN for reference resolution has no selective filter — or its
+ * filter is a negation (!) or wildcard (%) — the MySQL optimizer may choose a
+ * suboptimal plan.  In those cases we return true so callers add
+ * USE INDEX (PRIMARY) to force the primary-key lookup path.
+ *
+ * Overload 1 — filter-value based (for constructWhere / object list):
+ *   hintNeeded(filterValue)
+ *   @param {string|undefined} filterValue — the active filter string, if any
+ *
+ * Overload 2 — report-column based (for executeReport):
+ *   hintNeeded(col, requestFilters)
+ *   @param {object}  col             — compiled report column (from compileReport)
+ *   @param {object}  requestFilters  — runtime filters from the request (key → {from,to,eq,like})
+ *
+ * @returns {boolean} true when USE INDEX (PRIMARY) should be added to the CROSS JOIN
+ */
+function hintNeeded(colOrValue, requestFilters) {
+  let filterVal;
+
+  if (typeof colOrValue === 'object' && colOrValue !== null) {
+    // ── Overload 2: report column ──────────────────────────────────────
+    const col = colOrValue;
+    const filters = requestFilters || {};
+
+    // 1. Check request-level filters (PHP: $_REQUEST["FR_$str"] / $_REQUEST["TO_$str"])
+    if (col.colName) {
+      const normName = col.colName.replace(/ /g, '_');
+      const reqFilter = filters[normName] || filters[col.alias] || filters[col.name];
+      if (reqFilter) {
+        filterVal = reqFilter.from || reqFilter.to || reqFilter.eq || reqFilter.like;
+      }
+    } else {
+      const reqFilter = filters[col.alias] || filters[col.name];
+      if (reqFilter) {
+        filterVal = reqFilter.from || reqFilter.to || reqFilter.eq || reqFilter.like;
+      }
+    }
+
+    // 2. Check stored filter definitions (PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_FROM/TO][$k])
+    if (filterVal === undefined || filterVal === null || filterVal === '') {
+      filterVal = col.storedFrom || col.storedTo;
+    }
+  } else {
+    // ── Overload 1: raw filter value ───────────────────────────────────
+    filterVal = colOrValue;
+  }
+
+  // 3. If a selective (positive, non-wildcard) filter exists, hint is NOT needed
+  if (filterVal !== undefined && filterVal !== null && filterVal !== '') {
+    const s = String(filterVal);
+    if (s.length > 0 && s[0] !== '!' && s[0] !== '%') {
+      logger.debug('[HintNeeded] Hint NOT needed', { filter: s });
+      return false;
+    }
+  }
+
+  // 4. No selective filter → hint IS needed
+  logger.debug('[HintNeeded] Hint needed (no selective filter)');
+  return true;
+}
+
+/**
  * Compile a report — load columns, joins, and metadata.
  *
  * PHP data model for reports:
@@ -9396,7 +9544,10 @@ async function compileReport(pool, db, reportId) {
   // PHP REP_COL_* sub-row type constants (children of each REP_COLS row)
   const REP_COL_FUNC    = 63;   // aggregate / wrapper function (SUM, AVG, COUNT, etc.)
   const REP_COL_TOTAL   = 65;   // totals row function
+  const REP_COL_NAME    = 100;  // column display name override
   const REP_COL_FORMULA = 101;  // calculatable formula expression
+  const REP_COL_FROM    = 102;  // stored filter FROM value (PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_FROM][$k])
+  const REP_COL_TO      = 103;  // stored filter TO value   (PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_TO][$k])
   const REP_COL_HIDE    = 107;  // hidden column flag
 
   const report = {
@@ -9469,7 +9620,7 @@ async function compileReport(pool, db, reportId) {
       });
     }
 
-    // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_FORMULA, REP_COL_HIDE, REP_COL_TOTAL ──
+    // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_NAME, REP_COL_FORMULA, REP_COL_FROM, REP_COL_TO, REP_COL_HIDE, REP_COL_TOTAL ──
     // These are child rows of each REP_COLS row with specific `t` values.
     // PHP stores them in $GLOBALS["STORED_REPS"][$id][REP_COL_FUNC][$key], etc.
     const AGGR_FUNCS = new Set(['AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'GROUP_CONCAT']);
@@ -9478,7 +9629,7 @@ async function compileReport(pool, db, reportId) {
       const colPh  = colIds.map(() => '?').join(',');
       const [subRows] = await pool.query(
         `SELECT up, t, val FROM \`${db}\`
-         WHERE up IN (${colPh}) AND t IN (${REP_COL_FUNC}, ${REP_COL_FORMULA}, ${REP_COL_HIDE}, ${REP_COL_TOTAL})`,
+         WHERE up IN (${colPh}) AND t IN (${REP_COL_FUNC}, ${REP_COL_TOTAL}, ${REP_COL_NAME}, ${REP_COL_FORMULA}, ${REP_COL_FROM}, ${REP_COL_TO}, ${REP_COL_HIDE})`,
         colIds
       );
       for (const sr of subRows) {
@@ -9491,8 +9642,14 @@ async function compileReport(pool, db, reportId) {
             col.isAggregate = true;
             report.hasAggregates = true;
           }
+        } else if (tNum === REP_COL_NAME && sr.val) {
+          col.colName = sr.val.trim();         // PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_NAME][$k]
         } else if (tNum === REP_COL_FORMULA && sr.val) {
           col.formula = sr.val.trim();
+        } else if (tNum === REP_COL_FROM && sr.val) {
+          col.storedFrom = sr.val.trim();      // PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_FROM][$k]
+        } else if (tNum === REP_COL_TO && sr.val) {
+          col.storedTo = sr.val.trim();        // PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_TO][$k]
         } else if (tNum === REP_COL_HIDE) {
           col.hidden = true;
         } else if (tNum === REP_COL_TOTAL && sr.val) {
@@ -9725,8 +9882,12 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
         selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
       } else {
         selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
+        // PHP parity (index.php:535-558): apply USE INDEX (PRIMARY) hint on heavy
+        // report JOINs when the column has no selective filter, helping the MySQL
+        // optimizer avoid full-table scans on CROSS-joined reference lookups.
+        const colHint = hintNeeded(col, filters) ? ' USE INDEX (PRIMARY)' : '';
         joinParts.push(
-          `LEFT JOIN \`${db}\` \`${col.alias}\`` +
+          `LEFT JOIN \`${db}\` \`${col.alias}\`${colHint}` +
           ` ON \`${col.alias}\`.up = a.id AND \`${col.alias}\`.t = ${col.reqTypeId}`
         );
       }
@@ -11948,6 +12109,7 @@ export {
   legacyDdlGrantCheck,
   resolveBuiltIn,
   recursiveDelete,
+  removeDir,
   checkDuplicatedReqs,
   isBlacklisted,
   getSubdir,
