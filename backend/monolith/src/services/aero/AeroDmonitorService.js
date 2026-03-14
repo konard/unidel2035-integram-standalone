@@ -76,7 +76,7 @@ export class AeroDmonitorService {
       })
 
       if (response.data && response.data.failed) {
-        throw new Error('Invalid login or password')
+        throw new Error(`Wrong credentials for user ${username} in ${this.database}. Please send login and password as POST-parameters.`)
       }
 
       this.session = {
