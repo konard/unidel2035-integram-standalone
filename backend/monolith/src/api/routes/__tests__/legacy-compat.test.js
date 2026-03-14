@@ -668,10 +668,10 @@ describe('resolveBuiltIn', () => {
   });
 });
 
-describe('recursiveDelete', () => {
+describe('recursiveDelete (batch)', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
-  it('deletes a leaf node (no children)', async () => {
+  it('deletes a leaf node (no children) using batch IN()', async () => {
     const queries = [];
     const pool = {
       query: vi.fn(async (sql, params) => {
@@ -683,29 +683,51 @@ describe('recursiveDelete', () => {
 
     await recursiveDelete(pool, DB, 100);
 
-    // Should query for children, then delete self
+    // Should query for children, then batch-delete self
     expect(queries).toHaveLength(2);
     expect(queries[0].sql).toContain('SELECT');
     expect(queries[0].params).toEqual([100]);
     expect(queries[1].sql).toContain('DELETE');
+    expect(queries[1].sql).toContain('IN');
     expect(queries[1].params).toEqual([100]);
   });
 
-  it('recursively deletes children before parent', async () => {
-    const deletedIds = [];
+  it('recursively deletes children before parent using batch IN()', async () => {
+    const deletedBatches = [];
     const pool = {
       query: vi.fn(async (sql, params) => {
         if (sql.includes('SELECT') && params[0] === 1) return [[{ id: 2 }, { id: 3 }]];
         if (sql.includes('SELECT')) return [[]]; // leaves
-        if (sql.includes('DELETE')) { deletedIds.push(params[0]); return [{ affectedRows: 1 }]; }
+        if (sql.includes('DELETE')) { deletedBatches.push([...params]); return [{ affectedRows: params.length }]; }
         return [[]];
       }),
     };
 
     await recursiveDelete(pool, DB, 1);
 
-    // Children deleted before parent
-    expect(deletedIds).toEqual([2, 3, 1]);
+    // All IDs deleted in a single batch: children first, then parent
+    expect(deletedBatches).toHaveLength(1);
+    expect(deletedBatches[0]).toEqual([2, 3, 1]);
+  });
+
+  it('handles deep trees: grandchildren deleted before children before parent', async () => {
+    const deletedBatches = [];
+    const pool = {
+      query: vi.fn(async (sql, params) => {
+        // Tree: 1 -> [2, 3], 2 -> [4], 3 -> [], 4 -> []
+        if (sql.includes('SELECT') && params[0] === 1) return [[{ id: 2 }, { id: 3 }]];
+        if (sql.includes('SELECT') && params[0] === 2) return [[{ id: 4 }]];
+        if (sql.includes('SELECT')) return [[]]; // leaves
+        if (sql.includes('DELETE')) { deletedBatches.push([...params]); return [{ affectedRows: params.length }]; }
+        return [[]];
+      }),
+    };
+
+    await recursiveDelete(pool, DB, 1);
+
+    // Single batch: 4 (leaf), 2 (its parent), 3 (leaf), 1 (root)
+    expect(deletedBatches).toHaveLength(1);
+    expect(deletedBatches[0]).toEqual([4, 2, 3, 1]);
   });
 });
 
@@ -726,7 +748,7 @@ describe('checkDuplicatedReqs', () => {
       query: vi.fn(async (sql, params) => {
         if (sql.includes('ORDER BY')) return [[{ id: 10 }, { id: 8 }, { id: 5 }]];
         if (sql.includes('SELECT')) return [[]]; // no children for recursive delete
-        if (sql.includes('DELETE')) { deletedIds.push(params[0]); return [{ affectedRows: 1 }]; }
+        if (sql.includes('DELETE')) { deletedIds.push(...params); return [{ affectedRows: params.length }]; }
         return [[]];
       }),
     };

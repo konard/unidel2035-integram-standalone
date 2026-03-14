@@ -2049,27 +2049,50 @@ function resolveAllBracketBuiltIns(val, userCtx) {
 }
 
 /**
- * Recursively delete object and all descendants.
- * PHP parity: PHP Delete() — current Node uses flat deleteChildren which misses nested levels.
+ * Recursively delete object and all descendants using batch DELETE.
+ * PHP parity: PHP BatchDelete() (index.php lines 1529–1573).
+ *
+ * Instead of deleting one row at a time, this collects all descendant IDs
+ * first, then deletes in batches using DELETE ... WHERE id IN (...).
+ * Batches flush every BATCH_DELETE_THRESHOLD IDs to bound memory and query size.
  *
  * @param {Object} pool - MySQL pool
  * @param {string} db   - database name
  * @param {number} id   - object ID to delete
  */
+const BATCH_DELETE_THRESHOLD = 1000;
+
 async function recursiveDelete(pool, db, id) {
-  // Get all children first
+  // Collect all IDs to delete (children-first / bottom-up order)
+  const idsToDelete = [];
+  await _collectDescendants(pool, db, id, idsToDelete);
+  // Root node last
+  idsToDelete.push(id);
+
+  // Delete in batches
+  for (let i = 0; i < idsToDelete.length; i += BATCH_DELETE_THRESHOLD) {
+    const batch = idsToDelete.slice(i, i + BATCH_DELETE_THRESHOLD);
+    const placeholders = batch.map(() => '?').join(',');
+    await pool.query(`DELETE FROM ${db} WHERE id IN (${placeholders})`, batch);
+  }
+}
+
+/**
+ * Recursively collect all descendant IDs (children-first).
+ * @param {Object} pool
+ * @param {string} db
+ * @param {number} parentId
+ * @param {number[]} acc - accumulator array, mutated in-place
+ */
+async function _collectDescendants(pool, db, parentId, acc) {
   const [children] = await pool.query(
     `SELECT id FROM ${db} WHERE up = ?`,
-    [id]
+    [parentId]
   );
-
-  // Recurse for each child
   for (const child of children) {
-    await recursiveDelete(pool, db, child.id);
+    await _collectDescendants(pool, db, child.id, acc);
+    acc.push(child.id);
   }
-
-  // Delete self
-  await pool.query(`DELETE FROM ${db} WHERE id = ?`, [id]);
 }
 
 /**
