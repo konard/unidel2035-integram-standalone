@@ -14066,6 +14066,7 @@ export {
   makeTree,
   parseBlock,
   localize,
+  removeMasks,
 };
 
 export default router;
