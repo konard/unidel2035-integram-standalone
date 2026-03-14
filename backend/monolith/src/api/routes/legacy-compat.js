@@ -3131,7 +3131,7 @@ router.get('/:db/auth', async (req, res, next) => {
     if (rows.length === 0) return res.status(200).json([{ error: t9n('not_logged', locale) }]);
     const u = rows[0];
     const xsrf = u.xsrf_val || generateXsrf(token, u.uname || '', db);
-    return res.status(200).json({ _xsrf: xsrf, token, id: Number(u.uid), msg: '' });
+    return res.status(200).json({ _xsrf: xsrf, token, id: String(u.uid), msg: '' });
   } catch (err) {
     logger.error('[GET /:db/auth] DB error', { error: err.message, db });
     return res.status(200).json([{ error: t9n('server_error', locale) }]);
