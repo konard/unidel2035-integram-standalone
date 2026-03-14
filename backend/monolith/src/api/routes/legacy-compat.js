@@ -15,6 +15,7 @@ import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { phpJsonMiddleware } from '../../utils/jsonSortKeys.js';
 import { isAbnPostProcessFunction, applyAbnFunction, isAbnFunction, ABN_SQL_FIELD_FUNCS } from '../utils/report-functions.js';
+import { t9n, getLocale } from '../../utils/t9n.js';
 
 const router = express.Router();
 
@@ -1788,8 +1789,9 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
  */
 async function legacyAuthMiddleware(req, res, next) {
   const db = req.params.db;
+  const locale = getLocale(req, db);
   if (!db || !isValidDbName(db)) {
-    return res.status(401).json({ error: 'Invalid database' });
+    return res.status(401).json({ error: t9n('invalid_database', locale) });
   }
 
   const token = extractToken(req, db);
@@ -1897,10 +1899,10 @@ async function legacyAuthMiddleware(req, res, next) {
     }
 
     // No guest user defined — reject
-    return res.status(401).json({ error: token ? 'Invalid or expired token' : 'Authentication required' });
+    return res.status(401).json({ error: t9n(token ? 'invalid_token' : 'auth_required', locale) });
   } catch (error) {
     logger.error({ error: error.message, db }, '[legacyAuthMiddleware] Error');
-    return res.status(401).json({ error: 'Authentication failed' });
+    return res.status(401).json({ error: t9n('auth_failed', locale) });
   }
 }
 
@@ -1921,7 +1923,8 @@ function legacyXsrfCheck(req, res, next) {
 
   if (!xsrf || bodyXsrf !== xsrf) {
     // HTTP 200 matching PHP my_die() behavior
-    return res.status(200).json({ error: 'Invalid or expired CSRF token' });
+    const locale = getLocale(req, req.params.db);
+    return res.status(200).json({ error: t9n('invalid_csrf', locale) });
   }
 
   next();
@@ -1939,14 +1942,16 @@ async function legacyDdlGrantCheck(req, res, next) {
 
   try {
     const pool = getPool();
+    const locale = getLocale(req, db);
     const hasGrant = await checkGrant(pool, db, grants || {}, 0, 0, 'WRITE', username || '');
     if (!hasGrant) {
-      return res.status(200).json({ error: 'Insufficient privileges for type modification' });
+      return res.status(200).json({ error: t9n('insufficient_type_mod', locale) });
     }
     next();
   } catch (error) {
     logger.error({ error: error.message, db }, '[legacyDdlGrantCheck] Error');
-    return res.status(200).json({ error: 'Grant check failed' });
+    const locale = getLocale(req, db);
+    return res.status(200).json({ error: t9n('grant_check_failed', locale) });
   }
 }
 
@@ -2380,9 +2385,10 @@ router.get('/:db/auth', async (req, res, next) => {
   if (req.query.secret !== undefined) return next();
   const { db } = req.params;
   if (!isApiRequest(req)) return next();
-  if (!isValidDbName(db)) return res.status(200).json({ error: 'Invalid database name' });
+  const locale = getLocale(req, db);
+  if (!isValidDbName(db)) return res.status(200).json({ error: t9n('invalid_database_name', locale) });
   const token = extractToken(req, db);
-  if (!token) return res.status(200).json({ error: 'not logged' });
+  if (!token) return res.status(200).json({ error: t9n('not_logged', locale) });
   try {
     const pool = getPool();
     const [rows] = await pool.query(
@@ -2393,13 +2399,13 @@ router.get('/:db/auth', async (req, res, next) => {
        WHERE u.t = ${TYPE.USER} LIMIT 1`,
       [token]
     );
-    if (rows.length === 0) return res.status(200).json({ error: 'not logged' });
+    if (rows.length === 0) return res.status(200).json({ error: t9n('not_logged', locale) });
     const u = rows[0];
     const xsrf = u.xsrf_val || generateXsrf(token, u.uname || '', db);
     return res.status(200).json({ _xsrf: xsrf, token, id: Number(u.uid), msg: '' });
   } catch (err) {
     logger.error('[GET /:db/auth] DB error', { error: err.message, db });
-    return res.status(200).json({ error: 'server error' });
+    return res.status(200).json({ error: t9n('server_error', locale) });
   }
 });
 
@@ -2410,9 +2416,10 @@ router.all('/:db/auth', async (req, res, next) => {
   const { db } = req.params;
   const isJSON = isApiRequest(req);
 
+  const locale = getLocale(req, db);
   if (!isValidDbName(db)) {
-    if (isJSON) return res.status(200).json({ error: 'Invalid database name' });
-    return res.status(400).send('Invalid database');
+    if (isJSON) return res.status(200).json({ error: t9n('invalid_database_name', locale) });
+    return res.status(400).send(t9n('invalid_database', locale));
   }
 
   try {
@@ -2435,8 +2442,8 @@ router.all('/:db/auth', async (req, res, next) => {
 
     if (rows.length === 0) {
       logger.warn('[Legacy SecretAuth] Invalid secret token', { db });
-      if (isJSON) return res.status(200).json({ error: 'Invalid secret token' });
-      return res.status(401).send('Invalid secret token');
+      if (isJSON) return res.status(200).json({ error: t9n('invalid_secret', locale) });
+      return res.status(401).send(t9n('invalid_secret', locale));
     }
 
     const user = rows[0];
@@ -2512,12 +2519,13 @@ router.post('/:db/auth', async (req, res, next) => {
 
   logger.info('[Legacy Auth] Request', { db, isJSON, body: { ...req.body, pwd: '***', npw1: '***', npw2: '***' } });
 
+  const locale = getLocale(req, db);
   // Validate DB name
   if (!isValidDbName(db)) {
     if (isJSON) {
-      return res.status(200).json({ error: 'Invalid database name' });
+      return res.status(200).json({ error: t9n('invalid_database_name', locale) });
     }
-    return res.status(400).send('Invalid database');
+    return res.status(400).send(t9n('invalid_database', locale));
   }
 
   // PHP lowercases the login: $u = strtolower($_POST["login"])
@@ -2534,9 +2542,9 @@ router.post('/:db/auth', async (req, res, next) => {
 
   if (!login || !password) {
     if (isJSON) {
-      return res.status(200).json({ error: 'Login and password required' });
+      return res.status(200).json({ error: t9n('login_password_required', locale) });
     }
-    return res.status(400).send('Login and password required');
+    return res.status(400).send(t9n('login_password_required', locale));
   }
 
   try {
@@ -3469,30 +3477,35 @@ router.post('/my/register', async (req, res) => {
   logger.info('[Legacy Register] Request', { email });
 
   // Validate input
+  const locale = getLocale(req, 'my');
   if (!email || !/^.+@.+\..+$/.test(email)) {
+    const msg = t9n('invalid_email', locale);
     if (isJSON) {
-      return res.json({ error: 'Please provide a valid email' });
+      return res.json({ error: msg });
     }
-    return res.status(400).send('Please provide a valid email');
+    return res.status(400).send(msg);
   }
 
   if (!regpwd || regpwd.length < 6) {
+    const msg = t9n('password_too_short', locale);
     if (isJSON) {
-      return res.json({ error: 'Password must be at least 6 characters' });
+      return res.json({ error: msg });
     }
-    return res.status(400).send('Password must be at least 6 characters');
+    return res.status(400).send(msg);
   }
 
   if (regpwd !== regpwd1) {
+    const msg = t9n('passwords_mismatch', locale);
     if (isJSON) {
-      return res.json({ error: 'Passwords do not match' });
+      return res.json({ error: msg });
     }
-    return res.status(400).send('Passwords do not match');
+    return res.status(400).send(msg);
   }
 
   if (!agree) {
-    if (isJSON) return res.json({ error: 'Please accept the terms' });
-    return res.status(400).send('Please accept the terms');
+    const msg = t9n('accept_terms', locale);
+    if (isJSON) return res.json({ error: msg });
+    return res.status(400).send(msg);
   }
 
   // PHP creates the user in the 'my' table (multi-tenant global users DB).
@@ -3512,8 +3525,9 @@ router.post('/my/register', async (req, res) => {
         [email.toLowerCase()]
       );
       if (existing.length > 0) {
-        if (isJSON) return res.json({ error: 'This email is already registered. [errMailExists]' });
-        return res.status(400).send('This email is already registered.');
+        const msg = t9n('email_registered', locale) + ' [errMailExists]';
+        if (isJSON) return res.json({ error: msg });
+        return res.status(400).send(msg);
       }
 
       // PHP newUser($email, $email, "115", "", "") — Insert(1, 0, USER, email, ...)
@@ -5361,8 +5375,9 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 }, async (req, res) => {
   const { db, up } = req.params;
 
+  const locale = getLocale(req, db);
   if (!isValidDbName(db)) {
-    return res.status(200).json({ error: 'Invalid database'  });
+    return res.status(200).json({ error: t9n('invalid_database', locale) });
   }
 
   try {
@@ -5387,10 +5402,10 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 
     // Reject invalid parentId and typeId
     if (parentId === 0) {
-      return res.status(200).json({ error: 'Parent ID cannot be 0' });
+      return res.status(200).json({ error: t9n('parent_id_zero', locale) });
     }
     if (!typeId || typeId === 0) {
-      return res.status(200).json({ error: 'Type ID (t or type) is required'  });
+      return res.status(200).json({ error: t9n('type_required', locale) });
     }
 
     // Verify type and parent exist
