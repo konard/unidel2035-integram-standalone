@@ -16,6 +16,47 @@ import nodemailer from 'nodemailer';
 import { phpJsonMiddleware } from '../../utils/jsonSortKeys.js';
 import { isAbnPostProcessFunction, applyAbnFunction, isAbnFunction, ABN_SQL_FIELD_FUNCS, getJsonVal, checkJson } from '../utils/report-functions.js';
 import { t9n, getLocale } from '../../utils/t9n.js';
+import { execSql } from '../../utils/execSql.js';
+
+// ── SQL Injection Guards (Issue #308) ────────────────────────────────────────
+
+/**
+ * Validate and quote a SQL identifier (table name, column name).
+ * Rejects anything that is not a simple alphanumeric/underscore name.
+ * Returns the identifier wrapped in backticks for safe interpolation.
+ *
+ * @param {string} name - The identifier to validate
+ * @returns {string} Backtick-quoted identifier, e.g. `` `myTable` ``
+ * @throws {Error} If the identifier contains disallowed characters
+ */
+function sanitizeIdentifier(name) {
+  if (typeof name !== 'string' || !name) {
+    throw new Error('SQL identifier must be a non-empty string');
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(name)) {
+    throw new Error(`Invalid SQL identifier: "${name}" — only alphanumeric and underscore allowed`);
+  }
+  return `\`${name}\``;
+}
+
+/**
+ * Check user-supplied search values for SQL injection attempts.
+ * Port of PHP checkInjection() (index.php:617) with expanded keyword list.
+ *
+ * @param {string} value - The user-supplied value to check
+ * @returns {string} The original value if safe
+ * @throws {Error} If a SQL keyword is detected
+ */
+function checkInjection(value) {
+  if (typeof value !== 'string') return value;
+  // Match whole SQL keywords (word-boundary delimited, case-insensitive)
+  const SQL_KEYWORDS_RE = /\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|UNION|FROM|TABLE|WHERE|INTO|EXEC|EXECUTE|CREATE|TRUNCATE)\b/i;
+  const match = value.match(SQL_KEYWORDS_RE);
+  if (match) {
+    throw new Error(`No SQL clause allowed in search fields. Found: ${match[0]}`);
+  }
+  return value;
+}
 
 const router = express.Router();
 
@@ -440,10 +481,35 @@ function safePath(base, userInput) {
 }
 
 /**
+ * Extract locale-specific text from inline <t9n> translation tags in HTML.
+ * PHP parity: index.php line 7245 — function localize($text).
+ *
+ * Format: <t9n>[RU]Русский текст[EN]English text</t9n>
+ * Given locale="EN", returns the string with <t9n> blocks replaced by "English text".
+ * If no <t9n> tags are present, returns the text unchanged.
+ *
+ * @param {string} text   - HTML string potentially containing <t9n> tags
+ * @param {string} locale - locale code: 'RU', 'EN', etc.
+ * @returns {string} text with <t9n> tags resolved to the requested locale
+ */
+function localize(text, locale) {
+  if (!text || !text.includes('<t9n>')) return text || '';
+  const loc = (locale || 'EN').toUpperCase();
+  return text.replace(/<t9n>[\s\S]*?<\/t9n>/g, (match) => {
+    const marker = `[${loc}]`;
+    const idx = match.indexOf(marker);
+    if (idx === -1) return '';
+    const rest = match.slice(idx + marker.length);
+    const m = rest.match(/^([\s\S]*?)(?:\[[A-Z]{2}\]|<\/t9n>)/);
+    return m ? m[1] : '';
+  });
+}
+
+/**
  * Render main.html template with PHP-style global variables.
  * PHP replaces {_global_.xxx} placeholders before serving the template.
  */
-async function renderMainPage(db, token) {
+async function renderMainPage(db, token, locale) {
   const mainPage = path.join(legacyPath, 'templates/main.html');
   if (!fs.existsSync(mainPage)) return null;
 
@@ -485,6 +551,9 @@ async function renderMainPage(db, token) {
 
   // Remove PHP template loop blocks (leave empty arrays)
   html = html.replace(/<!--\s*Begin:[^>]*-->[^]*?<!--\s*End:[^>]*-->/g, '');
+
+  // Resolve inline <t9n> translation tags (PHP parity: localize())
+  html = localize(html, locale || 'RU');
 
   return html;
 }
@@ -563,6 +632,23 @@ const REV_BASE_TYPE = {
   [TYPE.REPORT_COLUMN]: 'REPORT_COLUMN', // 16
   [TYPE.PATH]: 'PATH',                   // 17
 };
+
+// ── Mask constants & removeMasks (PHP index.php:7553-7557) ──────────────
+const NOT_NULL_MASK = /:!NULL:/g;
+const MULTI_MASK    = /:MULTI:/g;
+const ALIAS_MASK    = /:ALIAS=[^:]*:/g;
+
+/**
+ * Strip mask markers from an attrs/val string.
+ * PHP: removeMasks($attrs) — strips NOT_NULL_MASK, MULTI_MASK, ALIAS_MASK.
+ */
+function removeMasks(attrs) {
+  if (!attrs) return '';
+  return attrs
+    .replace(NOT_NULL_MASK, '')
+    .replace(MULTI_MASK, '')
+    .replace(ALIAS_MASK, '');
+}
 
 // Format a raw DB value for PHP-compatible object list display
 function formatObjVal(base, rawVal) {
@@ -682,6 +768,7 @@ const grantStore = new Map();
  */
 async function getGrants(pool, db, roleId, userCtx) {
   const grants = {};
+  const z = sanitizeIdentifier(db);
 
   try {
     const query = `
@@ -691,11 +778,11 @@ async function getGrants(pool, db, roleId, userCtx) {
         mask.val AS mask,
         exp.val AS exp,
         del.val AS del
-      FROM ${db} gr
-      LEFT JOIN (${db} lev CROSS JOIN ${db} def) ON lev.up = gr.id AND def.id = lev.t AND def.t = ${TYPE.LEVEL}
-      LEFT JOIN ${db} mask ON mask.up = gr.id AND mask.t = ${TYPE.MASK}
-      LEFT JOIN ${db} exp ON exp.up = gr.id AND exp.t = ${TYPE.EXPORT}
-      LEFT JOIN ${db} del ON del.up = gr.id AND del.t = ${TYPE.DELETE}
+      FROM ${z} gr
+      LEFT JOIN (${z} lev CROSS JOIN ${z} def) ON lev.up = gr.id AND def.id = lev.t AND def.t = ${TYPE.LEVEL}
+      LEFT JOIN ${z} mask ON mask.up = gr.id AND mask.t = ${TYPE.MASK}
+      LEFT JOIN ${z} exp ON exp.up = gr.id AND exp.t = ${TYPE.EXPORT}
+      LEFT JOIN ${z} del ON del.up = gr.id AND del.t = ${TYPE.DELETE}
       WHERE gr.up = ? AND gr.t = ${TYPE.ROLE_OBJECT}
     `;
 
@@ -934,6 +1021,7 @@ function constructWhereForMask(key, mask) {
   let NOT_EQ = '';
   let EQ = '=';
   let NOT_flag = false;
+  const params = [];
 
   // Handle ! prefix
   if (value.startsWith('!')) {
@@ -953,58 +1041,103 @@ function constructWhereForMask(key, mask) {
     NOT_EQ = '';
   }
 
-  // @ prefix — ID match
+  // @ prefix — ID match (parameterized)
   if (value.startsWith('@')) {
     const idVal = parseInt(value.substring(1).replace(/ /g, ''), 10);
-    return ` AND a${key}.id${NOT_EQ}${EQ}${idVal} `;
+    if (isNaN(idVal)) {
+      throw new Error(`Invalid ID in mask: ${value}`);
+    }
+    params.push(idVal);
+    return { sql: ` AND a${key}.id${NOT_EQ}${EQ}? `, params };
   }
 
   // % alone — NULL check
   if (value === '%') {
     const search_val = `IS ${NOT_flag ? '' : 'NOT '}NULL`;
-    return ` AND a${key}.val ${search_val} `;
+    return { sql: ` AND a${key}.val ${search_val} `, params };
   }
 
-  // Range: value1..value2
+  // Range: value1..value2 (parameterized)
   if (value.includes('..')) {
     const parts = value.split('..');
     const from = parseFloat(parts[0].replace(/ /g, ''));
     const to = parseFloat(parts[1].replace(/ /g, ''));
     if (!isNaN(from) && !isNaN(to)) {
-      return ` AND a${key}.val BETWEEN ${from} AND ${to} `;
+      params.push(from, to);
+      return { sql: ` AND a${key}.val BETWEEN ? AND ? `, params };
     }
   }
 
-  // Escape value for SQL
-  const escaped = value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-
+  // Parameterized value comparison
   let search_val;
   if (!value.includes('%')) {
-    search_val = `${NOT_EQ}${EQ}'${escaped}' `;
+    search_val = `${NOT_EQ}${EQ}?`;
+    params.push(value);
   } else {
-    search_val = `${NOT} LIKE '${escaped}' `;
+    search_val = `${NOT} LIKE ?`;
+    params.push(value);
   }
 
   if (NOT_flag) {
-    return ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL) `;
+    return { sql: ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL) `, params };
   }
-  return ` AND a${key}.val ${search_val} `;
+  return { sql: ` AND a${key}.val ${search_val} `, params };
 }
 
 /**
- * Build SQL expression to test a value against a mask.
+ * Build a parameterized SQL expression to test a value against a mask.
  * Port of PHP Fetch_WHERE_for_mask() (index.php:888-893).
- * Returns a SQL expression suitable for SELECT — evaluates to 1 (match) or 0 (no match).
+ * Returns { sql, params } for use with pool.query(`SELECT ${sql}`, params).
+ *
+ * The SQL expression evaluates to 1 (match) or 0 (no match) when used in SELECT.
+ *
+ * @param {number} t - Type ID key
+ * @param {string|null} val - Value to test
+ * @param {string} mask - Mask pattern from grants
+ * @returns {{ sql: string, params: Array }}
  */
 function fetchWhereForMask(t, val, mask) {
-  const where = constructWhereForMask(t, mask);
-  // Strip leading " AND " (5 chars)
-  const stripped = where.substring(5);
-  // Replace a{t}.val and a{t}.id with the actual value (escaped)
-  const replacement = (val === null || val === undefined)
-    ? 'NULL'
-    : `'${String(val).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
-  return stripped.replace(new RegExp(`a${t}\\.(val|id)`, 'g'), replacement);
+  const { sql: whereSql, params: maskParams } = constructWhereForMask(t, mask);
+  // Strip " AND " prefix (5 chars) to get a standalone expression
+  const stripped = whereSql.substring(5);
+
+  // The stripped SQL contains:
+  // 1. References like a{t}.val or a{t}.id — replaced with ? and val pushed to params
+  // 2. Existing ? placeholders from maskParams — interleaved in order
+  //
+  // We process left-to-right, building the final SQL and params array.
+  const aliasRe = new RegExp(`a${t}\\.(val|id)`, 'g');
+  const finalParams = [];
+  let result = '';
+  let cursor = 0;
+  let maskParamIdx = 0;
+  let aliasMatch;
+
+  while ((aliasMatch = aliasRe.exec(stripped)) !== null) {
+    // Segment between cursor and this alias may contain ? from maskParams
+    const segment = stripped.substring(cursor, aliasMatch.index);
+    for (const ch of segment) {
+      if (ch === '?') {
+        finalParams.push(maskParams[maskParamIdx++]);
+      }
+    }
+    result += segment;
+    // Replace alias reference with parameterized placeholder
+    result += '?';
+    finalParams.push(val === null || val === undefined ? null : String(val));
+    cursor = aliasMatch.index + aliasMatch[0].length;
+  }
+
+  // Handle remaining text after last alias match
+  const remaining = stripped.substring(cursor);
+  for (const ch of remaining) {
+    if (ch === '?') {
+      finalParams.push(maskParams[maskParamIdx++]);
+    }
+  }
+  result += remaining;
+
+  return { sql: result, params: finalParams };
 }
 
 /**
@@ -1054,12 +1187,12 @@ async function checkValGranted(pool, db, grants, t, val, id = 0) {
       continue;
     }
 
-    // SQL mask check via fetchWhereForMask
-    const sqlExpr = fetchWhereForMask(t, val, mask);
-    if (sqlExpr === '') return undefined;
+    // SQL mask check via fetchWhereForMask (parameterized)
+    const { sql: maskSql, params: maskParams } = fetchWhereForMask(t, val, mask);
+    if (maskSql === '') return undefined;
 
     try {
-      const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+      const [rows] = await pool.query(`SELECT ${maskSql}`, maskParams);
       if (rows.length > 0) {
         const firstVal = rows[0][Object.keys(rows[0])[0]];
         if (firstVal) {
@@ -1116,9 +1249,9 @@ async function valBarredByMask(pool, db, grants, t, val) {
     if (mask === '') {
       // No level defined — required mask: value must match at least one such pattern
       reqMask = true;
-      const sqlExpr = fetchWhereForMask(t, val, grant);
+      const { sql: grantSql, params: grantParams } = fetchWhereForMask(t, val, grant);
       try {
-        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        const [rows] = await pool.query(`SELECT ${grantSql}`, grantParams);
         if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
           return false; // Value matches required mask — not barred
         }
@@ -1127,9 +1260,9 @@ async function valBarredByMask(pool, db, grants, t, val) {
       }
     } else {
       // Level defined — check if value matches the level pattern
-      const sqlExpr = fetchWhereForMask(t, val, mask);
+      const { sql: lvlSql, params: lvlParams } = fetchWhereForMask(t, val, mask);
       try {
-        const [rows] = await pool.query(`SELECT ${sqlExpr}`);
+        const [rows] = await pool.query(`SELECT ${lvlSql}`, lvlParams);
         if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
           return grant !== 'WRITE'; // Barred unless grant key is "WRITE"
         }
@@ -1433,7 +1566,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
   curTyp = String(curTyp);
   const join = joinReq && joinReq !== '0' && joinReq !== 0;
   const db = ctx.db || '';
-  const z = db ? `\`${db}\`` : 'db';
+  const z = db ? sanitizeIdentifier(db) : 'db';
   let whereStr = '';
   let joinStr = '';
   const params = [];
@@ -2261,7 +2394,7 @@ async function recursiveDelete(pool, db, id) {
   for (let i = 0; i < idsToDelete.length; i += BATCH_DELETE_THRESHOLD) {
     const batch = idsToDelete.slice(i, i + BATCH_DELETE_THRESHOLD);
     const placeholders = batch.map(() => '?').join(',');
-    await pool.query(`DELETE FROM ${db} WHERE id IN (${placeholders})`, batch);
+    await execSql(pool, `DELETE FROM ${sanitizeIdentifier(db)} WHERE id IN (${placeholders})`, batch, { label: 'batchDeleteObjects', db });
   }
 }
 
@@ -2273,8 +2406,9 @@ async function recursiveDelete(pool, db, id) {
  * @param {number[]} acc - accumulator array, mutated in-place
  */
 async function _collectDescendants(pool, db, parentId, acc) {
+  const z = sanitizeIdentifier(db);
   const [children] = await pool.query(
-    `SELECT id FROM ${db} WHERE up = ?`,
+    `SELECT id FROM ${z} WHERE up = ?`,
     [parentId]
   );
   for (const child of children) {
@@ -2294,8 +2428,9 @@ async function _collectDescendants(pool, db, parentId, acc) {
  * @returns {boolean} true if duplicate existed (and was cleaned up)
  */
 async function checkDuplicatedReqs(pool, db, parentId, typeId) {
+  const z = sanitizeIdentifier(db);
   const [rows] = await pool.query(
-    `SELECT id FROM ${db} WHERE up = ? AND t = ? ORDER BY id DESC`,
+    `SELECT id FROM ${z} WHERE up = ? AND t = ? ORDER BY id DESC`,
     [parentId, typeId]
   );
 
@@ -2395,8 +2530,9 @@ function removeDir(dirPath) {
  * @returns {boolean} true if reference is valid
  */
 async function checkNewRef(pool, db, refTypeId, value) {
+  const z = sanitizeIdentifier(db);
   const [rows] = await pool.query(
-    `SELECT 1 FROM ${db} WHERE id = ? AND t = ? LIMIT 1`,
+    `SELECT 1 FROM ${z} WHERE id = ? AND t = ? LIMIT 1`,
     [value, refTypeId]
   );
   return rows.length > 0;
@@ -2446,11 +2582,12 @@ async function populateReqs(pool, db, srcId, dstId) {
         }
       }
       // FILE reqs need insertId for file naming — individual INSERT
-      const [insertResult] = await pool.query(
+      const { insertId: fileInsertId } = await execSql(pool,
         `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
-        [dstId, child.ord, child.t, copiedVal]
+        [dstId, child.ord, child.t, copiedVal],
+        { label: 'populateReqs/file', db }
       );
-      await populateReqs(pool, db, child.id, insertResult.insertId);
+      await populateReqs(pool, db, child.id, fileInsertId);
     } else if (child.ch === 1) {
       // Req has children — need insertId for recursion, individual INSERT
       const [insertResult] = await pool.query(
@@ -2595,11 +2732,12 @@ router.all('/:db/auth', async (req, res, next) => {
 
     // Update or insert XSRF
     if (user.xsrf_id) {
-      await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [xsrf, user.xsrf_id]);
+      await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [xsrf, user.xsrf_id], { label: 'updateXsrf', db });
     } else {
-      await pool.query(
+      await execSql(pool,
         `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`,
-        [user.uid, xsrf]
+        [user.uid, xsrf],
+        { label: 'insertXsrf', db }
       );
     }
 
@@ -2859,11 +2997,12 @@ router.post('/:db/auth', async (req, res, next) => {
     const xsrf = generateXsrf(token, db, db);
 
     if (user.token_id) {
-      await pool.query(`DELETE FROM ${db} WHERE id = ?`, [user.token_id]);
+      await execSql(pool, `DELETE FROM ${db} WHERE id = ?`, [user.token_id], { label: 'deleteOldToken', db });
     }
-    await pool.query(
+    await execSql(pool,
       `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
-      [user.uid, token]
+      [user.uid, token],
+      { label: 'insertToken', db }
     );
 
     if (!user.xsrf) {
@@ -3275,6 +3414,116 @@ router.post('/:db/auth', async (req, res, next) => {
 });
 
 // ============================================================================
+// createUserDb() — shared DB creation for registration + Google OAuth
+// PHP parity: createDb() → mail2DB() → newDb() (index.php lines 350–421)
+// ============================================================================
+
+/**
+ * Create a user database from template.
+ * Derives DB name from email (mail2DB), creates table, copies template data,
+ * registers the DB in the user management table.
+ *
+ * @param {object} pool       - MySQL connection pool
+ * @param {string} z          - user management table name (e.g. 'my')
+ * @param {number} userId     - user ID in the management table
+ * @param {string} email      - user email (used to derive DB name)
+ * @param {string} locale     - 'RU' or 'EN'
+ * @param {string} [prefix]   - fallback prefix for DB name ('u' for email reg, 'g' for Google)
+ * @returns {string}          - created database name, or empty string on failure
+ */
+async function createUserDb(pool, z, userId, email, locale, prefix = 'u') {
+  const USER_DB_MASK = /^[a-z][a-z0-9]{2,14}$/i;
+
+  // mail2DB: derive DB name from email
+  let newDbName = '';
+  if (email) {
+    const emailPrefix = email.split('@')[0].replace(/[^A-Za-z0-9]/g, '').toLowerCase().substring(0, 15);
+    if (USER_DB_MASK.test(emailPrefix)) {
+      const [existsCheck] = await pool.query(`SHOW TABLES LIKE ?`, [emailPrefix]);
+      if (existsCheck.length === 0) {
+        newDbName = emailPrefix;
+      }
+    }
+    if (!newDbName) {
+      newDbName = `${prefix}${userId}`;
+    }
+  } else {
+    newDbName = `${prefix}${userId}`;
+  }
+
+  const template = locale === 'EN' ? 'en' : 'ru';
+
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS \`${newDbName}\` (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        up BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        ord INT UNSIGNED NOT NULL DEFAULT 1,
+        t BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        val TEXT,
+        INDEX idx_up (up),
+        INDEX idx_t (t),
+        INDEX idx_up_t (up, t)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    // Try to copy from template
+    let copiedFromTemplate = false;
+    if (isValidDbName(template)) {
+      const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
+      if (tmplExists.length > 0) {
+        await pool.query(`INSERT INTO \`${newDbName}\` (id, up, ord, t, val) SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0`);
+        await pool.query(`
+          INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
+          SELECT child.id, child.up, child.ord, child.t, child.val
+          FROM \`${template}\` child
+          JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
+          WHERE child.up != 0
+        `);
+        copiedFromTemplate = true;
+      }
+    }
+
+    if (!copiedFromTemplate) {
+      const initQueries = [
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (1, 0, 1, 1, 'Объект')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (8, 0, 2, 8, 'Строка')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (12, 0, 3, 12, 'Текст')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (13, 0, 4, 13, 'Число')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (9, 0, 5, 9, 'Дата')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (4, 0, 6, 4, 'Дата и время')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (11, 0, 7, 11, 'Да/Нет')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (18, 0, 10, 8, 'Пользователь')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (20, 18, 1, 6, ':!NULL:Пароль')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (30, 18, 2, 8, 'Телефон')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (41, 18, 3, 8, 'Email')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (42, 0, 11, 8, 'Роль')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (125, 0, 12, 8, 'Токен')`,
+        `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
+      ];
+      for (const q of initQueries) {
+        try { await pool.query(q); } catch (e) { /* ignore duplicates */ }
+      }
+    }
+
+    // Register the DB in the management table
+    const today = new Date();
+    const dateYmd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+    const dbRecordId = await insertRow(z, userId, 1, TYPE.DATABASE, newDbName);
+    await insertRow(z, dbRecordId, 1, 275, dateYmd);
+    await insertRow(z, dbRecordId, 1, 283, template);
+    await insertRow(z, dbRecordId, 1, 276, locale === 'EN'
+      ? 'Test one, created upon registration'
+      : 'Тестовая база, создана при регистрации');
+
+    return newDbName;
+  } catch (dbErr) {
+    logger.error('[createUserDb] Failed', { error: dbErr.message, newDbName });
+    return '';
+  }
+}
+
+// ============================================================================
 // Google OAuth — PHP parity (index.php lines 35–36, 161–240)
 // ============================================================================
 
@@ -3496,95 +3745,13 @@ router.get('/auth.asp', async (req, res) => {
       res.cookie(z, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
 
       // Create user's database (PHP: createDb -> mail2DB -> newDb)
-      // mail2DB: derive DB name from email, fall back to "g" + userId
-      let newDbName = '';
-      if (info.email) {
-        const emailPrefix = info.email.split('@')[0].replace(/[^A-Za-z0-9]/g, '').toLowerCase().substring(0, 15);
-        if (USER_DB_MASK.test(emailPrefix)) {
-          // Check vacancy
-          const [existsCheck] = await pool.query(`SHOW TABLES LIKE ?`, [emailPrefix]);
-          if (existsCheck.length === 0) {
-            newDbName = emailPrefix;
-          }
-        }
-        if (!newDbName) {
-          newDbName = `g${userId}`;
-        }
-      } else {
-        newDbName = `g${userId}`;
-      }
-
-      // Create the DB table (similar to /my/_new_db logic)
       const locale = req.cookies[z + '_locale'] || req.cookies.my_locale || 'RU';
-      const template = locale === 'EN' ? 'en' : 'ru';
-
-      try {
-        await pool.query(`
-          CREATE TABLE IF NOT EXISTS \`${newDbName}\` (
-            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-            up BIGINT UNSIGNED NOT NULL DEFAULT 0,
-            ord INT UNSIGNED NOT NULL DEFAULT 1,
-            t BIGINT UNSIGNED NOT NULL DEFAULT 0,
-            val TEXT,
-            INDEX idx_up (up),
-            INDEX idx_t (t),
-            INDEX idx_up_t (up, t)
-          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        `);
-
-        // Try to copy from template
-        let copiedFromTemplate = false;
-        if (isValidDbName(template)) {
-          const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
-          if (tmplExists.length > 0) {
-            await pool.query(`INSERT INTO \`${newDbName}\` (id, up, ord, t, val) SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0`);
-            await pool.query(`
-              INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
-              SELECT child.id, child.up, child.ord, child.t, child.val
-              FROM \`${template}\` child
-              JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
-              WHERE child.up != 0
-            `);
-            copiedFromTemplate = true;
-          }
-        }
-
-        if (!copiedFromTemplate) {
-          // Initialize with basic types
-          const initQueries = [
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (1, 0, 1, 1, 'Объект')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (8, 0, 2, 8, 'Строка')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (12, 0, 3, 12, 'Текст')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (13, 0, 4, 13, 'Число')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (9, 0, 5, 9, 'Дата')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (4, 0, 6, 4, 'Дата и время')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (11, 0, 7, 11, 'Да/Нет')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (18, 0, 10, 8, 'Пользователь')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (20, 18, 1, 6, ':!NULL:Пароль')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (30, 18, 2, 8, 'Телефон')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (41, 18, 3, 8, 'Email')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (42, 0, 11, 8, 'Роль')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (125, 0, 12, 8, 'Токен')`,
-            `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
-          ];
-          for (const q of initQueries) {
-            try { await pool.query(q); } catch (e) { /* ignore duplicates */ }
-          }
-        }
-
-        // Register the DB in the my table (PHP: createDb)
-        const dbRecordId = await insertRow(z, userId, 1, TYPE.DATABASE, newDbName);
-        await insertRow(z, dbRecordId, 1, 275, dateYmd);
-        await insertRow(z, dbRecordId, 1, 283, template);
-        await insertRow(z, dbRecordId, 1, 276, locale === 'EN'
-          ? 'Test one, created upon registration'
-          : 'Тестовая база, создана при регистрации');
-
+      const newDbName = await createUserDb(pool, z, userId, info.email, locale, 'g');
+      if (newDbName) {
         finalDb = newDbName;
         res.cookie(finalDb, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
         logger.info('[Google OAuth] New user + DB created', { userId, email: info.email, db: finalDb });
-      } catch (dbErr) {
-        logger.error('[Google OAuth] Failed to create user DB', { error: dbErr.message, newDbName });
+      } else {
         // Still let them in to /my even if DB creation failed
         finalDb = z;
       }
@@ -3596,6 +3763,107 @@ router.get('/auth.asp', async (req, res) => {
   } catch (err) {
     logger.error('[Google OAuth] Error', { error: err.message, stack: err.stack });
     return res.status(500).json({ error: 'Google authentication failed', details: err.message });
+  }
+});
+
+/**
+ * Email confirmation handler (my/register GET)
+ * GET /my/register?u={userId}&c={confirmToken}
+ * GET /my/register?optout={userId}
+ *
+ * PHP parity: index.php lines 83–104 (confirm), 156–157 (optout)
+ */
+router.get('/my/register', async (req, res) => {
+  // Optout handler (PHP line 156-157)
+  if (req.query.optout) {
+    const locale = getLocale(req, 'my');
+    return res.send(t9n('optout_message', locale)
+      || 'You have cancelled the email subscription');
+  }
+
+  const { u, c } = req.query;
+  if (!u || !c) {
+    return res.redirect('/my');
+  }
+
+  const userId = parseInt(u, 10);
+  if (!userId) {
+    return res.redirect('/my');
+  }
+
+  try {
+    const pool = getPool();
+
+    // PHP lines 86-93: SELECT with JOINs
+    const [rows] = await pool.query(`
+      SELECT user.val AS user, user.id AS uid,
+             token.id AS tok, token.val AS token,
+             xsrf.id AS xsrf, act.id AS act,
+             pwd.val AS pwd, pwd.id AS pid,
+             email.val AS email
+      FROM my user
+      LEFT JOIN my token ON token.up = user.id AND token.t = ${TYPE.TOKEN}
+      LEFT JOIN my xsrf ON xsrf.up = user.id AND xsrf.t = ${TYPE.XSRF}
+      LEFT JOIN my pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
+      LEFT JOIN my act ON act.up = user.id AND act.t = ${TYPE.ACTIVITY}
+      LEFT JOIN my email ON email.up = user.id AND email.t = ${TYPE.EMAIL}
+      WHERE user.id = ? AND user.t = ${TYPE.USER}
+    `, [userId]);
+
+    if (!rows.length || !rows[0].uid) {
+      return res.json({ error: 'EXPIRED' });
+    }
+
+    const row = rows[0];
+
+    // Validate confirmation token
+    if (row.token !== c) {
+      return res.json({ error: 'EXPIRED' });
+    }
+
+    // PHP line 97: Hash plaintext password — sha1(Salt(username, plaintext_pwd))
+    const hashedPwd = phpCompatibleHash(row.user, row.pwd, 'my');
+    await pool.query('UPDATE my SET val = ? WHERE id = ?', [hashedPwd, row.pid]);
+
+    // PHP line 98: updateTokens(row) — create/update token, xsrf, activity + set cookie
+    let token;
+    if (row.tok) {
+      token = row.token;
+    } else {
+      token = generateToken();
+      await insertRow('my', row.uid, 1, TYPE.TOKEN, token);
+    }
+
+    const xsrfVal = generateXsrf(token, 'my', 'my');
+    if (row.xsrf) {
+      await pool.query('UPDATE my SET val = ? WHERE id = ?', [xsrfVal, row.xsrf]);
+    } else {
+      await insertRow('my', row.uid, 1, TYPE.XSRF, xsrfVal);
+    }
+
+    const nowSec = String(Math.floor(Date.now() / 1000));
+    if (row.act) {
+      await pool.query('UPDATE my SET val = ? WHERE id = ?', [nowSec, row.act]);
+    } else {
+      await insertRow('my', row.uid, 1, TYPE.ACTIVITY, nowSec);
+    }
+
+    res.cookie('my', token, { maxAge: 2592000 * 12 * 1000, path: '/' });
+
+    // PHP line 99: createDb(uid, "", email, pwd)
+    const locale = getLocale(req, 'my');
+    const emailAddr = row.email || row.user;
+    const newDbName = await createUserDb(pool, 'my', row.uid, emailAddr, locale, 'u');
+    if (newDbName) {
+      res.cookie(newDbName, token, { maxAge: 2592000 * 12 * 1000, path: '/' });
+      logger.info('[Legacy Register] Confirmation: user + DB created', { userId: row.uid, db: newDbName });
+    }
+
+    // PHP line 100: redirect
+    return res.redirect('/my');
+  } catch (err) {
+    logger.error('[Legacy Register] Confirmation error', { error: err.message, userId });
+    return res.status(500).json({ error: 'Confirmation failed' });
   }
 });
 
@@ -3683,7 +3951,7 @@ router.post('/my/register', async (req, res) => {
 
       // Send confirmation email (PHP parity: mail() with confirmation link)
       const host = req.get('host') || 'localhost';
-      const confirmUrl = `https://${host}/my/register?confirm=${confirmToken}`;
+      const confirmUrl = `https://${host}/my/register?u=${userId}&c=${confirmToken}`;
       await sendMail({
         to: email,
         subject: `Подтверждение регистрации ${email}`,
@@ -3839,7 +4107,8 @@ router.post('/:db', async (req, res, next) => {
       return res.redirect(302, '/' + db);
     }
 
-    const rendered = await renderMainPage(db, token);
+    const locale = getLocale(req, db);
+    const rendered = await renderMainPage(db, token, locale);
     if (rendered) {
       return res.type('html').send(rendered);
     }
@@ -3980,7 +4249,8 @@ router.get('/:db', async (req, res, next) => {
     }
 
     // Valid token - render main page with template variables
-    const rendered = await renderMainPage(db, token);
+    const locale = getLocale(req, db);
+    const rendered = await renderMainPage(db, token, locale);
     if (rendered) {
       return res.type('html').send(rendered);
     }
@@ -4103,17 +4373,17 @@ router.get('/:db/:page*', async (req, res, next) => {
           const fm = k.match(/^F_(\d+)$/);
           if (fm && String(fm[1]) !== String(subId)) {
             if (!colFilterDict[fm[1]]) colFilterDict[fm[1]] = {};
-            colFilterDict[fm[1]].F = String(v);
+            colFilterDict[fm[1]].F = checkInjection(String(v));
           }
           const frm = k.match(/^FR_(\d+)$/);
           if (frm) {
             if (!colFilterDict[frm[1]]) colFilterDict[frm[1]] = {};
-            colFilterDict[frm[1]].FR = String(v);
+            colFilterDict[frm[1]].FR = checkInjection(String(v));
           }
           const tom = k.match(/^TO_(\d+)$/);
           if (tom) {
             if (!colFilterDict[tom[1]]) colFilterDict[tom[1]] = {};
-            colFilterDict[tom[1]].TO = String(v);
+            colFilterDict[tom[1]].TO = checkInjection(String(v));
           }
         }
 
@@ -5377,11 +5647,12 @@ function extractAttributes(body) {
 async function getNextOrder(db, parentId, typeId = null) {
   try {
     const pool = getPool();
-    let query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${db} WHERE up = ?`;
+    const z = sanitizeIdentifier(db);
+    let query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ?`;
     const params = [parentId];
 
     if (typeId !== null) {
-      query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${db} WHERE up = ? AND t = ?`;
+      query = `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ? AND t = ?`;
       params.push(typeId);
     }
 
@@ -5397,7 +5668,7 @@ async function getNextOrder(db, parentId, typeId = null) {
  */
 async function insertRow(db, parentId, order, typeId, value) {
   const pool = getPool();
-  const query = `INSERT INTO ${db} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
+  const query = `INSERT INTO ${sanitizeIdentifier(db)} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
   const [result] = await pool.query(query, [parentId, order, typeId, value]);
   return result.insertId;
 }
@@ -5444,7 +5715,7 @@ async function insertBatch(pool, db, rows, options = {}) {
  */
 async function updateRowValue(db, id, value) {
   const pool = getPool();
-  const query = `UPDATE ${db} SET val = ? WHERE id = ?`;
+  const query = `UPDATE ${sanitizeIdentifier(db)} SET val = ? WHERE id = ?`;
   const [result] = await pool.query(query, [value, id]);
   return result.affectedRows > 0;
 }
@@ -5454,7 +5725,7 @@ async function updateRowValue(db, id, value) {
  */
 async function deleteRow(db, id) {
   const pool = getPool();
-  const query = `DELETE FROM ${db} WHERE id = ?`;
+  const query = `DELETE FROM ${sanitizeIdentifier(db)} WHERE id = ?`;
   const [result] = await pool.query(query, [id]);
   return result.affectedRows > 0;
 }
@@ -5464,7 +5735,7 @@ async function deleteRow(db, id) {
  */
 async function deleteChildren(db, parentId) {
   const pool = getPool();
-  const query = `DELETE FROM ${db} WHERE up = ?`;
+  const query = `DELETE FROM ${sanitizeIdentifier(db)} WHERE up = ?`;
   const [result] = await pool.query(query, [parentId]);
   return result.affectedRows;
 }
@@ -5474,7 +5745,7 @@ async function deleteChildren(db, parentId) {
  */
 async function getObjectById(db, id) {
   const pool = getPool();
-  const query = `SELECT id, up, ord, t, val FROM ${db} WHERE id = ?`;
+  const query = `SELECT id, up, ord, t, val FROM ${sanitizeIdentifier(db)} WHERE id = ?`;
   const [rows] = await pool.query(query, [id]);
   return rows.length > 0 ? rows[0] : null;
 }
@@ -5484,7 +5755,7 @@ async function getObjectById(db, id) {
  */
 async function getRequisiteByType(db, parentId, typeId) {
   const pool = getPool();
-  const query = `SELECT id, val FROM ${db} WHERE up = ? AND t = ? LIMIT 1`;
+  const query = `SELECT id, val FROM ${sanitizeIdentifier(db)} WHERE up = ? AND t = ? LIMIT 1`;
   const [rows] = await pool.query(query, [parentId, typeId]);
   return rows.length > 0 ? rows[0] : null;
 }
@@ -5639,10 +5910,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       }
 
       // removeMasks: strip :!NULL:, :MULTI:, :ALIAS=...:
-      let stripped = reqVal
-        .replace(/:!NULL:/g, '')
-        .replace(/:MULTI:/g, '')
-        .replace(/:ALIAS=.*?:/g, '');
+      let stripped = removeMasks(reqVal);
 
       if (stripped === '') continue;
 
@@ -6878,7 +7146,7 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
       const aliasMatch = r.val.match(/:ALIAS=([^:]+):/);
       return {
         id: r.id,
-        name: r.val.replace(/:ALIAS=[^:]+:/g, '').replace(/:!NULL:/g, '').replace(/:MULTI:/g, '').trim(),
+        name: removeMasks(r.val).trim(),
         alias: aliasMatch ? aliasMatch[1] : `req_${r.id}`,
         type: r.t
       };
@@ -7228,18 +7496,21 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     const pool = getPool();
     const id = parseInt(refId, 10);
     const searchQuery = req.query.q || '';
+    // Guard search input against SQL injection (Issue #308)
+    if (searchQuery) checkInjection(searchQuery);
     const restrictParam = req.query.r || '';
     const limitParam = Math.min(parseInt(req.query.LIMIT || req.query.limit || '80', 10) || 80, 500);
+    const z = sanitizeIdentifier(db);
 
     // Get the reference type info and its requisites (children)
     // PHP: dic = row["dic"] from the reference definition
     const [refRows] = await pool.query(
       `SELECT r.t AS dic, r.val AS attr, def_reqs.t, req_orig.t AS base,
               CASE WHEN base.id != base.t THEN 1 ELSE 0 END AS is_ref, req.id AS req_id
-       FROM ${db} r
-       JOIN ${db} dic ON dic.id = r.t
-       JOIN ${db} par ON par.id = r.up AND par.up = 0
-       LEFT JOIN ${db} def_reqs ON def_reqs.up = r.t
+       FROM ${z} r
+       JOIN ${z} dic ON dic.id = r.t
+       JOIN ${z} par ON par.id = r.up AND par.up = 0
+       LEFT JOIN ${z} def_reqs ON def_reqs.up = r.t
        LEFT JOIN ${db} req_orig ON req_orig.id = def_reqs.t
        LEFT JOIN ${db} base ON base.id = req_orig.t
        LEFT JOIN ${db} req ON req.up = dic.t AND req.t = def_reqs.t
@@ -7300,11 +7571,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
     // PHP tries Get_block_data but finds no block and falls through to the normal query.
     // Node.js: only treat as formula when it genuinely starts with '&'.
     const rawAttr = refRows[0].attr || '';
-    const attrsFormula = rawAttr
-      .replace(/:ALIAS=[^:]*:/g, '')
-      .replace(/:!NULL:/g, '')
-      .replace(/:MULTI:/g, '')
-      .trim();
+    const attrsFormula = removeMasks(rawAttr).trim();
 
     if (attrsFormula.startsWith('&')) {
       // Dynamic formula: the attr value is a report block reference (e.g. "&my_dropdown_report").
@@ -9792,6 +10059,7 @@ async function compileReport(pool, db, reportId) {
     hasAggregates: false,       // true when at least one column uses an aggregate function
     params: {},                 // PHP: $GLOBALS["STORED_REPS"][$id]["params"] — keyed by type id (e.g. 262 = REP_WHERE)
     repParams: {},              // PHP: $GLOBALS["STORED_REPS"][$id]["rep_params"] — keyed by param name
+    refTyp: {},                 // PHP: $GLOBALS["STORED_REPS"][$id]["ref_typ"] — { [reqTypeId]: baseType } for ref columns
   };
 
   try {
@@ -9834,6 +10102,8 @@ async function compileReport(pool, db, reportId) {
       report.types[report.head.length - 1]   = reqTypeId;
       report.baseOut[report.head.length - 1] = col.col_base_t || TYPE.CHARS;
 
+      const colIsRef = !REV_BASE_TYPE[col.col_base_t] && (col.col_base_t || 0) > 0;
+
       report.columns.push({
         id:         col.id,
         name:       colLabel,
@@ -9841,9 +10111,14 @@ async function compileReport(pool, db, reportId) {
         reqTypeId,          // ← which type to LEFT JOIN on
         isMainCol:  reqTypeId === report.parentType,  // main object's own val
         baseType:   col.col_base_t || TYPE.CHARS,
-        isRef:      !REV_BASE_TYPE[col.col_base_t] && (col.col_base_t || 0) > 0,
+        isRef:      colIsRef,
         order:      col.ord,
       });
+
+      // PHP: $GLOBALS["STORED_REPS"][$id]["ref_typ"][$reqTypeId] = col_base_t
+      if (colIsRef) {
+        report.refTyp[String(reqTypeId)] = col.col_base_t;
+      }
     }
 
     // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_NAME, REP_COL_FORMULA, REP_COL_FROM, REP_COL_TO, REP_COL_HIDE, REP_COL_TOTAL ──
@@ -10018,6 +10293,28 @@ async function compileReport(pool, db, reportId) {
 }
 
 /**
+ * Check whether a given type is a reference type within a compiled report.
+ *
+ * PHP equivalent (index.php:1750):
+ *   function isRef($id, $par, $typ) {
+ *     if(isset($GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ]))
+ *       return $GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ];
+ *     return false;
+ *   }
+ *
+ * @param {object} report - compiled report object (from compileReport)
+ * @param {number|string} typ - type ID to check
+ * @returns {number|false} the reference target type ID, or false
+ */
+function isRef(report, typ) {
+  const key = String(typ);
+  if (report && report.refTyp && report.refTyp[key] !== undefined) {
+    return report.refTyp[key];
+  }
+  return false;
+}
+
+/**
  * Execute report with proper LEFT JOINs per column.
  *
  * PHP equivalent: builds one LEFT JOIN per REP_COLS column joining the db
@@ -10159,11 +10456,12 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       const expr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
 
       // Use constructWhere for DSL-style filters (from/to/eq translated to F/FR/TO)
+      // Guard filter values against SQL injection (Issue #308)
       const cwFilter = {};
-      if (filter.from !== undefined && filter.from !== '') cwFilter.FR = String(filter.from);
-      if (filter.to   !== undefined && filter.to   !== '') cwFilter.TO = String(filter.to);
-      if (filter.eq   !== undefined && filter.eq   !== '') cwFilter.F  = String(filter.eq);
-      if (filter.like !== undefined && filter.like !== '') cwFilter.F  = `%${filter.like}%`;
+      if (filter.from !== undefined && filter.from !== '') cwFilter.FR = checkInjection(String(filter.from));
+      if (filter.to   !== undefined && filter.to   !== '') cwFilter.TO = checkInjection(String(filter.to));
+      if (filter.eq   !== undefined && filter.eq   !== '') cwFilter.F  = checkInjection(String(filter.eq));
+      if (filter.like !== undefined && filter.like !== '') cwFilter.F  = `%${checkInjection(String(filter.like))}%`;
       // If from has DSL syntax (%, !, @, etc.) and no TO, treat as F (exact/LIKE filter)
       if (cwFilter.FR && !cwFilter.TO && !cwFilter.F) {
         const fv = cwFilter.FR;
@@ -10785,7 +11083,7 @@ router.get('/:db/export/:typeId', async (req, res) => {
       const aliasMatch = r.val.match(/:ALIAS=([^:]+):/);
       return {
         id: r.id,
-        name: r.val.replace(/:ALIAS=[^:]+:/g, '').replace(/:!NULL:/g, '').replace(/:MULTI:/g, '').trim(),
+        name: removeMasks(r.val).trim(),
         alias: aliasMatch ? aliasMatch[1] : null,
         type: r.t
       };
@@ -13054,11 +13352,14 @@ export {
   getFilename,
   normalSize,
   checkNewRef,
+  isRef,
   checkValGranted,
   checkRepColGranted,
   constructWhere,
   formatDateForStorage,
   sendMail,
+  sanitizeIdentifier,
+  checkInjection,
 };
 
 export default router;
