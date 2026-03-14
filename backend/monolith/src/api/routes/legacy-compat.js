@@ -5555,6 +5555,31 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
       return res.status(200).json({ error: 'Cannot move metadata object' });
     }
 
+    // Type mismatch guard: old parent and new parent must be of the same type
+    const [parentRows] = await pool.query(
+      `SELECT old_p.t AS ut, new_p.t AS tt
+       FROM \`${db}\` old_p, \`${db}\` new_p
+       WHERE old_p.id = ? AND new_p.id = ?`,
+      [oldParentId, newParentId]
+    );
+    if (parentRows.length === 0) {
+      return res.status(200).json({ error: 'Parent not found' });
+    }
+    if (parentRows[0].ut !== parentRows[0].tt) {
+      return res.status(200).json({ error: `Types mismatch ${objType}!=${parentRows[0].tt}` });
+    }
+
+    // Same-parent no-op: skip if already under the target parent
+    if (oldParentId === newParentId) {
+      legacyRespond(req, res, db, {
+        id: objectId,
+        obj: null,
+        next_act: 'object',
+        args: newParentId !== 1 ? `moved&&F_U=${newParentId}` : 'moved&',
+      });
+      return;
+    }
+
     // Order adjustment in old parent: shift down peers after removed object
     await pool.query(
       `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`,
@@ -5562,7 +5587,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     );
 
     const newOrder = await getNextOrder(db, newParentId, objType);
-    await pool.query(`UPDATE ${db} SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
+    await pool.query(`UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
 
@@ -6667,32 +6692,41 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
   try {
     const id = parseInt(typeId, 10);
     const pool = getPool();
-    let warnings = '';
 
-    // PHP parity: instance count check — warn if type has existing instances
+    // PHP parity: hard-block if type has existing instances (die() in PHP)
     const [[instRow]] = await pool.query(
       `SELECT COUNT(id) AS cnt FROM \`${db}\` WHERE t = ?`, [id]
     );
     if (instRow && instRow.cnt > 0) {
-      warnings = `Warning: ${instRow.cnt} instance(s) of this type exist. `;
+      return res.status(400).json({
+        error: `Cannot delete the Type in case there are objects of this type (total objects: ${instRow.cnt})!`
+      });
     }
 
-    // PHP parity: report usage check — check if type is referenced in reports
-    const [[repRow]] = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM \`${db}\` WHERE t = ${TYPE.REP_COLS} AND val = ?`,
-      [String(id)]
+    // PHP parity: hard-block if type or its requisites are used in reports (my_die() in PHP)
+    const [repRows] = await pool.query(
+      `SELECT reqs.id FROM \`${db}\`, \`${db}\` reqs
+       WHERE \`${db}\`.t = ${TYPE.REP_COLS} AND \`${db}\`.val = reqs.id
+       AND (reqs.up = ? OR reqs.id = ?) LIMIT 1`,
+      [id, id]
     );
-    if (repRow && repRow.cnt > 0) {
-      warnings += `Warning: type is referenced in ${repRow.cnt} report column(s). `;
+    if (repRows.length > 0) {
+      return res.status(400).json({
+        error: `The type or its requisites are used in reports`
+      });
     }
 
-    // PHP parity: role/grant usage check
-    const [[grantRow]] = await pool.query(
-      `SELECT COUNT(*) AS cnt FROM \`${db}\` WHERE t = ${TYPE.GRANT} AND val = ?`,
-      [String(id)]
+    // PHP parity: hard-block if type or its requisites are used in roles (die() in PHP)
+    const [roleRows] = await pool.query(
+      `SELECT objs.t, objs.val FROM \`${db}\`, \`${db}\` r, \`${db}\` objs
+       WHERE r.t = ${TYPE.ROLE} AND r.up = 1 AND objs.up = r.id
+       AND objs.val = \`${db}\`.id AND (\`${db}\`.up = ? OR \`${db}\`.id = ?) LIMIT 1`,
+      [id, id]
     );
-    if (grantRow && grantRow.cnt > 0) {
-      warnings += `Warning: type is referenced in ${grantRow.cnt} grant(s). `;
+    if (roleRows.length > 0) {
+      return res.status(400).json({
+        error: `The type or its requisites are used in roles!`
+      });
     }
 
     // Use recursiveDelete — type may have requisites/children
@@ -6703,7 +6737,7 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     // PHP api_dump(): {id:typeId, obj:null, next_act:"edit_types", args:"ext"}
     // PHP: $id stays as original typeId, $obj not set (null), next_act defaults to "edit_types"
     // args: PHP always appends "ext" for all _d_* actions
-    legacyRespond(req, res, db, { id, obj: null, next_act: 'edit_types', args: 'ext', warnings });
+    legacyRespond(req, res, db, { id, obj: null, next_act: 'edit_types', args: 'ext' });
   } catch (error) {
     logger.error('[Legacy _d_del] Error', { error: error.message, db });
     res.status(200).json({ error: error.message  });
@@ -6728,7 +6762,8 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     const name = req.body.val || req.body.name || '';
     const alias = req.body.alias || null;
     const required = req.body.required === '1' || req.body.required === true;
-    const multi = req.body.multi === '1' || req.body.multi === true;
+    let multi = req.body.multi === '1' || req.body.multi === true;
+    const multiselect = req.body.multiselect !== undefined;
     const pool = getPool();
 
     if (!name) {
@@ -6761,6 +6796,19 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     );
     if (dupeRows.length > 0) {
       return res.status(200).json({ error: `Requisite of type ${reqType} already exists on type ${parentId}` });
+    }
+
+    // 5. MULTI_MASK auto-application (PHP parity: index.php ~8575)
+    // If the requisite type is a reference (its own t is not a basic type)
+    // and the multiselect parameter is set, auto-apply :MULTI: flag.
+    if (!multi && multiselect) {
+      const [reqTypeRows] = await pool.query(
+        `SELECT t FROM \`${db}\` WHERE id = ? LIMIT 1`, [reqType]
+      );
+      if (reqTypeRows.length > 0 && REV_BASE_TYPE[reqTypeRows[0].t] === undefined) {
+        multi = true;
+        logger.info('[Legacy _d_req] MULTI_MASK auto-applied for reference type', { db, reqType });
+      }
     }
 
     // Build value with modifiers
@@ -6808,6 +6856,12 @@ router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     const obj = await getObjectById(db, id);
     if (!obj) {
       return res.status(404).json({ error: 'Requisite not found' });
+    }
+
+    // PHP parity (lines 8604-8607): hierarchy check — parent (obj.t) must be metadata root (up=0)
+    const parent = await getObjectById(db, obj.t);
+    if (!parent || parent.up !== 0) {
+      return res.status(200).json({ error: 'Error in subordination of the link object' });
     }
 
     // Parse existing modifiers
@@ -7119,40 +7173,86 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
     const pool = getPool();
     const forced = req.body.forced !== undefined || req.query.forced !== undefined;
 
-    // Fetch requisite info BEFORE deleting
-    const obj = await getObjectById(db, id);
-    if (!obj) {
+    // PHP parity: fetch requisite definition row + its parent type info
+    const [[defRow]] = await pool.query(
+      `SELECT def.up, def.t AS typ, def.ord, r.t AS parentT, r.val AS parentVal
+       FROM \`${db}\` def, \`${db}\` r WHERE def.id = ? AND r.id = def.t`,
+      [id]
+    );
+    if (!defRow) {
       return res.status(200).json({ error: 'Requisite not found' });
     }
-    const typeId = obj.up;
+    const typeId = defRow.up;
+    const myord = defRow.ord;
+    const isBasic = REV_BASE_TYPE[defRow.parentT] !== undefined;
 
-    // Usage check: cannot delete requisite type if instances exist (unless forced)
-    if (!forced) {
-      const [[usageRow]] = await pool.query(
-        `SELECT COUNT(*) AS cnt FROM \`${db}\` WHERE t = ? AND up != 0`,
-        [id]
-      );
-      if (usageRow && usageRow.cnt > 0) {
-        return res.status(200).json({ error: `Cannot delete: ${usageRow.cnt} instance(s) of this requisite exist` });
+    // PHP parity: check if requisite data exists in object instances
+    let usageSql;
+    if (isBasic) {
+      // Basic type: count objects of parent type that have this requisite column
+      usageSql = `SELECT COUNT(1) AS cnt FROM \`${db}\` obj, \`${db}\` req
+                  WHERE obj.t = ? AND (req.t = ? OR req.t = ?) AND req.up = obj.id`;
+    } else {
+      // Reference type: count objects of parent type referencing this req by val
+      usageSql = `SELECT COUNT(1) AS cnt FROM \`${db}\` obj, \`${db}\` req
+                  WHERE obj.t = ? AND req.up = obj.id AND req.val = ?`;
+    }
+
+    const usageParams = isBasic ? [typeId, defRow.typ, id] : [typeId, String(id)];
+    const [[usageRow]] = await pool.query(usageSql, usageParams);
+
+    if (usageRow && usageRow.cnt > 0) {
+      if (forced) {
+        // PHP parity: forced — delete requisite data from instances
+        const cleanSql = isBasic
+          ? `SELECT req.id FROM \`${db}\` obj, \`${db}\` req
+             WHERE obj.t = ? AND (req.t = ? OR req.t = ?) AND req.up = obj.id`
+          : `SELECT req.id FROM \`${db}\` obj, \`${db}\` req
+             WHERE obj.t = ? AND req.up = obj.id AND req.val = ?`;
+        const [cleanRows] = await pool.query(cleanSql, usageParams);
+        for (const row of cleanRows) {
+          await recursiveDelete(pool, db, row.id);
+        }
+        // PHP parity: also clean grants referencing this requisite
+        const [grantRows] = await pool.query(
+          `SELECT reqs.id FROM \`${db}\`, \`${db}\` reqs
+           WHERE \`${db}\`.t = ${TYPE.ROLE} AND \`${db}\`.up = 1
+           AND reqs.up = \`${db}\`.id AND reqs.val = ?`,
+          [String(id)]
+        );
+        for (const row of grantRows) {
+          await recursiveDelete(pool, db, row.id);
+        }
+      } else {
+        // PHP parity: hard-block deletion (my_die() in PHP)
+        return res.status(400).json({
+          error: `You are going to delete a requisite if there are records of this type (total records: ${usageRow.cnt})!`
+        });
       }
     }
 
-    // If forced, clean up grants referencing this type
-    if (forced) {
-      await pool.query(
-        `DELETE FROM \`${db}\` WHERE t = ${TYPE.GRANT} AND val = ?`,
-        [String(id)]
-      );
+    // PHP parity: hard-block if requisite is used in reports or roles (my_die() — no forced override)
+    const [[repRoleRow]] = await pool.query(
+      `SELECT ${TYPE.REP_COLS} AS t FROM \`${db}\` WHERE t = ${TYPE.REP_COLS} AND val = ?
+       UNION SELECT reqs.t FROM \`${db}\`, \`${db}\` reqs
+       WHERE \`${db}\`.t = ${TYPE.ROLE} AND \`${db}\`.up = 1
+       AND reqs.up = \`${db}\`.id AND reqs.val = ? LIMIT 1`,
+      [String(id), String(id)]
+    );
+    if (repRoleRow) {
+      return res.status(400).json({
+        error: `The requisite is used in reports or roles!`
+      });
     }
+
+    // Delete the requisite
+    await recursiveDelete(pool, db, id);
 
     // Renumber remaining siblings after deletion
     await pool.query(
       `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND ord > ?`,
-      [typeId, obj.ord]
+      [typeId, myord]
     );
-
-    // Use recursiveDelete instead of flat delete — requisite may have children
-    await recursiveDelete(pool, db, id);
 
     logger.info('[Legacy _d_del_req] Requisite deleted', { db, id, forced });
 
