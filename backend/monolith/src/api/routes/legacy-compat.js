@@ -11206,23 +11206,23 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (q.JSON_CR !== undefined) {
-        // PHP JSON_CR: columns[i].id = string; type = "string" (PHP always emits literal "string")
-        const cols = report.columns.map((col, i) => ({ id: String(col.id || i), name: col.name, type: 'string' }));
-        // PHP parity: rows as object keyed by row ID (not array)
-        // Also cast NUMBER/SIGNED columns to numeric values
-        const numericTypes = new Set([TYPE.NUMBER, TYPE.SIGNED]);
+        // PHP JSON_CR: columns[i] = {id, name, type:"string"}
+        // PHP bug: $key gets overwritten in the foreach, so type switch always uses last $key
+        // meaning type is effectively always "string"
+        const filteredCols = fieldNamesSet
+          ? report.columns.filter(c => fieldNamesSet.has(c.name))
+          : report.columns;
+        const cols = filteredCols.map((col, i) => ({ id: String(col.id || i), name: col.name, type: 'string' }));
+        // PHP parity: rows is an object keyed by numeric row index (0, 1, 2...), NOT by row.id
+        // All values are strings (PHP returns DB strings as-is, no numeric conversion)
         const rowsObj = {};
-        for (const row of results.data) {
+        for (let idx = 0; idx < results.data.length; idx++) {
+          const row = results.data[idx];
           const r = {};
-          for (const col of report.columns) {
-            let val = row[col.alias] ?? '';
-            if (numericTypes.has(col.baseType) && val !== '') {
-              val = Number(val);
-            }
-            r[col.id] = val;
+          for (const col of filteredCols) {
+            r[String(col.id || '')] = String(row[col.alias] ?? '');
           }
-          const rowId = row.id || row.main_val;
-          rowsObj[rowId] = r;
+          rowsObj[idx] = r;
         }
         return res.json({ columns: cols, rows: rowsObj, totalCount: results.data.length });
       }
@@ -13490,19 +13490,22 @@ router.post('/:db', async (req, res, next) => {
       return res.json(obj);
     }
 
-    // PHP JSON_CR: rows = array of {col_id: val}; columns id=string, type="string"
+    // PHP JSON_CR: rows = object keyed by numeric index {0: {col_id: val}, 1: ...}
+    // columns[i] = {id, name, type:"string"}; all values as strings
     if (q.JSON_CR !== undefined) {
       const cols = report.columns.map((col, i) => ({
         id: String(col.id || i),
         name: col.name,
         type: 'string'
       }));
-      const rows = results.data.map(row => {
+      const rowsObj = {};
+      for (let idx = 0; idx < results.data.length; idx++) {
+        const row = results.data[idx];
         const r = {};
-        for (const col of report.columns) r[col.id] = row[col.alias] ?? '';
-        return r;
-      });
-      return res.json({ columns: cols, rows, totalCount: results.data.length });
+        for (const col of report.columns) r[String(col.id || '')] = String(row[col.alias] ?? '');
+        rowsObj[idx] = r;
+      }
+      return res.json({ columns: cols, rows: rowsObj, totalCount: results.data.length });
     }
 
     // Hierarchical format: group rows by parent (up field)
