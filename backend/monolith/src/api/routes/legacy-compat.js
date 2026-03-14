@@ -14,7 +14,7 @@ import cookieParser from 'cookie-parser';
 import multer from 'multer';
 import nodemailer from 'nodemailer';
 import { phpJsonMiddleware } from '../../utils/jsonSortKeys.js';
-import { isAbnPostProcessFunction, applyAbnFunction, isAbnFunction, ABN_SQL_FIELD_FUNCS } from '../utils/report-functions.js';
+import { isAbnPostProcessFunction, applyAbnFunction, isAbnFunction, ABN_SQL_FIELD_FUNCS, getJsonVal, checkJson } from '../utils/report-functions.js';
 import { t9n, getLocale } from '../../utils/t9n.js';
 
 const router = express.Router();
@@ -10294,6 +10294,9 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     // ── Map rows → named output ───────────────────────────────────────────
     // Collect columns that need abn_* post-processing (PHP parity: index.php:3364)
     const abnPostCols = report.columns.filter(c => c.func && isAbnPostProcessFunction(c.func));
+    // Collect columns with JSON formula extraction (PHP parity: index.php:3490-3506)
+    const jsonFormulaCols = report.columns.filter(c => c.formula &&
+      (c.formula.toUpperCase().startsWith('JSON.') || c.formula.toUpperCase().startsWith('CURL.') || c.formula.toUpperCase().startsWith("'CURL.")));
     let rownum = 1;
     results.data = rows.map(row => {
       const out = { id: row.id, val: row.main_val };
@@ -10311,6 +10314,19 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       // Apply abn_* post-processing functions (abn_DATE2STR, abn_NUM2STR, etc.)
       for (const col of abnPostCols) {
         out[col.alias] = applyAbnFunction(col.func, out[col.alias]);
+      }
+      // Apply JSON formula extraction (PHP parity: index.php:3490-3506)
+      // When REP_COL_FORMULA starts with "JSON.", extract the named key from the cell value.
+      // When REP_COL_FORMULA starts with "CURL." or "'CURL.", extract from curl response (if available).
+      for (const col of jsonFormulaCols) {
+        const formula = col.formula;
+        const cellVal = String(out[col.alias] ?? '');
+        if (formula.toUpperCase().startsWith('JSON.')) {
+          const jsonKey = formula.substring(5); // strip "JSON."
+          if (jsonKey && cellVal.toUpperCase().indexOf(jsonKey.toUpperCase()) !== -1) {
+            out[col.alias] = checkJson(jsonKey, cellVal);
+          }
+        }
       }
       return out;
     });
