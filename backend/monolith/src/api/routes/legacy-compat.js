@@ -634,6 +634,99 @@ function localize(text, locale) {
 }
 
 /**
+ * Port of PHP Parse_block() (index.php:7148).
+ *
+ * Recursively renders a template block tree (produced by makeTree / issue #301)
+ * by substituting placeholder tokens with data values, global variables, and
+ * recursively rendered child blocks.
+ *
+ * PHP globals mapped to function parameters:
+ *   $blocks      -> blocks      (flat dict keyed by dot-paths, each with CONTENT / PARENT)
+ *   $REPORT_DATA -> reportData  (dict keyed by block path -> array of row objects)
+ *   $CUR_VARS    -> (local per-row binding)
+ *
+ * @param {object}  blocks      - Block tree from makeTree (flat dict, dot-path keys)
+ * @param {string}  blockPath   - Current block dot-path (e.g. "&main" or "&main.detail")
+ * @param {object}  reportData  - Dataset rows keyed by block path
+ * @param {object}  globalVars  - Global template variables (db, user, token, etc.)
+ * @param {number}  [depth=0]   - Current recursion depth (infinite-loop guard)
+ * @returns {string} Rendered HTML for this block (all iterations concatenated)
+ */
+const MAX_PARSE_DEPTH = 100;
+
+function parseBlock(blocks, blockPath, reportData, globalVars, depth = 0) {
+  if (depth > MAX_PARSE_DEPTH) {
+    throw new Error(
+      `Parse_block: maximum recursion depth (${MAX_PARSE_DEPTH}) exceeded at "${blockPath}"`
+    );
+  }
+
+  const block = blocks[blockPath];
+  if (!block || block.CONTENT == null) {
+    return '';
+  }
+
+  // 1. Get data rows for this block from reportData
+  const rows = (reportData && reportData[blockPath]) || [];
+
+  // 2. Identify child blocks — any block whose PARENT equals this blockPath
+  const childPaths = Object.keys(blocks).filter(
+    (key) => blocks[key].PARENT === blockPath
+  );
+
+  // If there are no data rows, render the block once with just global vars
+  // (structural / layout blocks that don't correspond to a query).
+  const iterations = rows.length > 0 ? rows : [{}];
+
+  let output = '';
+
+  for (const row of iterations) {
+    // Start with the raw block content
+    let content = block.CONTENT;
+
+    // 2a. Replace {colname} data placeholders from the current row.
+    //     PHP does this via str_replace on CUR_VARS keys.
+    //     We match {word} tokens but skip reserved namespaces (_global_, _block_).
+    content = content.replace(/\{([^{}]+)\}/g, (match, key) => {
+      // Skip namespace-prefixed placeholders — handled separately
+      if (key.startsWith('_global_.') || key.startsWith('_block_.')) {
+        return match;
+      }
+      // Replace with row value if present, otherwise leave placeholder
+      if (row && Object.prototype.hasOwnProperty.call(row, key)) {
+        const val = row[key];
+        return val != null ? String(val) : '';
+      }
+      return match;
+    });
+
+    // 2b. Replace {_global_.varname} with global variables
+    if (globalVars) {
+      content = content.replace(/\{_global_\.([^{}]+)\}/g, (match, varName) => {
+        if (Object.prototype.hasOwnProperty.call(globalVars, varName)) {
+          const val = globalVars[varName];
+          return val != null ? String(val) : '';
+        }
+        return match;
+      });
+    }
+
+    // 2c. Recursively render child blocks and insert at {_block_.childpath} points
+    for (const childPath of childPaths) {
+      const childHtml = parseBlock(
+        blocks, childPath, reportData, globalVars, depth + 1
+      );
+      const insertionPoint = `{_block_.${childPath}}`;
+      content = content.split(insertionPoint).join(childHtml);
+    }
+
+    output += content;
+  }
+
+  return output;
+}
+
+/**
  * Render main.html template with PHP-style global variables.
  * PHP replaces {_global_.xxx} placeholders before serving the template.
  */
@@ -13706,6 +13799,7 @@ export {
   getCurrentValues,
   getFile,
   makeTree,
+  parseBlock,
 };
 
 export default router;
