@@ -103,6 +103,7 @@ export const securityHeaders = helmet({
   },
 
   // X-Frame-Options (clickjacking protection)
+  // Note: legacy-compat routes override this to SAMEORIGIN (Issue #390)
   frameguard: {
     action: 'deny', // Prevent embedding in iframes
   },
