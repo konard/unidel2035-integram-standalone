@@ -709,7 +709,7 @@ async function updateTokens(pool, db, row) {
   }
 
   // Update activity timestamp to current epoch seconds
-  const nowSec = String(Math.floor(Date.now() / 1000));
+  const nowSec = String(Date.now() / 1000);
   if (row.act) {
     await execSql(pool,
       `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
