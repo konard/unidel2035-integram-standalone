@@ -6186,8 +6186,9 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     value = resolveBuiltIn(value, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
 
     // Fetch type's base type for formatVal
-    const { rows: typeMeta } = await execSql(pool, `SELECT t AS base_type FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
+    const { rows: typeMeta } = await execSql(pool, `SELECT t AS base_type, ord AS type_ord FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
     const baseType = typeMeta.length > 0 ? typeMeta[0].base_type : 0;
+    const unique = typeMeta.length > 0 ? typeMeta[0].type_ord : 0; // PHP: $unique = $row["ord"]; Ord=1 means unique
 
     // PHP parity: CheckRepColGranted($val) for REPORT_COLUMN types (index.php:8323-8324)
     if (baseType === TYPE.REPORT_COLUMN && parseInt(value, 10) !== 0) {
@@ -6197,24 +6198,56 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       }
     }
 
-    // Default values: DATE→today, DATETIME→timestamp, SIGNED→1, NUMBER+unique→MAX+1
+    // Get next order (PHP: Calc_Order) — must be before default values (PHP line 8373)
+    const order = await calcOrder(pool, db, parentId, typeId);
+
+    // Default values: DATE→today, DATETIME→timestamp, SIGNED→1, NUMBER→unique MAX+1 or 1
+    // PHP parity: index.php lines 8378-8407
+    let redirectToEdit = null; // set if we find an empty object to reuse
+    let redirectMaxVal = 0;    // maxVal for the redirect response
     if (!value) {
-      if (baseType === TYPE.DATE) {
-        const now = new Date();
-        value = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+      if (baseType === TYPE.NUMBER) {
+        if (unique) {
+          // PHP: unique numeric — find MAX val scoped to parent, check for empty object reuse
+          const { rows: maxRows } = await execSql(pool, `SELECT MAX(CAST(val AS UNSIGNED)) AS maxVal FROM \`${db}\` WHERE t = ? AND up = ?`, [typeId, parentId], { label: 'query_select' });
+          const maxVal = (maxRows[0]?.maxVal || 0);
+
+          // PHP lines 8387-8393: check if an "empty" object with max value exists (has no requisites)
+          const { rows: emptyObj } = await execSql(pool, `SELECT id FROM \`${db}\` obj WHERE t = ? AND val = ? AND up = ? AND NOT EXISTS(SELECT * FROM \`${db}\` reqs WHERE up = obj.id) LIMIT 1`, [typeId, maxVal, parentId], { label: 'query_select' });
+          if (emptyObj.length > 0) {
+            // Reuse the empty object — redirect to edit it
+            redirectToEdit = emptyObj[0].id;
+            redirectMaxVal = maxVal;
+          } else {
+            value = String(maxVal + 1);
+          }
+        } else {
+          // PHP line 8398: non-unique NUMBER default is 1
+          value = '1';
+        }
+      } else if (baseType === TYPE.DATE) {
+        // PHP line 8400-8401: Format_Val($base_typ, date("d", time() + tzone))
+        // date("d") returns day of month; Format_Val converts to YYYYMMDD
+        const now = new Date((Date.now()) + tzone * 1000);
+        const dayStr = String(now.getDate());
+        value = String(formatVal(baseType, dayStr, tzone));
       } else if (baseType === TYPE.DATETIME) {
         value = String(Math.floor(Date.now() / 1000));
       } else if (baseType === TYPE.SIGNED) {
         value = '1';
-      } else if (baseType === TYPE.NUMBER) {
-        // Check if type has unique constraint (ord=1)
-        const { rows: typeAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
-        const attrs = typeAttrs.length > 0 ? String(typeAttrs[0].val) : '';
-        if (attrs.includes(':UNIQ:') || attrs.includes(':ORD:')) {
-          const { rows: maxRows } = await execSql(pool, `SELECT MAX(CAST(val AS UNSIGNED)) AS maxVal FROM \`${db}\` WHERE t = ?`, [typeId], { label: 'query_select' });
-          value = String((maxRows[0]?.maxVal || 0) + 1);
-        }
+      } else {
+        // PHP line 8406-8407: fallback — set the Order instead of the empty Value
+        value = String(order);
       }
+    }
+
+    // If we found an empty object to reuse, redirect to edit instead of creating new
+    if (redirectToEdit) {
+      const editId = redirectToEdit;
+      if (isApiRequest(req)) {
+        return res.json({ id: editId, obj: editId, ord: 0, next_act: 'edit_obj', args: '', val: htmlEsc(formatValView(baseType, String(redirectMaxVal), tzone)) });
+      }
+      return res.redirect(`/${db}/edit_obj/${editId}`);
     }
 
     value = String(formatVal(baseType, value, tzone));
@@ -6259,9 +6292,6 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       defValSet[reqId] = true;
       req.body['t' + reqId] = resolved;
     }
-
-    // Get next order (PHP: Calc_Order)
-    const order = await calcOrder(pool, db, parentId, typeId);
 
     // Uniqueness check: if ord=1 (unique), check if same val+type already exists
     if (parseInt(order, 10) === 1 || order === 1) {
