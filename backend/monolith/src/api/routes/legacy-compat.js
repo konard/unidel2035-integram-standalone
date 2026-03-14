@@ -249,6 +249,17 @@ async function makeTree(db, templateFile, rootBlock = '', params = {}) {
 
 const router = express.Router();
 
+// ── Cache-Control headers (Issue #377, PHP parity: index.php:2–4) ───────────
+// PHP sets these globally at the top of index.php before any routing:
+//   header("Cache-Control: no-store, no-cache, must-revalidate");
+//   header("Expires: ".date("r"));
+// Without these, browsers/proxies may cache JSON API responses and serve stale data.
+router.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Expires', new Date().toUTCString());
+  next();
+});
+
 // Apply PHP JSON key sorting middleware to achieve byte-for-byte parity (Issue #173)
 // PHP's json_encode() sorts keys alphabetically, while Node.js preserves insertion order.
 // This middleware ensures all JSON responses have keys sorted alphabetically.
