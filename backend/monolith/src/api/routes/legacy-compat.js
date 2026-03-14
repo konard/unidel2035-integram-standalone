@@ -2804,13 +2804,15 @@ router.post('/:db/checkcode', async (req, res) => {
  * Password reset endpoint
  * POST /:db/auth?reset
  *
- * PHP: pwd_reset() finds user, generates new password, sends by email/SMS,
- * then calls login() which in API mode returns:
- *   {"message":"MAIL","db":"...","login":"...","details":"..."}
+ * PHP: pwd_reset() finds user by login or email, generates a new random password,
+ * hashes it with sha1(Salt(username, newPwd)), then:
+ *   - If user has email AND existing password: sends email with new password + confirmation link.
+ *     Password is NOT changed until user clicks the confirmation link (/:db/confirm).
+ *   - If user has email but NO password yet: sends email with new password, creates password record immediately.
+ *   - If user has phone (no email): sends SMS with new password, updates password immediately.
  *
- * NOTE: actual email/SMS sending is not implemented in standalone mode.
- * The user's password is NOT changed until they confirm via the link — PHP behaviour.
- * We return the PHP-compatible response format so the UI shows the right message.
+ * Returns PHP-compatible login() API format:
+ *   {"message":"MAIL"|"SMS"|"NEW_PWD"|"WRONG_CONT","db":"...","login":"...","details":"..."}
  *
  * This second handler runs only when ?reset is set (first handler does normal auth).
  */
@@ -2832,34 +2834,132 @@ router.post('/:db/auth', async (req, res, next) => {
 
   try {
     const pool = getPool();
-    // Look up user by login or email
+    // Look up user by login or email — also fetch password record (id + hash)
+    // PHP: SELECT u.id, email.val, pwd.id pwd, phone.val phone, pwd.val old, u.val u
     const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uval, email.val email, phone.val phone
+      `SELECT u.id uid, u.val uval, email.val email, phone.val phone,
+              pwd.id pwdId, pwd.val oldHash
        FROM ${db} u
        LEFT JOIN ${db} email ON email.up=u.id AND email.t=${TYPE.EMAIL}
        LEFT JOIN ${db} phone ON phone.up=u.id AND phone.t=${TYPE.PHONE}
+       LEFT JOIN ${db} pwd   ON pwd.up=u.id   AND pwd.t=${TYPE.PASSWORD}
        WHERE (u.val=? OR email.val=?) AND u.t=${TYPE.USER}
        LIMIT 1`,
       [u, u]
     );
 
     if (rows.length === 0) {
-      // PHP: my_die("Wrong credentials") — in API mode returns [{"error":"..."}]
-      if (isJSON) return res.status(200).json({ error: `Wrong credentials for user ${u} in ${db}. Please send login and password as POST-parameters.` });
+      // PHP: login($z, $u, "WRONG_CONT", ...) — user not found
+      if (isJSON) {
+        return res.status(200).json({
+          message: 'WRONG_CONT',
+          db,
+          login: u,
+          details: 'The user name, email or phone invalid set in your Space',
+        });
+      }
       return res.redirect(`/${db}`);
     }
 
     const userRow = rows[0];
-    // PHP sends email/SMS with new password — we acknowledge but don't send
-    // Return PHP-compatible login() API format
-    const message = userRow.email ? 'MAIL' : (userRow.phone ? 'SMS' : 'MAIL');
-    const details = 'Password reset email sent (standalone mode: email not configured)';
+    const username = userRow.uval;
+    // PHP: $pwd = substr(md5(mt_rand()), 0, 6) — generate random 6-char password
+    const newPlainPwd = crypto.createHash('md5')
+      .update(String(Math.random() * Date.now()))
+      .digest('hex')
+      .substring(0, 6);
+    // PHP: $sha = sha1(Salt($u, $pwd))
+    const newHash = phpCompatibleHash(username, newPlainPwd, db);
+
+    const host = req.get('host') || req.hostname || 'localhost';
+    const MAIL_REGEX = /^.+@.+\..+$/;
+
+    if (MAIL_REGEX.test(userRow.email)) {
+      // --- User has a valid email ---
+      if (userRow.pwdId) {
+        // User already has a password → send confirmation-required email
+        // PHP: password is NOT changed until user clicks confirm link
+        const confirmUrl = `https://${host}/${db}/confirm?u=${encodeURIComponent(username)}&p=${newHash}&o=${userRow.oldHash}`;
+        const unsubUrl = `https://${host}/my/register?optout=${encodeURIComponent(db)}`;
+
+        await sendMail({
+          to: userRow.email,
+          subject: `Password reset for ${db}`,
+          text: `Your new password: ${newPlainPwd}\r\n`
+            + `Confirm it here before use: ${confirmUrl}\r\n\r\n`
+            + `Best regards,\r\nIntegram team\r\n\r\n`
+            + `In case you do not want to receive messages regarding your registration and the ${db} database, unsubscribe here:\r\n${unsubUrl}`,
+          tag: '[Legacy Reset]',
+          devLog: { username, newPlainPwd, confirmUrl },
+        });
+
+        // Clear auth cookies
+        res.cookie(db, '', { maxAge: 0, path: '/' });
+        res.cookie('secret', '', { maxAge: 0, path: '/' });
+
+        return res.status(200).json({
+          message: 'MAIL',
+          db,
+          login: username,
+          details: 'The password is sent by email, please confirm it by the provided link',
+        });
+      } else {
+        // No password yet → create password record immediately, no confirmation needed
+        await insertRow(db, userRow.uid, 1, TYPE.PASSWORD, newHash);
+        const loginUrl = `https://${host}/${db}/?login=${encodeURIComponent(username)}`;
+
+        await sendMail({
+          to: userRow.email,
+          subject: 'Your new password',
+          text: `Your new password: ${newPlainPwd}\r\n${loginUrl}`,
+          tag: '[Legacy Reset]',
+          devLog: { username, newPlainPwd, loginUrl },
+        });
+
+        // Clear auth cookies
+        res.cookie(db, '', { maxAge: 0, path: '/' });
+        res.cookie('secret', '', { maxAge: 0, path: '/' });
+
+        return res.status(200).json({
+          message: 'NEW_PWD',
+          db,
+          login: username,
+          details: 'The password is sent by email',
+        });
+      }
+    } else if (userRow.phone && userRow.phone.length > 0) {
+      // --- User has a phone number (no valid email) ---
+      // PHP normalises phone and sends SMS; we update password immediately
+      if (userRow.pwdId) {
+        await updateRowValue(db, userRow.pwdId, newHash);
+      } else {
+        await insertRow(db, userRow.uid, 1, TYPE.PASSWORD, newHash);
+      }
+
+      // Clear auth cookies
+      res.cookie(db, '', { maxAge: 0, path: '/' });
+      res.cookie('secret', '', { maxAge: 0, path: '/' });
+
+      logger.info({ username, phone: userRow.phone }, '[Legacy Reset] SMS password reset (SMS not sent in standalone mode)');
+
+      return res.status(200).json({
+        message: 'SMS',
+        db,
+        login: username,
+        details: 'The password is sent via SMS',
+      });
+    }
+
+    // No valid email or phone — cannot reset
+    // PHP: login($z, $u, "WRONG_CONT", ...)
+    res.cookie(db, '', { maxAge: 0, path: '/' });
+    res.cookie('secret', '', { maxAge: 0, path: '/' });
 
     return res.status(200).json({
-      message,
+      message: 'WRONG_CONT',
       db,
-      login: userRow.uval,
-      details,
+      login: username,
+      details: 'The user name, email or phone invalid set in your Space',
     });
   } catch (error) {
     logger.error({ error: error.message, db, u }, '[Legacy Reset] Error');
@@ -8261,19 +8361,21 @@ router.post('/:db/jwt', async (req, res) => {
 
 /**
  * confirm - Confirm password change via reset link
- * POST /:db/confirm
+ * GET/POST /:db/confirm
  *
  * PHP: index.php lines 7704-7713
  * Params: u=username, o=old_pwd_hash, p=new_pwd_hash
  * On success: login(db, u, "confirm") → API: {"message":"confirm","db":db,"login":u,"details":""}
  * On failure: login(db, u_encoded, "obsolete") → API: {"message":"obsolete","db":db,"login":u,"details":""}
+ *
+ * The GET handler is needed because the reset email sends a clickable link with query params.
  */
-router.post('/:db/confirm', async (req, res) => {
+async function handleConfirm(req, res) {
   const { db } = req.params;
-  // PHP params: u=username, o=old_hash, p=new_hash
-  const u = (req.body.u || '').toLowerCase().trim();
-  const o = req.body.o || '';
-  const p = req.body.p || '';
+  // Accept params from both query string (GET from email link) and body (POST)
+  const u = (req.query.u || req.body?.u || '').toLowerCase().trim();
+  const o = req.query.o || req.body?.o || '';
+  const p = req.query.p || req.body?.p || '';
 
   if (!isValidDbName(db)) {
     return res.status(200).json({ error: 'Invalid database' });
@@ -8303,7 +8405,9 @@ router.post('/:db/confirm', async (req, res) => {
     logger.error('[Legacy confirm] Error', { error: error.message, db });
     return res.status(200).json({ message: 'obsolete', db, login: encodeURIComponent(u), details: '' });
   }
-});
+}
+router.get('/:db/confirm', handleConfirm);
+router.post('/:db/confirm', handleConfirm);
 
 /**
  * login - Login page action (redirect)
