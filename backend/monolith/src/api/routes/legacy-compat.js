@@ -1172,6 +1172,392 @@ function getAlign(typeId) {
 }
 
 // ============================================================================
+// Construct_WHERE — Full PHP-parity filter engine (Issue #215)
+// Ports PHP Construct_WHERE (index.php:624-886) to Node.js.
+// ============================================================================
+
+/**
+ * Format a date value for DB storage (YYYYMMDD).
+ * Port of PHP Format_Val() for DATE type only.
+ *   dd.mm.yyyy / dd/mm/yyyy → yyyymmdd
+ *   yyyy-mm-dd / yyyy/mm/dd → yyyymmdd
+ */
+function formatDateForStorage(val) {
+  if (!val || val === '' || val === 'NULL') return val;
+  val = String(val).trim();
+  if (val.startsWith('[') || val.startsWith('_request_.')) return val;
+  // ISO: YYYY[-/.]MM[-/.]DD
+  const iso = val.match(/^(\d{4})[-\/.]?(\d{2})[-\/.]?(\d{2})/);
+  if (iso) return iso[1] + iso[2] + iso[3];
+  // dd/mm/yyyy or dd.mm.yyyy etc
+  const parts = val.replace(/[.,\s]/g, '/').split('/');
+  const dd = parseInt(parts[0], 10);
+  const mm = parts[1] ? parseInt(parts[1], 10) : new Date().getMonth() + 1;
+  const rawYr = parts[2] ? parseInt(parts[2], 10) : new Date().getFullYear();
+  const dy = String(parts[2] || '').length === 4 ? rawYr : 2000 + rawYr;
+  return String(dy) + String(mm).padStart(2, '0') + String(dd).padStart(2, '0');
+}
+
+/**
+ * Core filter engine — port of PHP Construct_WHERE().
+ *
+ * @param {string|number} key   - Requisite type ID being filtered
+ * @param {object} filter       - {F: 'value', FR: 'from', TO: 'to'}
+ * @param {string|number} curTyp - Parent type ID (main object type)
+ * @param {string|number|false} joinReq - Requisite ID for JOIN context, or false/0
+ * @param {object} ctx          - { revBT, refTyps, multi, db }
+ *   revBT   — { [typeId]: 'DATE'|'NUMBER'|... } (maps type IDs to base type names)
+ *   refTyps — { [typeId]: refTargetTypeId } (reference type targets)
+ *   multi   — Set or object of array/multi type IDs
+ *   db      — database name
+ * @returns {{ where: string, join: string, params: any[], distinct: boolean }}
+ */
+function constructWhere(key, filter, curTyp, joinReq, ctx) {
+  key = String(key);
+  curTyp = String(curTyp);
+  const join = joinReq && joinReq !== '0' && joinReq !== 0;
+  const db = ctx.db || '';
+  const z = db ? `\`${db}\`` : 'db';
+  let whereStr = '';
+  let joinStr = '';
+  const params = [];
+  let distinct = false;
+
+  if (ctx.multi && (ctx.multi instanceof Set ? ctx.multi.has(key) : ctx.multi[key])) {
+    distinct = true;
+  }
+
+  for (const f of Object.keys(filter)) {
+    let value = String(filter[f]);
+    let NOT_flag = false;
+    let NOT = '';
+    let NOT_EQ = '';
+    let EQ = '=';
+    let LTGT = false;
+
+    // Parse prefix operators
+    if (value.startsWith('!')) {
+      NOT = 'NOT';
+      NOT_EQ = '!';
+      value = value.slice(1);
+      NOT_flag = true;
+    } else if (/^\s*(>=|<=)/.test(value)) {
+      const m = value.match(/^\s*(>=|<=)/);
+      NOT_EQ = m[1];
+      value = value.replace(/^\s*(>=|<=)/, '');
+      EQ = '';
+    } else if (/^\s*[><]/.test(value)) {
+      const m = value.match(/^\s*([><])/);
+      NOT_EQ = m[1];
+      LTGT = true;
+      value = value.replace(/^\s*[><]/, '');
+      EQ = '';
+    }
+
+    // resolveBuiltIn substitution (needs user context; skip if unavailable)
+    if (ctx.user) {
+      value = resolveBuiltIn(value, ctx.user, db, ctx.tzone || 0, '');
+    }
+
+    let search_val = '';
+    let inFlag = false;
+    let inIDFlag = false;
+
+    if (value === '%') {
+      // NULL check: % means IS NOT NULL; !% means IS NULL
+      search_val = `IS ${NOT_flag ? '' : 'NOT '}NULL`;
+    } else if (/^\s*IN\s*\(/i.test(value) && value.trimEnd().endsWith(')')) {
+      // IN(1,2,3)
+      inFlag = true;
+      const inner = value.replace(/^\s*IN\s*\(/i, '').slice(0, -1);
+      const items = inner.split(',').map(s => s.trim());
+      const placeholders = items.map(() => '?').join(',');
+      search_val = `${NOT} IN (${placeholders})`;
+      params.push(...items);
+    } else if (/^\s*@IN\s*\(/i.test(value) && value.trimEnd().endsWith(')')) {
+      // @IN(1,2,3) — ID-based IN
+      inIDFlag = true;
+      const inner = value.replace(/^\s*@IN\s*\(/i, '').slice(0, -1);
+      const items = inner.split(',').map(s => s.trim());
+      for (const v of items) {
+        if (!/^\d+$/.test(v)) {
+          throw new Error('Non-numeric IDs are not allowed');
+        }
+      }
+      const placeholders = items.map(() => '?').join(',');
+      search_val = `${NOT} IN (${placeholders})`;
+      params.push(...items.map(Number));
+      EQ = '';
+    } else {
+      // Standard value comparison
+      if (!value.includes('%')) {
+        search_val = `${NOT_EQ}${EQ}?`;
+        params.push(value);
+      } else {
+        search_val = `${NOT} LIKE ?`;
+        params.push(value);
+      }
+    }
+
+    // ── @-ID search: @999 or !@999 ──
+    if (ctx.revBT && ctx.revBT[key] === 'ARRAY') {
+      distinct = true;
+    }
+
+    if (value.startsWith('@') && !inIDFlag) {
+      // Single ID search
+      const idVal = parseInt(value.slice(1).replace(/ /g, ''), 10);
+      if (key === curTyp) {
+        whereStr += ` AND vals.id${NOT_EQ}${EQ}?`;
+        params.push(idVal);
+      } else {
+        if (ctx.revBT && ctx.revBT[key] === 'ARRAY') distinct = true;
+        let joinTable, joinCond;
+        if (NOT_flag) {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            params.push(joinReq);
+          } else {
+            joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+            joinCond = '';
+            params.push(parseInt(key, 10));
+          }
+          whereStr += ` AND (a${key}.id!=? OR a${key}.id IS NULL)`;
+          params.push(idVal);
+        } else {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinCond = ` AND r${key}.t=?`;
+            params.push(joinReq, idVal);
+          } else {
+            joinTable = ` JOIN ${z} a${key} ON a${key}.up=vals.id`;
+            joinCond = ` AND a${key}.id=?`;
+            params.push(parseInt(key, 10));
+            // push idVal for the WHERE
+          }
+          whereStr += ` AND a${key}.id=?`;
+          params.push(idVal);
+        }
+        if (join && !joinStr.includes(`a${key}`)) {
+          joinStr += `${joinTable}${joinCond}`;
+        }
+      }
+      break;
+    }
+
+    if (inIDFlag) {
+      // @IN() already handled search_val; apply to id column
+      if (key === curTyp) {
+        whereStr += ` AND vals.id ${search_val}`;
+      } else {
+        let joinTable, joinCond;
+        if (NOT_flag) {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            params.push(joinReq);
+          } else {
+            joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+            joinCond = '';
+            params.push(parseInt(key, 10));
+          }
+          whereStr += ` AND (a${key}.id ${search_val} OR a${key}.id IS NULL)`;
+        } else {
+          if (ctx.refTyps && ctx.refTyps[key]) {
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinCond = ` AND r${key}.t ${search_val}`;
+            params.push(joinReq);
+          } else {
+            joinTable = ` JOIN ${z} a${key} ON a${key}.up=vals.id`;
+            joinCond = '';
+          }
+          whereStr += ` AND a${key}.id ${search_val}`;
+        }
+        if (join && !joinStr.includes(`a${key}`)) {
+          joinStr += `${joinTable}${joinCond}`;
+        }
+      }
+      break;
+    }
+
+    // ── Type-aware WHERE construction ──
+    if (ctx.refTyps && ctx.refTyps[key]) {
+      // Reference type — CROSS JOIN pattern
+      if (join) {
+        const jt = ` LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=? AND a${key}.t=?`;
+        if (!joinStr.includes(`a${key}`)) {
+          joinStr += jt;
+          params.push(joinReq, parseInt(ctx.refTyps[key], 10));
+        }
+      }
+      if (NOT_flag) {
+        whereStr += ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL)`;
+      } else {
+        whereStr += ` AND a${key}.val ${search_val}`;
+      }
+    } else {
+      const baseType = (ctx.revBT && ctx.revBT[key]) || 'SHORT';
+
+      // DATE/DATETIME: format values for storage
+      const isDate = baseType === 'DATE';
+      if ((baseType === 'DATE' || baseType === 'DATETIME') && value !== '%') {
+        value = formatDateForStorage(value);
+      }
+
+      if (baseType === 'DATE' || baseType === 'DATETIME' ||
+          baseType === 'NUMBER' || baseType === 'SIGNED') {
+        // Numeric/date types — range support
+
+        // ".." range syntax: 100..500 → BETWEEN
+        if (value.includes('..') && value.indexOf('..') > 0 && (filter.FR !== undefined || filter.TO === undefined)) {
+          const rangeParts = value.split('..');
+          const v0 = parseFloat(String(rangeParts[0]).replace(/ /g, ''));
+          const v1 = parseFloat(String(rangeParts[1]).replace(/ /g, ''));
+          if (!isNaN(v0) && !isNaN(v1)) {
+            if (key === curTyp) {
+              whereStr += ` AND vals.val BETWEEN ? AND ?`;
+            } else {
+              if (join) {
+                const jt = ` JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+                if (!joinStr.includes(`a${key}`)) {
+                  joinStr += jt;
+                  params.push(parseInt(key, 10));
+                }
+              }
+              whereStr += ` AND a${key}.val BETWEEN ? AND ?`;
+            }
+            params.push(v0, v1);
+            break;
+          }
+        }
+
+        // Strip spaces from numeric values
+        const numericClean = parseFloat(String(value).replace(/ /g, ''));
+        if (numericClean !== 0 && !isNaN(numericClean)) {
+          value = String(value).replace(/ /g, '');
+        }
+
+        // Single-border or exact match (no full range)
+        if (filter.TO === undefined || filter.FR === undefined || value === '%') {
+          if (key === curTyp) {
+            if (inFlag) {
+              whereStr += ` AND vals.val ${search_val}`;
+            } else if (value === '%') {
+              whereStr += ` AND vals.val ${search_val}`;
+            } else if (!value.includes('%')) {
+              whereStr += ` AND vals.val${NOT_EQ}${EQ}?`;
+              // Re-push the formatted value (remove old unformatted one)
+              params.pop(); // remove old value pushed in standard section
+              params.push(isDate ? value : value);
+            } else {
+              whereStr += ` AND vals.val ${NOT} LIKE ?`;
+            }
+          } else {
+            const joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+            if (join && !joinStr.includes(`a${key}`)) {
+              joinStr += ` ${joinTable}`;
+              params.push(parseInt(key, 10));
+            }
+            if (value === '%') {
+              whereStr += ` AND a${key}.val ${search_val}`;
+            } else if (!value.includes('%')) {
+              if (NOT_flag) {
+                if (inFlag) {
+                  whereStr += ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL)`;
+                } else {
+                  whereStr += ` AND (a${key}.val!=? OR a${key}.val IS NULL)`;
+                  params.pop(); // remove old
+                  params.push(value);
+                }
+              } else {
+                if (inFlag) {
+                  whereStr += ` AND a${key}.val ${search_val}`;
+                } else if (!isNaN(parseFloat(value))) {
+                  whereStr += ` AND a${key}.val${NOT_EQ}${EQ}?`;
+                  params.pop();
+                  params.push(value);
+                } else {
+                  whereStr += ` AND a${key}.val=?`;
+                  params.pop();
+                  params.push(value);
+                }
+              }
+            } else {
+              if (NOT_flag) {
+                whereStr += ` AND (a${key}.val NOT LIKE ? OR a${key}.val IS NULL)`;
+              } else {
+                whereStr += ` AND a${key}.val LIKE ?`;
+              }
+            }
+          }
+        } else {
+          // Range filter with FR / TO
+          let rangeVal;
+          if (isDate) {
+            rangeVal = value;  // already formatted
+          } else if (!value.includes('[') && !value.includes('_')) {
+            rangeVal = parseFloat(String(value).replace(/ /g, ''));
+          } else {
+            rangeVal = value;
+          }
+
+          if (f === 'FR') {
+            if (key === curTyp) {
+              whereStr += ` AND vals.val>=?`;
+              params.pop(); // remove standard push
+              params.push(rangeVal);
+            } else {
+              const jt = `JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+              if (join && !joinStr.includes(`a${key}`)) {
+                joinStr += ` ${jt}`;
+                params.push(parseInt(key, 10));
+              }
+              if (baseType === 'NUMBER' || baseType === 'SIGNED') {
+                whereStr += ` AND CAST(a${key}.val AS DECIMAL)>=CAST(? AS DECIMAL)`;
+              } else {
+                whereStr += ` AND a${key}.val>=?`;
+              }
+              params.pop();
+              params.push(rangeVal);
+            }
+          } else if (f === 'TO') {
+            if (key === curTyp) {
+              whereStr += ` AND vals.val<=?`;
+              params.pop();
+              params.push(rangeVal);
+            } else {
+              whereStr += ` AND a${key}.val<=?`;
+              params.pop();
+              params.push(rangeVal);
+            }
+          }
+        }
+      } else {
+        // DEFAULT: SHORT, CHARS, HTML, etc.
+        if (key === curTyp) {
+          whereStr += ` AND vals.val ${search_val}`;
+        } else {
+          if (baseType === 'ARRAY') distinct = true;
+          const joinTable = `LEFT JOIN ${z} a${key} ON a${key}.up=vals.id AND a${key}.t=?`;
+          if (join && !joinStr.includes(`a${key}`)) {
+            joinStr += ` ${joinTable}`;
+            params.push(parseInt(key, 10));
+          }
+          if (NOT_flag) {
+            whereStr += ` AND (a${key}.val ${search_val} OR a${key}.val IS NULL)`;
+          } else {
+            whereStr += ` AND a${key}.val ${search_val}`;
+          }
+        }
+      }
+    }
+  }
+
+  return { where: whereStr, join: joinStr, params, distinct };
+}
+
+// ============================================================================
 // Phase 1 — New Helper Functions (PHP parity)
 // ============================================================================
 
@@ -9409,6 +9795,8 @@ export {
   checkNewRef,
   checkValGranted,
   checkRepColGranted,
+  constructWhere,
+  formatDateForStorage,
 };
 
 export default router;
