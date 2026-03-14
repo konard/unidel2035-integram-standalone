@@ -335,9 +335,7 @@ async function buildMyrolemenu(pool, db, roleObjId) {
 
   // Primary: run the 'MyRoleMenu' report from the DB (matches PHP Get_block_data behavior)
   try {
-    const [repRows] = await pool.query(
-      `SELECT id FROM \`${db}\` WHERE val = 'MyRoleMenu' AND t = ${TYPE.REPORT} LIMIT 1`
-    );
+    const { rows: repRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = 'MyRoleMenu' AND t = ${TYPE.REPORT} LIMIT 1`, [], { label: 'buildMyrolemenu_select' });
     if (repRows.length > 0) {
       const report = await compileReport(pool, db, repRows[0].id);
       if (report && report.columns.length > 0) {
@@ -362,25 +360,19 @@ async function buildMyrolemenu(pool, db, roleObjId) {
   if (!roleObjId) return empty;
   try {
     // Get menu items: children of role row whose type has base SHORT (t=3)
-    const [menuItems] = await pool.query(
-      `SELECT m.id, m.val AS name
+    const { rows: menuItems } = await execSql(pool, `SELECT m.id, m.val AS name
        FROM \`${db}\` m
        JOIN \`${db}\` menu_typ ON menu_typ.id = m.t AND menu_typ.t = ${TYPE.SHORT}
        WHERE m.up = ? AND m.val != ''
-       ORDER BY m.ord`,
-      [roleObjId]
-    );
+       ORDER BY m.ord`, [roleObjId], { label: 'buildMyrolemenu_select' });
     if (menuItems.length === 0) return empty;
     const mIds = menuItems.map(m => m.id);
     const ph   = mIds.map(() => '?').join(',');
     // Get Address children (first non-empty non-type child of each menu item)
-    const [addrRows] = await pool.query(
-      `SELECT a.up, a.val AS href
+    const { rows: addrRows } = await execSql(pool, `SELECT a.up, a.val AS href
        FROM \`${db}\` a
        WHERE a.up IN (${ph}) AND a.id != a.t AND a.val != ''
-       ORDER BY a.up, a.ord`,
-      mIds
-    );
+       ORDER BY a.up, a.ord`, mIds, { label: 'buildMyrolemenu_select' });
     const hrefByParent = {};
     for (const a of addrRows) {
       if (hrefByParent[a.up] === undefined) hrefByParent[a.up] = a.href;
@@ -412,25 +404,19 @@ async function getMenuForToken(pool, db, token) {
       const basicLogin = decoded.slice(0, colonIdx);
       const basicPwd   = decoded.slice(colonIdx + 1);
       const pwdHash    = phpCompatibleHash(basicLogin, basicPwd, db);
-      [uRows] = await pool.query(
-        `SELECT role_def.id AS role_obj_id
+      uRows = (await execSql(pool, `SELECT role_def.id AS role_obj_id
          FROM \`${db}\` u
          JOIN \`${db}\` pwd ON pwd.up = u.id AND pwd.t = ${TYPE.PASSWORD} AND pwd.val = ?
          LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
            ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
-         WHERE u.t = ${TYPE.USER} AND u.val = ? LIMIT 1`,
-        [pwdHash, basicLogin]
-      );
+         WHERE u.t = ${TYPE.USER} AND u.val = ? LIMIT 1`, [pwdHash, basicLogin], { label: 'getMenuForToken_select' })).rows;
     } else {
-      [uRows] = await pool.query(
-        `SELECT role_def.id AS role_obj_id
+      uRows = (await execSql(pool, `SELECT role_def.id AS role_obj_id
          FROM \`${db}\` u
          JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
          LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
            ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
-         WHERE u.t = ${TYPE.USER} LIMIT 1`,
-        [token]
-      );
+         WHERE u.t = ${TYPE.USER} LIMIT 1`, [token], { label: 'getMenuForToken_select' })).rows;
     }
     if (uRows && uRows.length > 0) {
       return buildMyrolemenu(pool, db, uRows[0].role_obj_id || null);
@@ -709,7 +695,7 @@ async function updateTokens(pool, db, row) {
   }
 
   // Update activity timestamp to current epoch seconds
-  const nowSec = String(Math.floor(Date.now() / 1000));
+  const nowSec = String(Date.now() / 1000);
   if (row.act) {
     await execSql(pool,
       `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
@@ -960,14 +946,11 @@ async function renderMainPage(db, token, locale) {
   let user = '', userId = 0, xsrf = '', action = '';
   try {
     const pool = getPool();
-    const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uname, x.val xsrf_val
+    const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, x.val xsrf_val
        FROM \`${db}\` u
        JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
        LEFT JOIN \`${db}\` x ON x.up = u.id AND x.t = ${TYPE.XSRF}
-       WHERE u.t = ${TYPE.USER} LIMIT 1`,
-      [token]
-    );
+       WHERE u.t = ${TYPE.USER} LIMIT 1`, [token], { label: 'renderMainPage_select' });
     if (rows.length > 0) {
       userId = rows[0].uid;
       user   = rows[0].uname || '';
@@ -1253,7 +1236,7 @@ async function getGrants(pool, db, roleId, userCtx) {
       WHERE gr.up = ? AND gr.t = ${TYPE.ROLE_OBJECT}
     `;
 
-    const [rows] = await pool.query(query, [roleId]);
+    const { rows: rows } = await execSql(pool, query, [roleId], { label: 'getGrants_query' });
 
     for (const row of rows) {
       if (row.lev && row.lev.length > 0) {
@@ -1355,7 +1338,7 @@ async function checkGrant(pool, db, grants, id, t = 0, grant = 'WRITE', username
     }
 
     const params = t === 0 ? [id] : [id, t, t];
-    const [rows] = await pool.query(query, params);
+    const { rows: rows } = await execSql(pool, query, params, { label: 'checkGrant_query' });
 
     if (rows.length > 0) {
       const row = rows[0];
@@ -1460,7 +1443,7 @@ async function grant1Level(pool, db, grants, id, username = '') {
       LEFT JOIN ${db} req ON req.t = ref.id
       WHERE ref.t = ? AND ref.up = 0
     `;
-    const [rows] = await pool.query(query, [id]);
+    const { rows: rows } = await execSql(pool, query, [id], { label: 'grant1Level_query' });
 
     for (const row of rows) {
       if (grants[row.up]) {
@@ -1659,7 +1642,7 @@ async function checkValGranted(pool, db, grants, t, val, id = 0) {
     if (maskSql === '') return undefined;
 
     try {
-      const [rows] = await pool.query(`SELECT ${maskSql}`, maskParams);
+      const { rows: rows } = await execSql(pool, `SELECT ${maskSql}`, maskParams, { label: 'checkValGranted_select' });
       if (rows.length > 0) {
         const firstVal = rows[0][Object.keys(rows[0])[0]];
         if (firstVal) {
@@ -1718,7 +1701,7 @@ async function valBarredByMask(pool, db, grants, t, val) {
       reqMask = true;
       const { sql: grantSql, params: grantParams } = fetchWhereForMask(t, val, grant);
       try {
-        const [rows] = await pool.query(`SELECT ${grantSql}`, grantParams);
+        const { rows: rows } = await execSql(pool, `SELECT ${grantSql}`, grantParams, { label: 'valBarredByMask_select' });
         if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
           return false; // Value matches required mask — not barred
         }
@@ -1729,7 +1712,7 @@ async function valBarredByMask(pool, db, grants, t, val) {
       // Level defined — check if value matches the level pattern
       const { sql: lvlSql, params: lvlParams } = fetchWhereForMask(t, val, mask);
       try {
-        const [rows] = await pool.query(`SELECT ${lvlSql}`, lvlParams);
+        const { rows: rows } = await execSql(pool, `SELECT ${lvlSql}`, lvlParams, { label: 'valBarredByMask_select' });
         if (rows.length > 0 && rows[0][Object.keys(rows[0])[0]]) {
           return grant !== 'WRITE'; // Barred unless grant key is "WRITE"
         }
@@ -1761,13 +1744,10 @@ async function valBarredByMask(pool, db, grants, t, val) {
  * @returns {boolean} true if granted, throws/returns error message if not
  */
 async function checkRepColGranted(pool, db, grants, id, level = 0, username = '') {
-  const [rows] = await pool.query(
-    `SELECT obj.up, req.id req FROM \`${db}\` obj
+  const { rows: rows } = await execSql(pool, `SELECT obj.up, req.id req FROM \`${db}\` obj
      LEFT JOIN (\`${db}\` req CROSS JOIN \`${db}\` par)
        ON req.t = obj.id AND par.up = 0 AND req.up = par.id
-     WHERE obj.id = ?`,
-    [id]
-  );
+     WHERE obj.id = ?`, [id], { label: 'checkRepColGranted_select' });
 
   if (rows.length === 0) return true;
   const row = rows[0];
@@ -2519,8 +2499,7 @@ async function legacyAuthMiddleware(req, res, next) {
 
     // --- Attempt token-based authentication ---
     if (token) {
-      const [rows] = await pool.query(
-        `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
+      const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, xsrf.val xsrf_val,
                 role_def.val role_val, role_def.id roleId
          FROM ${db} u
          JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
@@ -2528,9 +2507,7 @@ async function legacyAuthMiddleware(req, res, next) {
          LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
            ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
          WHERE u.t=${TYPE.USER}
-         LIMIT 1`,
-        [token]
-      );
+         LIMIT 1`, [token], { label: 'legacyAuthMiddleware_select' });
 
       if (rows.length > 0) {
         const user = rows[0];
@@ -2557,8 +2534,7 @@ async function legacyAuthMiddleware(req, res, next) {
     // When no valid token/auth is provided, look for a 'guest' user in the DB.
     // PHP uses hardcoded token "gtuoeksetn" and generates xsrf via xsrf("gtuoeksetn","guest").
     const GUEST_TOKEN = 'gtuoeksetn';
-    const [guestRows] = await pool.query(
-      `SELECT u.id uid, u.val uname, tok.val tok_val, tok.id tok_id,
+    const { rows: guestRows } = await execSql(pool, `SELECT u.id uid, u.val uname, tok.val tok_val, tok.id tok_id,
               xsrf.id xsrf_id, role_def.id roleId, role_def.val role_val
        FROM ${db} u
        LEFT JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN}
@@ -2566,9 +2542,7 @@ async function legacyAuthMiddleware(req, res, next) {
        LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
          ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
        WHERE u.t=${TYPE.USER} AND u.val='guest'
-       LIMIT 1`,
-      []
-    );
+       LIMIT 1`, [], { label: 'legacyAuthMiddleware_select' });
 
     if (guestRows.length > 0) {
       const guest = guestRows[0];
@@ -2576,23 +2550,14 @@ async function legacyAuthMiddleware(req, res, next) {
 
       // Ensure the guest user has a token row (PHP: Insert if missing)
       if (!guest.tok_val) {
-        await pool.query(
-          `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 0, ${TYPE.TOKEN}, ?)`,
-          [guest.uid, GUEST_TOKEN]
-        );
+        await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 0, ${TYPE.TOKEN}, ?)`, [guest.uid, GUEST_TOKEN], { label: 'legacyAuthMiddleware_insert' });
       }
 
       // Ensure the guest user has an xsrf row (PHP: Insert if missing)
       if (!guest.xsrf_id) {
-        await pool.query(
-          `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 0, ${TYPE.XSRF}, ?)`,
-          [guest.uid, guestXsrf]
-        );
+        await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 0, ${TYPE.XSRF}, ?)`, [guest.uid, guestXsrf], { label: 'legacyAuthMiddleware_insert' });
       } else {
-        await pool.query(
-          `UPDATE ${db} SET val=? WHERE id=?`,
-          [guestXsrf, guest.xsrf_id]
-        );
+        await execSql(pool, `UPDATE ${db} SET val=? WHERE id=?`, [guestXsrf, guest.xsrf_id], { label: 'legacyAuthMiddleware_update' });
       }
 
       const roleId = guest.roleId || 0;
@@ -2915,10 +2880,7 @@ async function recursiveDelete(pool, db, id) {
  */
 async function _collectDescendants(pool, db, parentId, acc) {
   const z = sanitizeIdentifier(db);
-  const [children] = await pool.query(
-    `SELECT id FROM ${z} WHERE up = ?`,
-    [parentId]
-  );
+  const { rows: children } = await execSql(pool, `SELECT id FROM ${z} WHERE up = ?`, [parentId], { label: '_collectDescendants_select' });
   for (const child of children) {
     await _collectDescendants(pool, db, child.id, acc);
     acc.push(child.id);
@@ -2937,10 +2899,7 @@ async function _collectDescendants(pool, db, parentId, acc) {
  */
 async function checkDuplicatedReqs(pool, db, parentId, typeId) {
   const z = sanitizeIdentifier(db);
-  const [rows] = await pool.query(
-    `SELECT id FROM ${z} WHERE up = ? AND t = ? ORDER BY id DESC`,
-    [parentId, typeId]
-  );
+  const { rows: rows } = await execSql(pool, `SELECT id FROM ${z} WHERE up = ? AND t = ? ORDER BY id DESC`, [parentId, typeId], { label: 'checkDuplicatedReqs_select' });
 
   if (rows.length <= 1) return false;
 
@@ -3039,10 +2998,7 @@ function removeDir(dirPath) {
  */
 async function checkNewRef(pool, db, refTypeId, value) {
   const z = sanitizeIdentifier(db);
-  const [rows] = await pool.query(
-    `SELECT 1 FROM ${z} WHERE id = ? AND t = ? LIMIT 1`,
-    [value, refTypeId]
-  );
+  const { rows: rows } = await execSql(pool, `SELECT 1 FROM ${z} WHERE id = ? AND t = ? LIMIT 1`, [value, refTypeId], { label: 'checkNewRef_select' });
   return rows.length > 0;
 }
 
@@ -3059,14 +3015,11 @@ async function populateReqs(pool, db, srcId, dstId) {
   // PHP parity: SELECT with sub-query to detect children (ch column)
   // Reqs with children or FILE type need individual INSERT (for insertId),
   // leaf reqs are batched via insertBatch() for performance.
-  const [children] = await pool.query(
-    `SELECT r.id, r.t, r.val, r.ord, typ.t AS base_t,
+  const { rows: children } = await execSql(pool, `SELECT r.id, r.t, r.val, r.ord, typ.t AS base_t,
             (SELECT 1 FROM \`${db}\` ch WHERE ch.up = r.id LIMIT 1) AS ch
      FROM \`${db}\` r
      LEFT JOIN \`${db}\` typ ON typ.id = r.t
-     WHERE r.up = ? ORDER BY r.ord`,
-    [srcId]
-  );
+     WHERE r.up = ? ORDER BY r.ord`, [srcId], { label: 'populateReqs_select' });
 
   const uploadDir = path.join(legacyPath, 'download', db);
   const batchRows = []; // accumulate leaf reqs for batch insert
@@ -3098,10 +3051,7 @@ async function populateReqs(pool, db, srcId, dstId) {
       await populateReqs(pool, db, child.id, fileInsertId);
     } else if (child.ch === 1) {
       // Req has children — need insertId for recursion, individual INSERT
-      const [insertResult] = await pool.query(
-        `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
-        [dstId, child.ord, child.t, copiedVal]
-      );
+      const { rows: insertResult } = await execSql(pool, `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`, [dstId, child.ord, child.t, copiedVal], { label: 'populateReqs_insert' });
       await populateReqs(pool, db, child.id, insertResult.insertId);
     } else {
       // Leaf req — accumulate for batch insert (PHP: Insert_batch)
@@ -3136,10 +3086,7 @@ async function dbExists(db) {
       user: process.env.INTEGRAM_DB_USER,
       database: process.env.INTEGRAM_DB_NAME,
     });
-    const [rows] = await pool.query(
-      'SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1',
-      [dbName, db]
-    );
+    const { rows: rows } = await execSql(pool, 'SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1', [dbName, db], { label: 'dbExists_select' });
     logger.info('[dbExists] result', { db, found: rows.length > 0 });
     return rows.length > 0;
   } catch (error) {
@@ -3169,14 +3116,11 @@ router.get('/:db/auth', async (req, res, next) => {
   if (!token) return res.status(200).json({ error: t9n('not_logged', locale) });
   try {
     const pool = getPool();
-    const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uname, x.val xsrf_val
+    const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, x.val xsrf_val
        FROM \`${db}\` u
        JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
        LEFT JOIN \`${db}\` x ON x.up = u.id AND x.t = ${TYPE.XSRF}
-       WHERE u.t = ${TYPE.USER} LIMIT 1`,
-      [token]
-    );
+       WHERE u.t = ${TYPE.USER} LIMIT 1`, [token], { label: 'get_db_auth_select' });
     if (rows.length === 0) return res.status(200).json({ error: t9n('not_logged', locale) });
     const u = rows[0];
     const xsrf = u.xsrf_val || generateXsrf(token, u.uname || '', db);
@@ -3204,8 +3148,7 @@ router.all('/:db/auth', async (req, res, next) => {
     const pool = getPool();
 
     // Look up user by secret token (TYPE.SECRET = 130)
-    const [rows] = await pool.query(
-      `SELECT u.id uid, u.val username,
+    const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val username,
               tok.val tok_val,
               token.id token_id, token.val token_val,
               xsrf.id xsrf_id, xsrf.val xsrf_val
@@ -3214,9 +3157,7 @@ router.all('/:db/auth', async (req, res, next) => {
        LEFT JOIN ${db} token ON token.up = u.id AND token.t = ${TYPE.TOKEN}
        LEFT JOIN ${db} xsrf ON xsrf.up = u.id AND xsrf.t = ${TYPE.XSRF}
        WHERE u.t = ${TYPE.USER}
-       LIMIT 1`,
-      [secret]
-    );
+       LIMIT 1`, [secret], { label: 'get_db_auth_select' });
 
     if (rows.length === 0) {
       logger.warn('[Legacy SecretAuth] Invalid secret token', { db });
@@ -3232,10 +3173,7 @@ router.all('/:db/auth', async (req, res, next) => {
     let tokenVal = user.token_val;
     if (!tokenVal) {
       tokenVal = generateToken();
-      await pool.query(
-        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
-        [user.uid, tokenVal]
-      );
+      await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`, [user.uid, tokenVal], { label: 'get_db_auth_insert' });
     }
 
     // Update or insert XSRF
@@ -3373,20 +3311,17 @@ router.post('/:db/auth', async (req, res, next) => {
       LIMIT 1
     `;
 
-    const [rows] = await pool.query(query, [login]);
+    const { rows: rows } = await execSql(pool, query, [login], { label: 'login_query' });
 
     if (rows.length === 0) {
       // PHP cabinet fallback: when user not found in target DB, query 'my' database
       if (db !== 'my') {
         try {
-          const [myRows] = await pool.query(
-            `SELECT user.id AS uid, user.val AS username, pwd.val AS password_hash
+          const { rows: myRows } = await execSql(pool, `SELECT user.id AS uid, user.val AS username, pwd.val AS password_hash
              FROM my user
              LEFT JOIN my pwd ON pwd.up = user.id AND pwd.t = ${TYPE.PASSWORD}
              WHERE user.val = ? AND user.t = ${TYPE.USER}
-             LIMIT 1`,
-            [login]
-          );
+             LIMIT 1`, [login], { label: 'login_select' });
           if (myRows.length > 0) {
             const myUser = myRows[0];
             const myExpectedHash = phpCompatibleHash(login, password, 'my');
@@ -3481,10 +3416,7 @@ router.post('/:db/auth', async (req, res, next) => {
         // Update password
         const newPwdHash = phpCompatibleHash(login, npw1, db);
         if (user.pwd_id) {
-          await pool.query(
-            `UPDATE ${db} SET val = ? WHERE id = ?`,
-            [newPwdHash, user.pwd_id]
-          );
+          await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [newPwdHash, user.pwd_id], { label: 'query_update' });
           msg = 'The password has been changed';
           logger.info('[Legacy Auth] Password changed', { db, login });
         }
@@ -3514,16 +3446,10 @@ router.post('/:db/auth', async (req, res, next) => {
     );
 
     if (!user.xsrf) {
-      await pool.query(
-        `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`,
-        [user.uid, xsrf]
-      );
+      await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [user.uid, xsrf], { label: 'query_insert' });
     } else {
       // Update xsrf to keep it in sync with token
-      await pool.query(
-        `UPDATE ${db} SET val = ? WHERE id = ?`,
-        [xsrf, user.xsrf_id]
-      );
+      await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [xsrf, user.xsrf_id], { label: 'query_update' });
     }
 
     logger.info('[Legacy Auth] Success', { db, login, uid: user.uid });
@@ -3597,7 +3523,7 @@ router.get('/:db/validate', async (req, res) => {
       LIMIT 1
     `;
 
-    const [rows] = await pool.query(query, [token.replace('Bearer ', '')]);
+    const { rows: rows } = await execSql(pool, query, [token.replace('Bearer ', '')], { label: 'get_db_validate_query' });
 
     if (rows.length === 0) {
       return res.status(401).json({ success: false, error: 'Invalid token' });
@@ -3659,10 +3585,7 @@ router.post('/:db/getcode', async (req, res) => {
 
   try {
     const pool = getPool();
-    const [rows] = await pool.query(
-      `SELECT tok.val FROM ${db} u LEFT JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} WHERE u.t=${TYPE.USER} AND u.val=? LIMIT 1`,
-      [u]
-    );
+    const { rows: rows } = await execSql(pool, `SELECT tok.val FROM ${db} u LEFT JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} WHERE u.t=${TYPE.USER} AND u.val=? LIMIT 1`, [u], { label: 'u_select' });
 
     if (rows.length > 0) {
       // PHP: sends email with first 4 chars of token as OTP code (strtoupper(substr($token,0,4)))
@@ -3700,14 +3623,11 @@ router.post('/:db/checkcode', async (req, res) => {
 
   try {
     const pool = getPool();
-    const [rows] = await pool.query(
-      `SELECT u.id uid, tok.id tok_id, xsrf.id xsrf_id
+    const { rows: rows } = await execSql(pool, `SELECT u.id uid, tok.id tok_id, xsrf.id xsrf_id
        FROM ${db} tok, ${db} u
        LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
        WHERE u.t=${TYPE.USER} AND u.val=? AND tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val LIKE ?
-       LIMIT 1`,
-      [u, c + '%']
-    );
+       LIMIT 1`, [u, c + '%'], { label: 'u_select' });
 
     if (rows.length > 0) {
       const row = rows[0];
@@ -3716,28 +3636,22 @@ router.post('/:db/checkcode', async (req, res) => {
       const newXsrf = generateXsrf(newToken, u, db);
 
       // Update token
-      await pool.query(`UPDATE ${db} SET val=? WHERE id=?`, [newToken, row.tok_id]);
+      await execSql(pool, `UPDATE ${db} SET val=? WHERE id=?`, [newToken, row.tok_id], { label: 'u_update' });
 
       // Update or insert xsrf
       if (row.xsrf_id) {
-        await pool.query(`UPDATE ${db} SET val=? WHERE id=?`, [newXsrf, row.xsrf_id]);
+        await execSql(pool, `UPDATE ${db} SET val=? WHERE id=?`, [newXsrf, row.xsrf_id], { label: 'u_update' });
       } else {
-        await pool.query(`INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [row.uid, newXsrf]);
+        await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`, [row.uid, newXsrf], { label: 'u_insert' });
       }
 
       // PHP parity: upsert ACTIVITY record for last-login tracking
-      const [actRows] = await pool.query(
-        `SELECT id FROM ${db} WHERE up = ? AND t = ${TYPE.ACTIVITY} LIMIT 1`,
-        [row.uid]
-      );
+      const { rows: actRows } = await execSql(pool, `SELECT id FROM ${db} WHERE up = ? AND t = ${TYPE.ACTIVITY} LIMIT 1`, [row.uid], { label: 'u_select' });
       const nowTimestamp = String(Math.floor(Date.now() / 1000));
       if (actRows.length > 0) {
-        await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [nowTimestamp, actRows[0].id]);
+        await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [nowTimestamp, actRows[0].id], { label: 'u_update' });
       } else {
-        await pool.query(
-          `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.ACTIVITY}, ?)`,
-          [row.uid, nowTimestamp]
-        );
+        await execSql(pool, `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.ACTIVITY}, ?)`, [row.uid, nowTimestamp], { label: 'u_insert' });
       }
 
       // Set cookie like PHP
@@ -3789,17 +3703,14 @@ router.post('/:db/auth', async (req, res, next) => {
     const pool = getPool();
     // Look up user by login or email — also fetch password record (id + hash)
     // PHP: SELECT u.id, email.val, pwd.id pwd, phone.val phone, pwd.val old, u.val u
-    const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uval, email.val email, phone.val phone,
+    const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uval, email.val email, phone.val phone,
               pwd.id pwdId, pwd.val oldHash
        FROM ${db} u
        LEFT JOIN ${db} email ON email.up=u.id AND email.t=${TYPE.EMAIL}
        LEFT JOIN ${db} phone ON phone.up=u.id AND phone.t=${TYPE.PHONE}
        LEFT JOIN ${db} pwd   ON pwd.up=u.id   AND pwd.t=${TYPE.PASSWORD}
        WHERE (u.val=? OR email.val=?) AND u.t=${TYPE.USER}
-       LIMIT 1`,
-      [u, u]
-    );
+       LIMIT 1`, [u, u], { label: 'u_select' });
 
     if (rows.length === 0) {
       // PHP: login($z, $u, "WRONG_CONT", ...) — user not found
@@ -3961,7 +3872,7 @@ async function createUserDb(pool, z, userId, email, locale, prefix = 'u') {
   const template = locale === 'EN' ? 'en' : 'ru';
 
   try {
-    await pool.query(`
+    await execSql(pool, `
       CREATE TABLE IF NOT EXISTS \`${newDbName}\` (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
         up BIGINT UNSIGNED NOT NULL DEFAULT 0,
@@ -3972,21 +3883,21 @@ async function createUserDb(pool, z, userId, email, locale, prefix = 'u') {
         INDEX idx_t (t),
         INDEX idx_up_t (up, t)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-    `);
+    `, [], { label: 'createUserDb_create' });
 
     // Try to copy from template
     let copiedFromTemplate = false;
     if (isValidDbName(template)) {
-      const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
+      const { rows: tmplExists } = await execSql(pool, `SHOW TABLES LIKE ?`, [template], { label: 'createUserDb_show' });
       if (tmplExists.length > 0) {
-        await pool.query(`INSERT INTO \`${newDbName}\` (id, up, ord, t, val) SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0`);
-        await pool.query(`
+        await execSql(pool, `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0`, [], { label: 'createUserDb_insert' });
+        await execSql(pool, `
           INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
           SELECT child.id, child.up, child.ord, child.t, child.val
           FROM \`${template}\` child
           JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
           WHERE child.up != 0
-        `);
+        `, [], { label: 'createUserDb_insert' });
         copiedFromTemplate = true;
       }
     }
@@ -4009,7 +3920,7 @@ async function createUserDb(pool, z, userId, email, locale, prefix = 'u') {
         `INSERT INTO \`${newDbName}\` (id, up, ord, t, val) VALUES (40, 0, 13, 8, 'XSRF')`,
       ];
       for (const q of initQueries) {
-        try { await pool.query(q); } catch (e) { /* ignore duplicates */ }
+        try { await execSql(pool, q, [], { label: 'createUserDb_query' }); } catch (e) { /* ignore duplicates */ }
       }
     }
 
@@ -4131,9 +4042,7 @@ router.get('/auth.asp', async (req, res) => {
     const pool = getPool();
 
     // Check if 'my' table exists
-    const [tables] = await pool.query(
-      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'my' LIMIT 1`
-    );
+    const { rows: tables } = await execSql(pool, `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'my' LIMIT 1`, [], { label: 'get_auth.asp_select' });
     if (tables.length === 0) {
       logger.error('[Google OAuth] my table does not exist');
       return res.status(500).json({ error: 'User registry not available' });
@@ -4147,8 +4056,7 @@ router.get('/auth.asp', async (req, res) => {
       ? `LEFT JOIN ${z} db ON db.up = u.id AND db.t = ${TYPE.DATABASE} AND db.val = '${targetDb}'`
       : `LEFT JOIN ${z} db ON db.up = u.id AND db.t = ${TYPE.DATABASE}`;
 
-    const [existingRows] = await pool.query(
-      `SELECT u.id AS uid, tok.id AS tok_id, tok.val AS token, xsrf.id AS xsrf_id,
+    const { rows: existingRows } = await execSql(pool, `SELECT u.id AS uid, tok.id AS tok_id, tok.val AS token, xsrf.id AS xsrf_id,
               act.id AS act_id, db.val AS db_name
        FROM ${z} u
        LEFT JOIN ${z} tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN}
@@ -4156,9 +4064,7 @@ router.get('/auth.asp', async (req, res) => {
        LEFT JOIN ${z} act ON act.up = u.id AND act.t = ${TYPE.ACTIVITY}
        ${dbJoinClause}
        WHERE u.val = ? AND u.t = ${TYPE.USER}
-       LIMIT 1`,
-      [String(info.id)]
-    );
+       LIMIT 1`, [String(info.id)], { label: 'targetDb_select' });
 
     let token;
     let finalDb = z;
@@ -4178,15 +4084,12 @@ router.get('/auth.asp', async (req, res) => {
       if (row.db_name) {
         finalDb = row.db_name;
         // PHP: get the token of the target DB for the google user
-        const [dbUserRows] = await pool.query(
-          `SELECT u.id, tok.val AS tok, xsrf.val AS xsrf
+        const { rows: dbUserRows } = await execSql(pool, `SELECT u.id, tok.val AS tok, xsrf.val AS xsrf
            FROM \`${finalDb}\` u
            LEFT JOIN \`${finalDb}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN}
            LEFT JOIN \`${finalDb}\` xsrf ON xsrf.up = u.id AND xsrf.t = ${TYPE.XSRF}
            WHERE u.val = ? AND u.t = ${TYPE.USER}
-           LIMIT 1`,
-          [finalDb]
-        );
+           LIMIT 1`, [finalDb], { label: 'targetDb_select' });
         if (dbUserRows.length > 0) {
           const dbUser = dbUserRows[0];
           if (dbUser.tok) {
@@ -4289,7 +4192,7 @@ router.get('/my/register', async (req, res) => {
     const pool = getPool();
 
     // PHP lines 86-93: SELECT with JOINs
-    const [rows] = await pool.query(`
+    const { rows: rows } = await execSql(pool, `
       SELECT user.val AS user, user.id AS uid,
              token.id AS tok, token.val AS token,
              xsrf.id AS xsrf, act.id AS act,
@@ -4302,7 +4205,7 @@ router.get('/my/register', async (req, res) => {
       LEFT JOIN my act ON act.up = user.id AND act.t = ${TYPE.ACTIVITY}
       LEFT JOIN my email ON email.up = user.id AND email.t = ${TYPE.EMAIL}
       WHERE user.id = ? AND user.t = ${TYPE.USER}
-    `, [userId]);
+    `, [userId], { label: 'get_my_register_select' });
 
     if (!rows.length || !rows[0].uid) {
       return res.json({ error: 'EXPIRED' });
@@ -4317,7 +4220,7 @@ router.get('/my/register', async (req, res) => {
 
     // PHP line 97: Hash plaintext password — sha1(Salt(username, plaintext_pwd))
     const hashedPwd = phpCompatibleHash(row.user, row.pwd, 'my');
-    await pool.query('UPDATE my SET val = ? WHERE id = ?', [hashedPwd, row.pid]);
+    await execSql(pool, 'UPDATE my SET val = ? WHERE id = ?', [hashedPwd, row.pid], { label: 'get_my_register_update' });
 
     // PHP line 98: updateTokens(row) — create/update token, xsrf, activity + set cookie
     const { token } = await updateTokens(pool, 'my', row);
@@ -4389,16 +4292,11 @@ router.post('/my/register', async (req, res) => {
     const pool = getPool();
 
     // Check if 'my' table exists
-    const [tables] = await pool.query(
-      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'my' LIMIT 1`
-    );
+    const { rows: tables } = await execSql(pool, `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'my' LIMIT 1`, [], { label: 'post_my_register_select' });
 
     if (tables.length > 0) {
       // Check uniqueness: PHP line 124
-      const [existing] = await pool.query(
-        `SELECT id FROM my WHERE val = ? AND t = ${TYPE.USER} LIMIT 1`,
-        [email.toLowerCase()]
-      );
+      const { rows: existing } = await execSql(pool, `SELECT id FROM my WHERE val = ? AND t = ${TYPE.USER} LIMIT 1`, [email.toLowerCase()], { label: 'post_my_register_select' });
       if (existing.length > 0) {
         const msg = t9n('email_registered', locale) + ' [errMailExists]';
         if (isJSON) return res.json({ error: msg });
@@ -4468,17 +4366,11 @@ router.all('/:db/exit', async (req, res) => {
     try {
       const pool = getPool();
       // Look up userId from the current token
-      const [tokenRows] = await pool.query(
-        `SELECT up FROM \`${db}\` WHERE t = ${TYPE.TOKEN} AND val = ? LIMIT 1`,
-        [token]
-      );
+      const { rows: tokenRows } = await execSql(pool, `SELECT up FROM \`${db}\` WHERE t = ${TYPE.TOKEN} AND val = ? LIMIT 1`, [token], { label: 'query_select' });
       if (tokenRows.length > 0) {
         const userId = tokenRows[0].up;
         // Delete ALL tokens for this user (logs out all sessions)
-        await pool.query(
-          `DELETE FROM \`${db}\` WHERE up = ? AND t = ${TYPE.TOKEN}`,
-          [userId]
-        );
+        await execSql(pool, `DELETE FROM \`${db}\` WHERE up = ? AND t = ${TYPE.TOKEN}`, [userId], { label: 'query_delete' });
       }
     } catch (err) {
       logger.error({ error: err.message, db }, '[Legacy Exit] DB error on token delete');
@@ -4569,10 +4461,7 @@ router.post('/:db', async (req, res, next) => {
   // Token present — serve main app page directly (PHP: renders main.html)
   try {
     const pool = getPool();
-    const [rows] = await pool.query(
-      `SELECT user.id FROM ${db} user JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN} WHERE token.val = ? AND user.t = ${TYPE.USER} LIMIT 1`,
-      [token]
-    );
+    const { rows: rows } = await execSql(pool, `SELECT user.id FROM ${db} user JOIN ${db} token ON token.up = user.id AND token.t = ${TYPE.TOKEN} WHERE token.val = ? AND user.t = ${TYPE.USER} LIMIT 1`, [token], { label: 'post_db_select' });
 
     if (rows.length === 0) {
       res.clearCookie(db, { path: '/' });
@@ -4674,7 +4563,7 @@ router.get('/:db', async (req, res, next) => {
       LIMIT 1
     `;
 
-    const [rows] = await pool.query(query, [token]);
+    const { rows: rows } = await execSql(pool, query, [token], { label: 'get_db_query' });
 
     if (rows.length === 0) {
       // Invalid token - clear cookie and redirect to login
@@ -4696,12 +4585,10 @@ router.get('/:db', async (req, res, next) => {
       const menuNames = roleMenu.name;
 
       // Get available terms/types for the user
-      const [termsRows] = await pool.query(
-        `SELECT a.id, a.val AS name, a.t AS type, a.ord
+      const { rows: termsRows } = await execSql(pool, `SELECT a.id, a.val AS name, a.t AS type, a.ord
          FROM \`${db}\` a
          WHERE a.up <= 1 AND a.id != a.t AND a.val != '' AND a.t != 0
-         ORDER BY a.val`
-      );
+         ORDER BY a.val`, [], { label: 'get_db_select' });
       // Filter out CALCULATABLE and BUTTON types
       const terms = termsRows.filter(t => {
         const bt = REV_BASE_TYPE[t.type];
@@ -4867,16 +4754,13 @@ router.get('/:db/:page*', async (req, res, next) => {
         const filterKeys = Object.keys(colFilterDict);
         if (filterKeys.length > 0) {
           // Load lightweight req type metadata (base type + ref type)
-          const [reqMeta] = await pool.query(
-            `SELECT a.t AS req_id,
+          const { rows: reqMeta } = await execSql(pool, `SELECT a.t AS req_id,
                     CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ,
                     refs.id AS ref_id, arrs.id AS arr_id
              FROM \`${db}\` a, \`${db}\` typs
              LEFT JOIN \`${db}\` refs ON refs.id=typs.t AND refs.t!=refs.id
              LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
-             WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`,
-            [subId]
-          );
+             WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`, [subId], { label: 'query_select' });
 
           const revBT = {};
           const refTyps = {};
@@ -4921,24 +4805,15 @@ router.get('/:db/:page*', async (req, res, next) => {
 
         // Total count (same WHERE, no LIMIT); uses JOIN when constructWhere produced JOINs
         const distinctKw = objDistinct ? 'DISTINCT ' : '';
-        const [[countRow]] = await pool.query(
-          `SELECT COUNT(${distinctKw}a.id) AS cnt FROM \`${db}\` a${objJoinStr} WHERE ${whereStr}`,
-          objWhereParams
-        );
+        const { rows: [countRow] } = await execSql(pool, `SELECT COUNT(${distinctKw}a.id) AS cnt FROM \`${db}\` a${objJoinStr} WHERE ${whereStr}`, objWhereParams, { label: 'orderColId_select' });
         const objTotal = countRow ? Number(countRow.cnt) : 0;
 
-        const [objRows] = await pool.query(
-          `SELECT ${distinctKw}a.id, a.val, a.up, a.t AS base, a.ord FROM \`${db}\` a${objJoinStr} WHERE ${whereStr} ORDER BY ${objOrderStr}${objLimitStr}`,
-          objWhereParams
-        );
+        const { rows: objRows } = await execSql(pool, `SELECT ${distinctKw}a.id, a.val, a.up, a.t AS base, a.ord FROM \`${db}\` a${objJoinStr} WHERE ${whereStr} ORDER BY ${objOrderStr}${objLimitStr}`, objWhereParams, { label: 'orderColId_select' });
 
         if (req.query.JSON_DATA !== undefined) {
           // Compact format: each row → {i:id, u:up, o:ord, r:[req_val,...]}
           // Get requisite type IDs for this type (defines column order)
-          const [reqDefs] = await pool.query(
-            `SELECT id FROM \`${db}\` WHERE up = ? ORDER BY ord`,
-            [subId]
-          );
+          const { rows: reqDefs } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? ORDER BY ord`, [subId], { label: 'orderColId_select' });
           const reqIds = reqDefs.map(r => r.id);
 
           // Batch-load all requisite values for all objects
@@ -4946,10 +4821,7 @@ router.get('/:db/:page*', async (req, res, next) => {
           if (objRows.length > 0 && reqIds.length > 0) {
             const objIds = objRows.map(r => r.id);
             const ph = objIds.map(() => '?').join(',');
-            const [reqVals] = await pool.query(
-              `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`,
-              objIds
-            );
+            const { rows: reqVals } = await execSql(pool, `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`, objIds, { label: 'orderColId_select' });
             for (const rv of reqVals) {
               if (!reqMap[rv.up]) reqMap[rv.up] = {};
               reqMap[rv.up][rv.t] = rv.val;
@@ -4969,19 +4841,15 @@ router.get('/:db/:page*', async (req, res, next) => {
         // Matches PHP index.php object API response builder exactly.
 
         // ── 1. Type metadata ────────────────────────────────────────────────
-        const [[typeRow] = []] = await pool.query(
-          `SELECT t.id, t.val, t.t AS base_type_id, t.up, t.ord AS type_ord
+        const { rows: [typeRow = undefined] } = await execSql(pool, `SELECT t.id, t.val, t.t AS base_type_id, t.up, t.ord AS type_ord
            FROM \`${db}\` t
-           WHERE t.id = ?`,
-          [subId]
-        );
+           WHERE t.id = ?`, [subId], { label: 'orderColId_select' });
 
         // ── 2. Req field definitions — PHP-compatible SQL (index.php line 5770) ──
         // Key = typs.id when arr child exists (ord=1); a.id otherwise.
         // ref_id set when type refs a non-self-referential type (rare).
         // arr_id set when no ref and type has a first child.
-        const [reqDefStd] = await pool.query(
-          `SELECT CASE WHEN arrs.id IS NULL THEN a.id ELSE typs.id END AS t,
+        const { rows: reqDefStd } = await execSql(pool, `SELECT CASE WHEN arrs.id IS NULL THEN a.id ELSE typs.id END AS t,
                   CASE WHEN refs.id IS NULL THEN typs.t ELSE refs.t END AS base_typ,
                   CASE WHEN refs.id IS NULL THEN typs.val ELSE refs.val END AS type_val,
                   refs.id AS ref_id, arrs.id AS arr_id, a.val AS attrs,
@@ -4989,9 +4857,7 @@ router.get('/:db/:page*', async (req, res, next) => {
            FROM \`${db}\` a, \`${db}\` typs
            LEFT JOIN \`${db}\` refs ON refs.id=typs.t AND refs.t!=refs.id
            LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
-           WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`,
-          [subId]
-        );
+           WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`, [subId], { label: 'orderColId_select' });
 
         // ── 3. Build req_base / req_base_id / req_type / req_order / req_attrs / arr_type / ref_type ──
         const req_base    = {};
@@ -5029,11 +4895,8 @@ router.get('/:db/:page*', async (req, res, next) => {
           if (arrDefs.length > 0) {
             const arrKeys = arrDefs.map(rd => rd.t);
             const phArr   = arrKeys.map(() => '?').join(',');
-            const [cntRows] = await pool.query(
-              `SELECT up, t, COUNT(*) AS cnt FROM \`${db}\`
-               WHERE up IN (${ph}) AND t IN (${phArr}) GROUP BY up, t`,
-              [...objIds, ...arrKeys]
-            );
+            const { rows: cntRows } = await execSql(pool, `SELECT up, t, COUNT(*) AS cnt FROM \`${db}\`
+               WHERE up IN (${ph}) AND t IN (${phArr}) GROUP BY up, t`, [...objIds, ...arrKeys], { label: 'aliasMatch_select' });
             for (const cr of cntRows) {
               const oKey = String(cr.up);
               const k    = String(cr.t);
@@ -5047,11 +4910,8 @@ router.get('/:db/:page*', async (req, res, next) => {
           if (nonRefNonArrDefs.length > 0) {
             const nonArrKeys = nonRefNonArrDefs.map(rd => rd.t);
             const phNA       = nonArrKeys.map(() => '?').join(',');
-            const [valRows] = await pool.query(
-              `SELECT up, id, t, val FROM \`${db}\`
-               WHERE up IN (${ph}) AND t IN (${phNA}) AND val != '' ORDER BY up, ord`,
-              [...objIds, ...nonArrKeys]
-            );
+            const { rows: valRows } = await execSql(pool, `SELECT up, id, t, val FROM \`${db}\`
+               WHERE up IN (${ph}) AND t IN (${phNA}) AND val != '' ORDER BY up, ord`, [...objIds, ...nonArrKeys], { label: 'aliasMatch_select' });
             for (const vr of valRows) {
               const k    = String(vr.t);
               const oKey = String(vr.up);
@@ -5078,14 +4938,11 @@ router.get('/:db/:page*', async (req, res, next) => {
             const allKnownT  = reqDefStd.map(rd => rd.t);  // exclude known req def ids from ref matches
             const phRef      = refKeys.map(() => '?').join(',');
             const phExclude  = allKnownT.map(() => '?').join(',');
-            const [refRows] = await pool.query(
-              `SELECT d.up, d.id AS row_id, d.ord AS row_ord, d.val AS req_key, d.t AS ref_obj_id, o.val AS ref_obj_name
+            const { rows: refRows } = await execSql(pool, `SELECT d.up, d.id AS row_id, d.ord AS row_ord, d.val AS req_key, d.t AS ref_obj_id, o.val AS ref_obj_name
                FROM \`${db}\` d
                JOIN \`${db}\` o ON o.id = d.t
                WHERE d.up IN (${ph}) AND d.val IN (${phRef}) AND d.t NOT IN (${phExclude})
-               ORDER BY d.up, d.ord`,
-              [...objIds, ...refKeys, ...allKnownT]
-            );
+               ORDER BY d.up, d.ord`, [...objIds, ...refKeys, ...allKnownT], { label: 'aliasMatch_select' });
             // First pass: count refs per (oKey, k) to detect multi
             const refCounts = {};
             for (const rr of refRows) {
@@ -5403,8 +5260,7 @@ router.get('/:db/:page*', async (req, res, next) => {
       // PHP: index.php &edit_typs case (lines 4293-4318), processes edit_types.html
       // Returns: &main.myrolemenu + &main.a.&types + &main.a.&editables + edit_types + types + editable
       if (page === 'edit_types') {
-        const [etRows] = await pool.query(
-          `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
+        const { rows: etRows } = await execSql(pool, `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
                   CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END AS val,
                   reqs.id AS req_id, reqs.t AS req_t, reqs.ord, reqs.val AS attrs, ref_typs.t AS reft
            FROM \`${db}\` typs
@@ -5413,8 +5269,7 @@ router.get('/:db/:page*', async (req, res, next) => {
            LEFT JOIN \`${db}\` req_typs ON req_typs.id = reqs.t AND req_typs.id != req_typs.t
            LEFT JOIN \`${db}\` ref_typs ON ref_typs.id = req_typs.t AND ref_typs.id != ref_typs.t
            WHERE typs.up = 0 AND typs.id != typs.t
-           ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`
-        );
+           ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`, [], { label: 'query_select' });
         // PHP: $blocks[$block] includes PARENT, CONTENT, numeric+named cols from mysqli_fetch_array
         // edit_types.html &Edit_Typs block content (PHP CONTENT field)
         const ET_CONTENT = 'if(t[{ID}]===undefined) t[{ID}]={t:{T},r:"{REF_VAL}",u:{UNIQ},v:"{VAL}"};\n' +
@@ -5454,15 +5309,12 @@ router.get('/:db/:page*', async (req, res, next) => {
       // ── GET /:db/edit_obj/:id?JSON → PHP format
       if ((page === 'edit_obj' || page === 'edit') && subId) {
         // 1. Object row + type name / base type
-        const [objResult] = await pool.query(
-          `SELECT o.id, o.val, o.up, o.t,
+        const { rows: objResult } = await execSql(pool, `SELECT o.id, o.val, o.up, o.t,
                   t.val AS type_name,
                   t.t   AS base_type_id
            FROM \`${db}\` o
            LEFT JOIN \`${db}\` t ON t.id = o.t
-           WHERE o.id = ?`,
-          [subId]
-        );
+           WHERE o.id = ?`, [subId], { label: 'query_select' });
         if (objResult.length === 0) {
           return res.status(404).json({ error: 'Object not found' });
         }
@@ -5471,8 +5323,7 @@ router.get('/:db/:page*', async (req, res, next) => {
         const objBaseTypId = obj.base_type_id || obj.t;
 
         // 2. Req field definitions — PHP GetObjectReqs Query 1 (exact SQL port)
-        const [reqMeta] = await pool.query(
-          `SELECT a.id AS req_id, refs.id AS ref_id, a.val AS attrs, a.ord,
+        const { rows: reqMeta } = await execSql(pool, `SELECT a.id AS req_id, refs.id AS ref_id, a.val AS attrs, a.ord,
                   CASE WHEN refs.id IS NULL THEN typs.t    ELSE refs.t   END AS base_typ,
                   CASE WHEN refs.id IS NULL THEN typs.val  ELSE refs.val END AS type_val,
                   CASE WHEN arrs.id IS NULL THEN NULL      ELSE typs.id  END AS arr_id,
@@ -5484,9 +5335,7 @@ router.get('/:db/:page*', async (req, res, next) => {
            FROM \`${db}\` a, \`${db}\` typs
            LEFT JOIN \`${db}\` refs ON refs.id=typs.t AND refs.t!=refs.id
            LEFT JOIN \`${db}\` arrs ON refs.id IS NULL AND arrs.up=typs.id AND arrs.ord=1
-           WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`,
-          [obj.t]
-        );
+           WHERE a.up=? AND typs.id=a.t ORDER BY a.ord`, [obj.t], { label: 'query_select' });
 
         // Build metadata maps (PHP GLOBALS["REQS"], REF_typs, ARR_typs)
         // Use Map to preserve SQL ORDER BY a.ord insertion order — plain objects sort
@@ -5510,8 +5359,7 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
 
         // 3. Stored values — PHP GetObjectReqs Query 2
-        const [storedRows] = await pool.query(
-          `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
+        const { rows: storedRows } = await execSql(pool, `SELECT CASE WHEN typs.up=0 THEN 0 ELSE reqs.id  END AS id,
                   CASE WHEN typs.up=0 THEN 0 ELSE reqs.val END AS val,
                   reqs.ord, typs.id AS t, COUNT(1) AS arr_num,
                   origs.t AS bt, typs.val AS ref_val
@@ -5520,9 +5368,7 @@ router.get('/:db/:page*', async (req, res, next) => {
            LEFT JOIN \`${db}\` origs ON origs.id = typs.t
            WHERE reqs.up = ?
            GROUP BY val, id, t
-           ORDER BY reqs.ord`,
-          [subId]
-        );
+           ORDER BY reqs.ord`, [subId], { label: 'query_select' });
 
         // Process stored rows into PHP $rows map
         const storedByKey = {};
@@ -5750,24 +5596,18 @@ router.get('/:db/:page*', async (req, res, next) => {
         }
         await Promise.all(Array.from(refTypesNeeded).map(async (refTypeId) => {
           // Main SELECT: only objects whose parent exists and parent.up != 0
-          const [ddRows] = await pool.query(
-            `SELECT vals.id, vals.val
+          const { rows: ddRows } = await execSql(pool, `SELECT vals.id, vals.val
              FROM \`${db}\` vals
              JOIN \`${db}\` pars ON pars.id = vals.up
              WHERE pars.up != 0 AND vals.t = ?
              ORDER BY vals.val
-             LIMIT ${DDLIST}`,
-            [refTypeId]
-          );
+             LIMIT ${DDLIST}`, [refTypeId], { label: 'rowId_select' });
           // UNION: add currently-selected values that may not appear in main list
           const mainIds = new Set(ddRows.map(r => String(r.id)));
           const curIds = Array.from(refTypeCurVals[refTypeId] || [])
             .filter(id => id && !mainIds.has(id));
           if (curIds.length > 0) {
-            const [unionRows] = await pool.query(
-              `SELECT id, val FROM \`${db}\` WHERE id IN (${curIds.map(() => '?').join(',')})`,
-              curIds
-            );
+            const { rows: unionRows } = await execSql(pool, `SELECT id, val FROM \`${db}\` WHERE id IN (${curIds.map(() => '?').join(',')})`, curIds, { label: 'query_select' });
             ddRows.push(...unionRows);
           }
           refDropdowns[refTypeId] = ddRows;
@@ -5802,26 +5642,20 @@ router.get('/:db/:page*', async (req, res, next) => {
                 const basicLogin = decoded.slice(0, colonIdx);
                 const basicPwd   = decoded.slice(colonIdx + 1);
                 const pwdHash    = phpCompatibleHash(basicLogin, basicPwd, db);
-                [uRowsEd] = await pool.query(
-                  `SELECT role_def.id AS role_obj_id
+                uRowsEd = (await execSql(pool, `SELECT role_def.id AS role_obj_id
                    FROM \`${db}\` u
                    JOIN \`${db}\` pwd ON pwd.up = u.id AND pwd.t = ${TYPE.PASSWORD} AND pwd.val = ?
                    LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
                      ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
-                   WHERE u.t = ${TYPE.USER} AND u.val = ? LIMIT 1`,
-                  [pwdHash, basicLogin]
-                );
+                   WHERE u.t = ${TYPE.USER} AND u.val = ? LIMIT 1`, [pwdHash, basicLogin], { label: 'hasMulti_select' })).rows;
               }
             } else {
-              [uRowsEd] = await pool.query(
-                `SELECT role_def.id AS role_obj_id
+              uRowsEd = (await execSql(pool, `SELECT role_def.id AS role_obj_id
                  FROM \`${db}\` u
                  JOIN \`${db}\` tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} AND tok.val = ?
                  LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
                    ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
-                 WHERE u.t = ${TYPE.USER} LIMIT 1`,
-                [token]
-              );
+                 WHERE u.t = ${TYPE.USER} LIMIT 1`, [token], { label: 'hasMulti_select' })).rows;
             }
             if (uRowsEd && uRowsEd.length > 0) {
               myroleEd = await buildMyrolemenu(pool, db, uRowsEd[0].role_obj_id || null);
@@ -5941,13 +5775,11 @@ router.get('/:db/:page*', async (req, res, next) => {
       if (page === 'dict') {
         const CALCULATABLE = TYPE.CALCULATABLE;  // 15
         const BUTTON_TYPE  = TYPE.BUTTON;        // 7
-        const [typeRows] = await pool.query(
-          `SELECT a.id, a.val, a.t, reqs.t AS reqs_t, reqs.up
+        const { rows: typeRows } = await execSql(pool, `SELECT a.id, a.val, a.t, reqs.t AS reqs_t, reqs.up
            FROM \`${db}\` a
            LEFT JOIN \`${db}\` reqs ON reqs.up = a.id
            WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
-           ORDER BY a.val`
-        );
+           ORDER BY a.val`, [], { label: 'query_select' });
         // Build typ dict following PHP logic:
         // track which IDs are req-only (have been used as a req child of another type)
         const base = {};   // id → t (base type id)
@@ -5975,14 +5807,8 @@ router.get('/:db/:page*', async (req, res, next) => {
       // &functions: SELECT id,val FROM $z WHERE t=REP_COL_FUNC AND up=1 ORDER BY val
       // &formats:   SELECT id,val FROM $z WHERE t=REP_COL_FORMAT AND up=1 ORDER BY val
       if (page === 'sql') {
-        const [funRows] = await pool.query(
-          `SELECT id, val FROM \`${db}\` WHERE t = ? AND up = 1 ORDER BY val`,
-          [63]  // REP_COL_FUNC constant from PHP index.php
-        );
-        const [fmtRows] = await pool.query(
-          `SELECT id, val FROM \`${db}\` WHERE t = ? AND up = 1 ORDER BY val`,
-          [29]  // REP_COL_FORMAT constant from PHP index.php
-        );
+        const { rows: funRows } = await execSql(pool, `SELECT id, val FROM \`${db}\` WHERE t = ? AND up = 1 ORDER BY val`, [63], { label: 'query_select' });  // REP_COL_FUNC constant from PHP index.php
+        const { rows: fmtRows } = await execSql(pool, `SELECT id, val FROM \`${db}\` WHERE t = ? AND up = 1 ORDER BY val`, [29], { label: 'query_select' });  // REP_COL_FORMAT constant from PHP index.php
         const mainMyrolemenu = await getMenuForToken(pool, db, token);
         // PHP: id values are strings (json_encode converts PHP ints from DB to JSON numbers,
         // but the block array builder stores them as PHP strings via array push)
@@ -6004,8 +5830,7 @@ router.get('/:db/:page*', async (req, res, next) => {
       // PHP: form.html includes &Edit_Typs block which populates edit_types and then dies.
       // PHP $blocks[$block] includes PARENT, CONTENT (template artifacts) + numeric+named column aliases.
       if (page === 'form') {
-        const [formTypeRows] = await pool.query(
-          `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
+        const { rows: formTypeRows } = await execSql(pool, `SELECT typs.id, typs.t, refs.id AS ref_val, typs.ord AS uniq,
                   CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END AS val,
                   reqs.id AS req_id, reqs.t AS req_t, reqs.ord, reqs.val AS attrs, ref_typs.t AS reft
            FROM \`${db}\` typs
@@ -6014,8 +5839,7 @@ router.get('/:db/:page*', async (req, res, next) => {
            LEFT JOIN \`${db}\` req_typs ON req_typs.id = reqs.t AND req_typs.id != req_typs.t
            LEFT JOIN \`${db}\` ref_typs ON ref_typs.id = req_typs.t AND ref_typs.id != ref_typs.t
            WHERE typs.up = 0 AND typs.id != typs.t
-           ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`
-        );
+           ORDER BY ISNULL(reqs.id), CASE WHEN refs.id != refs.t THEN refs.val ELSE typs.val END, refs.id DESC, reqs.ord`, [], { label: 'query_select' });
         // PHP: CONTENT = form.html's &Edit_Typs template block content
         // Exact bytes from the template (} closes inner object, ; ends stmt, } closes outer if)
         const FORM_ET_CONTENT = '\nt[{ID}]={t:{T},r:"{REF_VAL}",u:{UNIQ},v:"{VAL}"};\n' +
@@ -6130,7 +5954,7 @@ async function getNextOrder(db, parentId, typeId = null) {
       params.push(typeId);
     }
 
-    const [rows] = await pool.query(query, params);
+    const { rows: rows } = await execSql(pool, query, params, { label: 'getNextOrder_query' });
     return rows[0]?.next_ord || 1;
   } catch (error) {
     return 1;
@@ -6155,10 +5979,7 @@ async function getNextOrder(db, parentId, typeId = null) {
 async function getRefOrd(pool, db, parent, typ) {
   try {
     const z = sanitizeIdentifier(db);
-    const [rows] = await pool.query(
-      `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ? AND val = ?`,
-      [parent, String(typ)]
-    );
+    const { rows: rows } = await execSql(pool, `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM ${z} WHERE up = ? AND val = ?`, [parent, String(typ)], { label: 'getRefOrd_select' });
     return rows[0]?.next_ord || 1;
   } catch (error) {
     return 1;
@@ -6199,7 +6020,7 @@ async function calcOrder(pool, db, up, t) {
 async function insertRow(db, parentId, order, typeId, value) {
   const pool = getPool();
   const query = `INSERT INTO ${sanitizeIdentifier(db)} (up, ord, t, val) VALUES (?, ?, ?, ?)`;
-  const [result] = await pool.query(query, [parentId, order, typeId, value]);
+  const { rows: result } = await execSql(pool, query, [parentId, order, typeId, value], { label: 'insertRow_query' });
   return result.insertId;
 }
 
@@ -6231,10 +6052,7 @@ async function insertBatch(pool, db, rows, options = {}) {
 
   for (let i = 0; i < rows.length; i += batchSize) {
     const batch = rows.slice(i, i + batchSize);
-    const [result] = await pool.query(
-      `INSERT${ignoreKw} INTO \`${db}\` (${columns}) VALUES ?`,
-      [batch]
-    );
+    const { rows: result } = await execSql(pool, `INSERT${ignoreKw} INTO \`${db}\` (${columns}) VALUES ?`, [batch], { label: 'insertBatch_insert' });
     totalInserted += result.affectedRows;
   }
   return totalInserted;
@@ -6246,7 +6064,7 @@ async function insertBatch(pool, db, rows, options = {}) {
 async function updateRowValue(db, id, value) {
   const pool = getPool();
   const query = `UPDATE ${sanitizeIdentifier(db)} SET val = ? WHERE id = ?`;
-  const [result] = await pool.query(query, [value, id]);
+  const { rows: result } = await execSql(pool, query, [value, id], { label: 'updateRowValue_query' });
   return result.affectedRows > 0;
 }
 
@@ -6256,7 +6074,7 @@ async function updateRowValue(db, id, value) {
 async function deleteRow(db, id) {
   const pool = getPool();
   const query = `DELETE FROM ${sanitizeIdentifier(db)} WHERE id = ?`;
-  const [result] = await pool.query(query, [id]);
+  const { rows: result } = await execSql(pool, query, [id], { label: 'deleteRow_query' });
   return result.affectedRows > 0;
 }
 
@@ -6266,7 +6084,7 @@ async function deleteRow(db, id) {
 async function deleteChildren(db, parentId) {
   const pool = getPool();
   const query = `DELETE FROM ${sanitizeIdentifier(db)} WHERE up = ?`;
-  const [result] = await pool.query(query, [parentId]);
+  const { rows: result } = await execSql(pool, query, [parentId], { label: 'deleteChildren_query' });
   return result.affectedRows;
 }
 
@@ -6276,7 +6094,7 @@ async function deleteChildren(db, parentId) {
 async function getObjectById(db, id) {
   const pool = getPool();
   const query = `SELECT id, up, ord, t, val FROM ${sanitizeIdentifier(db)} WHERE id = ?`;
-  const [rows] = await pool.query(query, [id]);
+  const { rows: rows } = await execSql(pool, query, [id], { label: 'getObjectById_query' });
   return rows.length > 0 ? rows[0] : null;
 }
 
@@ -6286,7 +6104,7 @@ async function getObjectById(db, id) {
 async function getRequisiteByType(db, parentId, typeId) {
   const pool = getPool();
   const query = `SELECT id, val FROM ${sanitizeIdentifier(db)} WHERE up = ? AND t = ? LIMIT 1`;
-  const [rows] = await pool.query(query, [parentId, typeId]);
+  const { rows: rows } = await execSql(pool, query, [parentId, typeId], { label: 'getRequisiteByType_query' });
   return rows.length > 0 ? rows[0] : null;
 }
 
@@ -6343,15 +6161,11 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     }
 
     // Verify type and parent exist
-    const [typeCheck] = await pool.query(
-      `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId]
-    );
+    const { rows: typeCheck } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
     if (typeCheck.length === 0) {
       return res.status(200).json({ error: `Type ${typeId} does not exist` });
     }
-    const [parentCheck] = await pool.query(
-      `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId]
-    );
+    const { rows: parentCheck } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId], { label: 'post_db_m_new_up_select' });
     if (parentCheck.length === 0) {
       return res.status(200).json({ error: `Parent ${parentId} does not exist` });
     }
@@ -6372,9 +6186,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     value = resolveBuiltIn(value, req.legacyUser || {}, db, tzone, clientIp, req.headers || {});
 
     // Fetch type's base type for formatVal
-    const [typeMeta] = await pool.query(
-      `SELECT t AS base_type FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId]
-    );
+    const { rows: typeMeta } = await execSql(pool, `SELECT t AS base_type FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
     const baseType = typeMeta.length > 0 ? typeMeta[0].base_type : 0;
 
     // PHP parity: CheckRepColGranted($val) for REPORT_COLUMN types (index.php:8323-8324)
@@ -6396,14 +6208,10 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         value = '1';
       } else if (baseType === TYPE.NUMBER) {
         // Check if type has unique constraint (ord=1)
-        const [typeAttrs] = await pool.query(
-          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId]
-        );
+        const { rows: typeAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId], { label: 'post_db_m_new_up_select' });
         const attrs = typeAttrs.length > 0 ? String(typeAttrs[0].val) : '';
         if (attrs.includes(':UNIQ:') || attrs.includes(':ORD:')) {
-          const [maxRows] = await pool.query(
-            `SELECT MAX(CAST(val AS UNSIGNED)) AS maxVal FROM \`${db}\` WHERE t = ?`, [typeId]
-          );
+          const { rows: maxRows } = await execSql(pool, `SELECT MAX(CAST(val AS UNSIGNED)) AS maxVal FROM \`${db}\` WHERE t = ?`, [typeId], { label: 'query_select' });
           value = String((maxRows[0]?.maxVal || 0) + 1);
         }
       }
@@ -6416,12 +6224,9 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     // Each requisite's `val` may contain masks like :MULTI::!NULL:[TODAY] etc.
     const multiMap = {};   // reqId → reqType  (for multi-ref insertion later)
     const defValSet = {};  // reqId → true     (marks default-populated reqs)
-    const [reqDefs] = await pool.query(
-      `SELECT r.id, r.t AS reqt, r.val, def.t AS base
+    const { rows: reqDefs } = await execSql(pool, `SELECT r.id, r.t AS reqt, r.val, def.t AS base
        FROM \`${db}\` r LEFT JOIN \`${db}\` def ON def.id = r.t
-       WHERE r.up = ?`,
-      [typeId]
-    );
+       WHERE r.up = ?`, [typeId], { label: 'query_select' });
     for (const rd of reqDefs) {
       const reqId = String(rd.id);
       const reqVal = rd.val != null ? String(rd.val) : '';
@@ -6461,15 +6266,10 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     // Uniqueness check: if ord=1 (unique), check if same val+type already exists
     if (parseInt(order, 10) === 1 || order === 1) {
       // Check for uniqueness via type attrs
-      const [typeAttrs] = await pool.query(
-        `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId]
-      );
+      const { rows: typeAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeId], { label: 'query_select' });
       const attrs = typeAttrs.length > 0 ? String(typeAttrs[0].val) : '';
       if (attrs.includes(':UNIQ:')) {
-        const [existingObj] = await pool.query(
-          `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND up = ? LIMIT 1`,
-          [value, typeId, parentId]
-        );
+        const { rows: existingObj } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND up = ? LIMIT 1`, [value, typeId, parentId], { label: 'query_select' });
         if (existingObj.length > 0) {
           const existId = existingObj[0].id;
           warning = 'Object already exists';
@@ -6502,9 +6302,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       let finalValue = String(attrValue);
 
       // Fetch attribute metadata for processing
-      const [attrMeta] = await pool.query(
-        `SELECT t AS base_type FROM \`${db}\` WHERE id = ? LIMIT 1`, [attrTypeIdNum]
-      );
+      const { rows: attrMeta } = await execSql(pool, `SELECT t AS base_type FROM \`${db}\` WHERE id = ? LIMIT 1`, [attrTypeIdNum], { label: 'query_select' });
       const attrBaseType = attrMeta.length > 0 ? attrMeta[0].base_type : 0;
 
       // If a file was uploaded for this requisite, persist it and use the filename
@@ -6533,9 +6331,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       // Multiselect: check multiMap (from MULTI_MASK auto-detection) and CHARS-child attrs
       let isMulti = !!multiMap[attrTypeId];
       if (!isMulti) {
-        const [attrAttrs] = await pool.query(
-          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [attrTypeIdNum]
-        );
+        const { rows: attrAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [attrTypeIdNum], { label: 'query_select' });
         const attrAttrsStr = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
         if (attrAttrsStr.includes(':MULTI:')) isMulti = true;
       }
@@ -6554,9 +6350,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         const refs = finalValue.split(',').map(v => parseInt(v.trim(), 10)).filter(v => v > 0);
         if (refs.length > 0) {
           for (const rv of refs) {
-            const [refCheck] = await pool.query(
-              `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [rv, attrTypeIdNum]
-            );
+            const { rows: refCheck } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [rv, attrTypeIdNum], { label: 'query_select' });
             if (refCheck.length > 0) {
               // PHP parity: skip Check_Val_granted for default-value refs (index.php:8494)
               if (!defValSet[attrTypeId]) {
@@ -6585,19 +6379,13 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         const refTypeId = parseInt(match[1], 10);
         const newVal = String(val).trim();
 
-        const [existingRows] = await pool.query(
-          `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? LIMIT 1`,
-          [newVal, refTypeId]
-        );
+        const { rows: existingRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? LIMIT 1`, [newVal, refTypeId], { label: 'query_select' });
 
         let refId;
         if (existingRows.length > 0) {
           refId = existingRows[0].id;
         } else {
-          const [insertResult] = await pool.query(
-            `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (1, 1, ?, ?)`,
-            [refTypeId, newVal]
-          );
+          const { rows: insertResult } = await execSql(pool, `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (1, 1, ?, ?)`, [refTypeId, newVal], { label: 'query_insert' });
           refId = insertResult.insertId;
         }
 
@@ -6608,10 +6396,7 @@ router.post('/:db/_m_new/:up?', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     }
 
     // Check if type has requisites (determines next_act per PHP logic)
-    const [reqRows] = await pool.query(
-      `SELECT id FROM \`${db}\` WHERE up=? AND up!=0 LIMIT 1`,
-      [typeId]
-    );
+    const { rows: reqRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up=? AND up!=0 LIMIT 1`, [typeId], { label: 'query_select' });
     const hasReqs = reqRows.length > 0;
 
     // PHP _m_new die() (line 8547): {"id":$i,"obj":$obj,"ord":$ord,"next_act":"$a","args":"$arg","val":"<htmlentities(val)>"}
@@ -6810,9 +6595,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
     let warnings = '';
 
     // Existence check + metadata protection
-    const [existCheck] = await pool.query(
-      `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [originalId]
-    );
+    const { rows: existCheck } = await execSql(pool, `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [originalId], { label: 'post_db_m_save_id_select' });
     if (existCheck.length === 0) {
       return res.status(200).json({ error: 'Object not found' });
     }
@@ -6841,11 +6624,11 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       logger.info('[Legacy _m_save] Copying object', { db, originalId });
 
       // Get the original object's data
-      const [objRows] = await pool.query(`
+      const { rows: objRows } = await execSql(pool, `
         SELECT a.val, a.t AS typ, a.up, a.ord, typs.t AS base_typ
         FROM \`${db}\` typs, \`${db}\` a
         WHERE typs.id = a.t AND a.id = ?
-      `, [originalId]);
+      `, [originalId], { label: 'post_db_m_save_id_select' });
 
       if (objRows.length === 0) {
         return res.status(200).json({ error: 'Object not found' });
@@ -6863,18 +6646,18 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       // Calculate order for new object
       let newOrd = 1;
       if (original.up > 1) {
-        const [ordRows] = await pool.query(`
+        const { rows: ordRows } = await execSql(pool, `
           SELECT MAX(ord) AS max_ord FROM \`${db}\`
           WHERE up = ? AND t = ?
-        `, [original.up, original.typ]);
+        `, [original.up, original.typ], { label: 'post_db_m_save_id_select' });
         newOrd = (ordRows[0]?.max_ord || 0) + 1;
       }
 
       // Create the copy
-      const [insertResult] = await pool.query(`
+      const { rows: insertResult } = await execSql(pool, `
         INSERT INTO \`${db}\` (up, ord, t, val)
         VALUES (?, ?, ?, ?)
-      `, [original.up, newOrd, original.typ, newVal]);
+      `, [original.up, newOrd, original.typ, newVal], { label: 'post_db_m_save_id_insert' });
 
       objectId = insertResult.insertId;
 
@@ -6897,9 +6680,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 
     // Fetch object's type early — needed to detect when t{objType}=val means "update a.val"
     // (smartq sends t{parentType}=newName when inline-editing the main column)
-    const [objInfoEarly] = await pool.query(
-      `SELECT t, up, val FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
-    );
+    const { rows: objInfoEarly } = await execSql(pool, `SELECT t, up, val FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId], { label: 'query_select' });
     const objTypeEarly = objInfoEarly.length > 0 ? objInfoEarly[0].t : 0;
     const objValEarly = objInfoEarly.length > 0 ? objInfoEarly[0].val : '';
 
@@ -6944,10 +6725,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       const typeIdNum = parseInt(refTypeId, 10);
 
       // Check if object with this val already exists for this type
-      const [existingRows] = await pool.query(
-        `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? LIMIT 1`,
-        [newVal, typeIdNum]
-      );
+      const { rows: existingRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? LIMIT 1`, [newVal, typeIdNum], { label: 'query_select' });
 
       let refId;
       if (existingRows.length > 0) {
@@ -6955,10 +6733,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         refId = existingRows[0].id;
       } else {
         // Create new object of that type (PHP: Insert(1, 1, $GLOBALS["REF_typs"][$t], $value))
-        const [insertResult] = await pool.query(
-          `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (1, 1, ?, ?)`,
-          [typeIdNum, newVal]
-        );
+        const { rows: insertResult } = await execSql(pool, `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (1, 1, ?, ?)`, [typeIdNum, newVal], { label: 'query_insert' });
         refId = insertResult.insertId;
         logger.info('[Legacy _m_save] Created new ref object', { db, typeId: typeIdNum, val: newVal, id: refId });
       }
@@ -6993,10 +6768,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
       let finalValue = String(attrValue);
 
       // Fetch attribute metadata (base_type, attrs) for processing
-      const [attrMeta] = await pool.query(
-        `SELECT t AS base_type, val FROM \`${db}\` WHERE id = ? LIMIT 1`,
-        [typeIdNum]
-      );
+      const { rows: attrMeta } = await execSql(pool, `SELECT t AS base_type, val FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeIdNum], { label: 'query_select' });
       const meta = attrMeta.length > 0 ? attrMeta[0] : null;
       const baseType = meta ? meta.base_type : 0;
 
@@ -7012,9 +6784,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         let pwdUsername = req.body[`t${TYPE.USER}`];
         if (!pwdUsername) {
           // Fall back to current object's val (it IS the user object)
-          const [uRows] = await pool.query(
-            `SELECT val FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
-          );
+          const { rows: uRows } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId], { label: 'query_select' });
           pwdUsername = uRows.length > 0 ? uRows[0].val : '';
         }
         finalValue = phpCompatibleHash(pwdUsername, attrValue, db);
@@ -7052,10 +6822,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 
       // NOT_NULL enforcement: check attrs for :!NULL:
       if (meta) {
-        const [attrAttrs] = await pool.query(
-          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`,
-          [typeIdNum]
-        );
+        const { rows: attrAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeIdNum], { label: 'query_select' });
         const attrs = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
 
         if (attrs.includes(':!NULL:') && (finalValue === '' || finalValue === 'NULL')) {
@@ -7086,9 +6853,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         if (refVal > 0) {
           await checkNewRef(pool, db, typeIdNum, refVal);
           // PHP parity: Check_Val_granted for ref values (index.php:8115-8119)
-          const [refCheck] = await pool.query(
-            `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [refVal, typeIdNum]
-          );
+          const { rows: refCheck } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE id = ? AND t = ? LIMIT 1`, [refVal, typeIdNum], { label: 'query_select' });
           if (refCheck.length > 0) {
             const valGrantResult = await checkValGranted(pool, db, grants || {}, typeIdNum, refCheck[0].val, refVal);
             if (valGrantResult === 'BARRED') {
@@ -7105,7 +6870,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
         }
         const existing = await getRequisiteByType(db, objectId, typeIdNum);
         if (existing) {
-          await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
+          await execSql(pool, `UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id], { label: 'query_update' });
         } else {
           const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
           await insertRow(db, objectId, attrOrder, refVal, '');
@@ -7116,10 +6881,7 @@ router.post('/:db/_m_save/:id', legacyAuthMiddleware, legacyXsrfCheck, (req, res
 
       // Empty→DELETE: if value empty and field allows null → delete the requisite
       if ((finalValue === '' || finalValue === 'NULL') && meta) {
-        const [attrAttrs2] = await pool.query(
-          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`,
-          [typeIdNum]
-        );
+        const { rows: attrAttrs2 } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeIdNum], { label: 'query_select' });
         const attrs2 = attrAttrs2.length > 0 ? String(attrAttrs2[0].val) : '';
         if (!attrs2.includes(':!NULL:')) {
           const existing = await getRequisiteByType(db, objectId, typeIdNum);
@@ -7240,16 +7002,13 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     //        LEFT JOIN $z r ON r.t=obj.id
     //        JOIN $z par ON par.id=obj.up
     //      WHERE obj.id=$id
-    const [[row]] = await pool.query(
-      `SELECT COUNT(r.id) AS refCount, obj.up, obj.ord, obj.t, obj.val,
+    const { rows: [row] } = await execSql(pool, `SELECT COUNT(r.id) AS refCount, obj.up, obj.ord, obj.t, obj.val,
               par.up AS pup, type.up AS tup
        FROM \`${db}\` obj
        LEFT JOIN \`${db}\` type ON type.id = obj.t
        LEFT JOIN \`${db}\` r ON r.t = obj.id
        JOIN \`${db}\` par ON par.id = obj.up
-       WHERE obj.id = ?`,
-      [objectId]
-    );
+       WHERE obj.id = ?`, [objectId], { label: 'post_db_m_del_id_select' });
 
     if (!row || row.pup == null) {
       return res.status(200).json({ error: 'Object not found' });
@@ -7271,16 +7030,10 @@ router.post('/:db/_m_del/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     if (row.up > 1) {
       if (String(row.tup) === '0') {
         // Array element: shift down following peers of same type in same parent
-        await pool.query(
-          `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`,
-          [row.up, row.t, row.ord]
-        );
+        await execSql(pool, `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`, [row.up, row.t, row.ord], { label: 'post_db_m_del_id_update' });
       } else if (!isNaN(Number(row.val)) && Number(row.val) > 0) {
         // Reference/multiselect element: shift down following by val+ord
-        await pool.query(
-          `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND val = ? AND ord > ?`,
-          [row.up, row.val, row.ord]
-        );
+        await execSql(pool, `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND val = ? AND ord > ?`, [row.up, row.val, row.ord], { label: 'post_db_m_del_id_update' });
       }
     }
 
@@ -7358,10 +7111,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
       let finalValue = String(attrValue);
 
       // Fetch attribute metadata (base_type, attrs) to detect references and :MULTI:
-      const [attrMeta] = await pool.query(
-        `SELECT t AS base_type, val, up FROM \`${db}\` WHERE id = ? LIMIT 1`,
-        [typeIdNum]
-      );
+      const { rows: attrMeta } = await execSql(pool, `SELECT t AS base_type, val, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [typeIdNum], { label: 'post_db_m_set_id_select' });
       const meta = attrMeta.length > 0 ? attrMeta[0] : null;
 
       // Handle inline file upload (saveInlineFile in smartq.js)
@@ -7422,7 +7172,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
         const existing = await getRequisiteByType(db, objectId, typeIdNum);
         if (existing) {
           // Reference: update t column, not val
-          await pool.query(`UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id]);
+          await execSql(pool, `UPDATE \`${db}\` SET t = ? WHERE id = ?`, [refVal, existing.id], { label: 'query_update' });
           lastReqId = String(existing.id);
         } else {
           const attrOrder = await calcOrder(pool, db, objectId, typeIdNum);
@@ -7434,10 +7184,7 @@ router.post('/:db/_m_set/:id', legacyAuthMiddleware, legacyXsrfCheck, upload.any
 
       // Multiselect: if type has :MULTI: in attrs, split comma values and insert multiple rows
       if (meta) {
-        const [attrAttrs] = await pool.query(
-          `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`,
-          [typeIdNum]
-        );
+        const { rows: attrAttrs } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CHARS} LIMIT 1`, [typeIdNum], { label: 'query_select' });
         const attrs = attrAttrs.length > 0 ? String(attrAttrs[0].val) : '';
         if (attrs.includes(':MULTI:') && finalValue.includes(',')) {
           const values = finalValue.split(',').map(v => v.trim()).filter(v => v);
@@ -7511,9 +7258,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     }
 
     // Fetch full object info (t, up, ord) before moving
-    const [objInfo] = await pool.query(
-      `SELECT t, up, ord FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId]
-    );
+    const { rows: objInfo } = await execSql(pool, `SELECT t, up, ord FROM \`${db}\` WHERE id = ? LIMIT 1`, [objectId], { label: 'post_db_m_move_id_select' });
     if (objInfo.length === 0) {
       return res.status(200).json({ error: 'Object not found' });
     }
@@ -7527,12 +7272,9 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     }
 
     // Type mismatch guard: old parent and new parent must be of the same type
-    const [parentRows] = await pool.query(
-      `SELECT old_p.t AS ut, new_p.t AS tt
+    const { rows: parentRows } = await execSql(pool, `SELECT old_p.t AS ut, new_p.t AS tt
        FROM \`${db}\` old_p, \`${db}\` new_p
-       WHERE old_p.id = ? AND new_p.id = ?`,
-      [oldParentId, newParentId]
-    );
+       WHERE old_p.id = ? AND new_p.id = ?`, [oldParentId, newParentId], { label: 'post_db_m_move_id_select' });
     if (parentRows.length === 0) {
       return res.status(200).json({ error: 'Parent not found' });
     }
@@ -7552,13 +7294,10 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     }
 
     // Order adjustment in old parent: shift down peers after removed object
-    await pool.query(
-      `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`,
-      [oldParentId, objType, oldOrd]
-    );
+    await execSql(pool, `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`, [oldParentId, objType, oldOrd], { label: 'post_db_m_move_id_update' });
 
     const newOrder = await calcOrder(pool, db, newParentId, objType);
-    await pool.query(`UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
+    await execSql(pool, `UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId], { label: 'post_db_m_move_id_update' });
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
 
@@ -7614,7 +7353,7 @@ router.all('/:db/_dict/:typeId?', async (req, res) => {
       query = `SELECT id, val AS name, t AS base_type, ord FROM ${db} WHERE up = 0 ORDER BY val`;
     }
 
-    const [rows] = await pool.query(query, params);
+    const { rows: rows } = await execSql(pool, query, params, { label: 'query_query' });
 
     if (typeId && rows.length > 0) {
       // Format as type with requisites
@@ -7750,8 +7489,8 @@ router.all('/:db/_list/:typeId', async (req, res) => {
     const params = [...allQueryParams, limit, offset];
     const countParams = [...allQueryParams];
 
-    const [rows] = await pool.query(query, params);
-    const [countRows] = await pool.query(countQuery, countParams);
+    const { rows: rows } = await execSql(pool, query, params, { label: 'sortDir_query' });
+    const { rows: countRows } = await execSql(pool, countQuery, countParams, { label: 'sortDir_query' });
     const total = countRows[0]?.total || 0;
 
     // Batch-load requisite values for all returned objects so the client can
@@ -7761,10 +7500,7 @@ router.all('/:db/_list/:typeId', async (req, res) => {
     if (rows.length > 0) {
       const objIds = rows.map(r => r.id);
       const ph = objIds.map(() => '?').join(',');
-      const [reqVals] = await pool.query(
-        `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`,
-        objIds
-      );
+      const { rows: reqVals } = await execSql(pool, `SELECT up, t, val FROM \`${db}\` WHERE up IN (${ph}) ORDER BY up, ord`, objIds, { label: 'sortDir_select' });
       for (const rv of reqVals) {
         if (!reqMap[rv.up]) reqMap[rv.up] = {};
         reqMap[rv.up][rv.t] = rv.val;
@@ -7820,10 +7556,7 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
     const joinReqs = (req.query.join || req.body.join || '').split(',').filter(Boolean).map(id => parseInt(id, 10));
 
     // Get type requisites for join
-    const [reqRows] = await pool.query(
-      `SELECT id, val, t FROM ${db} WHERE up = ? ORDER BY ord`,
-      [type]
-    );
+    const { rows: reqRows } = await execSql(pool, `SELECT id, val, t FROM ${db} WHERE up = ? ORDER BY ord`, [type], { label: 'joinReqs_select' });
 
     // Parse requisite info
     const requisites = reqRows.map(r => {
@@ -7874,8 +7607,8 @@ router.all('/:db/_list_join/:typeId', async (req, res) => {
     query += ` ORDER BY obj.ord LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
-    const [rows] = await pool.query(query, params);
-    const [countRows] = await pool.query(countQuery, countParams);
+    const { rows: rows } = await execSql(pool, query, params, { label: 'joinReqs_query' });
+    const { rows: countRows } = await execSql(pool, countQuery, countParams, { label: 'joinReqs_query' });
     const total = countRows[0]?.total || 0;
 
     // PHP-compatible format: data as array of arrays [id, val, req1_val, req2_val, ...]
@@ -7918,20 +7651,14 @@ router.all('/:db/_d_main/:typeId', async (req, res) => {
     const type = parseInt(typeId, 10);
 
     // Get type info
-    const [typeRows] = await pool.query(
-      `SELECT id, val AS name, t AS base_type, ord FROM ${db} WHERE id = ?`,
-      [type]
-    );
+    const { rows: typeRows } = await execSql(pool, `SELECT id, val AS name, t AS base_type, ord FROM ${db} WHERE id = ?`, [type], { label: 'joinReqs_select' });
 
     if (typeRows.length === 0) {
       return res.status(404).json({ error: 'Type not found' });
     }
 
     // Get requisites (children of the type)
-    const [reqRows] = await pool.query(
-      `SELECT id, val AS name, t AS type, ord FROM ${db} WHERE up = ? ORDER BY ord`,
-      [type]
-    );
+    const { rows: reqRows } = await execSql(pool, `SELECT id, val AS name, t AS type, ord FROM ${db} WHERE up = ? ORDER BY ord`, [type], { label: 'joinReqs_select' });
 
     // Parse requisite modifiers from value
     const requisites = reqRows.map(row => {
@@ -8017,14 +7744,14 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
     if (token) {
       try {
         // Validate token and get user role
-        const [userRows] = await pool.query(`
+        const { rows: userRows } = await execSql(pool, `
           SELECT u.id, u.val AS username, role_def.id AS role_id
           FROM ${db} tok
           JOIN ${db} u ON tok.up = u.id
           LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
           WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
           LIMIT 1
-        `, [token]);
+        `, [token], { label: 'get_db_terms_select' });
 
         if (userRows.length > 0) {
           username = userRows[0].username;
@@ -8039,13 +7766,11 @@ router.get('/:db/terms', legacyAuthMiddleware, async (req, res) => {
 
     // Match PHP terms query: all top-level objects where id!=t, val!='', t!=0
     // Left join to get the type of each requisite (child record) per PHP logic
-    const [rows] = await pool.query(
-      `SELECT a.id, a.val, a.t, a.ord, reqs.t AS reqs_t
+    const { rows: rows } = await execSql(pool, `SELECT a.id, a.val, a.t, a.ord, reqs.t AS reqs_t
        FROM \`${db}\` a
        LEFT JOIN \`${db}\` reqs ON reqs.up = a.id
        WHERE a.up = 0 AND a.id != a.t AND a.val != '' AND a.t != 0
-       ORDER BY a.val`
-    );
+       ORDER BY a.val`, [], { label: 'get_db_terms_select' });
 
     // Replicate PHP terms filtering logic:
     // - Skip CALCULATABLE (t=15) and BUTTON (t=7) base types
@@ -8116,17 +7841,14 @@ router.get('/:db/xsrf', async (req, res) => {
     // PHP uses CROSS JOIN to resolve role definition name via role link:
     // LEFT JOIN ($z r CROSS JOIN $z role_def) ON r.up=u.id AND role_def.id=r.t AND role_def.t=ROLE
     // role_def.val = role name (lowercased by PHP strtolower)
-    const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uname, xsrf.val xsrf_val, role_def.val role_val
+    const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, xsrf.val xsrf_val, role_def.val role_val
        FROM ${db} u
        JOIN ${db} tok ON tok.up=u.id AND tok.t=${TYPE.TOKEN} AND tok.val=?
        LEFT JOIN ${db} xsrf ON xsrf.up=u.id AND xsrf.t=${TYPE.XSRF}
        LEFT JOIN (${db} r CROSS JOIN ${db} role_def)
          ON r.up=u.id AND role_def.id=r.t AND role_def.t=${TYPE.ROLE}
        WHERE u.t=${TYPE.USER}
-       LIMIT 1`,
-      [token]
-    );
+       LIMIT 1`, [token], { label: 'get_db_xsrf_select' });
 
     if (rows.length === 0) {
       // Invalid token — clear cookie, return empty session
@@ -8188,8 +7910,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
     // Get the reference type info and its requisites (children)
     // PHP: dic = row["dic"] from the reference definition
-    const [refRows] = await pool.query(
-      `SELECT r.t AS dic, r.val AS attr, def_reqs.t, req_orig.t AS base,
+    const { rows: refRows } = await execSql(pool, `SELECT r.t AS dic, r.val AS attr, def_reqs.t, req_orig.t AS base,
               CASE WHEN base.id != base.t THEN 1 ELSE 0 END AS is_ref, req.id AS req_id
        FROM ${z} r
        JOIN ${z} dic ON dic.id = r.t
@@ -8199,16 +7920,11 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
        LEFT JOIN ${db} base ON base.id = req_orig.t
        LEFT JOIN ${db} req ON req.up = dic.t AND req.t = def_reqs.t
        WHERE r.id = ?
-       ORDER BY def_reqs.ord`,
-      [id]
-    );
+       ORDER BY def_reqs.ord`, [id], { label: 'get_db_ref_reqs_refId_select' });
 
     if (refRows.length === 0) {
       // Fallback to simple query if the complex query returns nothing
-      const [simpleRows] = await pool.query(
-        `SELECT t, val FROM ${db} WHERE id = ?`,
-        [id]
-      );
+      const { rows: simpleRows } = await execSql(pool, `SELECT t, val FROM ${db} WHERE id = ?`, [id], { label: 'get_db_ref_reqs_refId_select' });
       if (simpleRows.length === 0) {
         return res.status(404).json({ error: 'Reference not found' });
       }
@@ -8240,7 +7956,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       }
 
       query += ` ORDER BY val LIMIT ${limitParam}`;
-      const [rows] = await pool.query(query, params);
+      const { rows: rows } = await execSql(pool, query, params, { label: 'get_db_ref_reqs_refId_query' });
       const result = {};
       for (const row of rows) {
         result[row.id] = row.val || '--';
@@ -8273,27 +7989,18 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       try {
         // Resolve the report: lookup by block name (strip leading '&')
         const reportName = blockName.startsWith('&') ? blockName.slice(1) : blockName;
-        const [repRows] = await pool.query(
-          `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
-          [reportName]
-        );
+        const { rows: repRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`, [reportName], { label: 'query_select' });
 
         // Also try the full block name (with '&') if bare name not found
         let reportId = repRows.length > 0 ? repRows[0].id : null;
         if (!reportId) {
-          const [repRows2] = await pool.query(
-            `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
-            [blockName]
-          );
+          const { rows: repRows2 } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`, [blockName], { label: 'query_select' });
           reportId = repRows2.length > 0 ? repRows2[0].id : null;
         }
         // Also try numeric block name (direct report ID)
         if (!reportId && /^\d+$/.test(reportName)) {
           const numId = parseInt(reportName, 10);
-          const [repRows3] = await pool.query(
-            `SELECT id FROM \`${db}\` WHERE id = ? AND t = ${TYPE.REPORT} LIMIT 1`,
-            [numId]
-          );
+          const { rows: repRows3 } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? AND t = ${TYPE.REPORT} LIMIT 1`, [numId], { label: 'query_select' });
           reportId = repRows3.length > 0 ? numId : null;
         }
 
@@ -8386,10 +8093,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
         if (rids.length === 1)       { fbWhere.push('vals.id = ?');         fbParams.push(rids[0]); }
         else if (rids.length > 1)    { fbWhere.push(`vals.id IN (${rids.join(',')})`); }
       }
-      const [fbRows] = await pool.query(
-        `SELECT vals.id, vals.val FROM \`${db}\` vals JOIN \`${db}\` pars ON pars.id = vals.up WHERE ${fbWhere.join(' AND ')} ORDER BY vals.val LIMIT ${limitParam}`,
-        fbParams
-      );
+      const { rows: fbRows } = await execSql(pool, `SELECT vals.id, vals.val FROM \`${db}\` vals JOIN \`${db}\` pars ON pars.id = vals.up WHERE ${fbWhere.join(' AND ')} ORDER BY vals.val LIMIT ${limitParam}`, fbParams, { label: 'query_select' });
       const fbResult = {};
       for (const r of fbRows) fbResult[r.id] = r.val || '--';
       return res.json(fbResult);
@@ -8504,7 +8208,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
     logger.debug('[Legacy _ref_reqs] Query', { db, id, sql: sql.replace(/\s+/g, ' ').trim() });
 
-    const [rows] = await pool.query(sql, searchParams);
+    const { rows: rows } = await execSql(pool, sql, searchParams, { label: 'query_query' });
 
     // Build result with concatenated requisite values
     // PHP: foreach($ref_reqs as $v) $list[$row["id"]] .= isset($row[$v."val"]) ? " / ".$row[$v."val"] : " / --";
@@ -8563,10 +8267,7 @@ router.all('/:db/_connect/:id?', legacyAuthMiddleware, async (req, res) => {
 
     // PHP: if $id == 0 → error; else fetch CONNECT requisite URL and proxy
     if (objectId) {
-      const [[row]] = await pool.query(
-        `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CONNECT} LIMIT 1`,
-        [objectId]
-      );
+      const { rows: [row] } = await execSql(pool, `SELECT val FROM \`${db}\` WHERE up = ? AND t = ${TYPE.CONNECT} LIMIT 1`, [objectId], { label: 'query_select' });
       if (!row || !row.val) {
         return res.status(200).send('');
       }
@@ -8709,10 +8410,7 @@ router.post('/:db/_d_new/:parentTypeId?', legacyAuthMiddleware, legacyXsrfCheck,
     // If duplicate found: return existing id with warning (not an error)
     if (parentId === 0) {
       const pool = getPool();
-      const [dupeRows] = await pool.query(
-        `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND id != t LIMIT 1`,
-        [name, baseType]
-      );
+      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ? AND id != t LIMIT 1`, [name, baseType], { label: 'post_db_d_new_parentTypeId_select' });
       if (dupeRows.length > 0) {
         const existingId = dupeRows[0].id;
         logger.info('[Legacy _d_new] Type already exists, returning existing', { db, existingId, name, baseType });
@@ -8775,10 +8473,7 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
 
     // PHP parity: duplicate name check — cannot rename type to an existing name
     if (val !== undefined) {
-      const [dupeRows] = await pool.query(
-        `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? AND id != ? LIMIT 1`,
-        [val, id]
-      );
+      const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = 0 AND val = ? AND id != ? LIMIT 1`, [val, id], { label: 'unique_select' });
       if (dupeRows.length > 0) {
         return res.status(200).json({ error: `Type with name "${val}" already exists` });
       }
@@ -8793,7 +8488,7 @@ router.post('/:db/_d_save/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legac
     params.push(unique);
 
     params.push(id);
-    await pool.query(`UPDATE \`${db}\` SET ${updates.join(', ')} WHERE id = ?`, params);
+    await execSql(pool, `UPDATE \`${db}\` SET ${updates.join(', ')} WHERE id = ?`, params, { label: 'unique_update' });
 
     logger.info('[Legacy _d_save] Type saved', { db, id, updates: req.body });
 
@@ -8821,9 +8516,7 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     const pool = getPool();
 
     // PHP parity: hard-block if type has existing instances (die() in PHP)
-    const [[instRow]] = await pool.query(
-      `SELECT COUNT(id) AS cnt FROM \`${db}\` WHERE t = ?`, [id]
-    );
+    const { rows: [instRow] } = await execSql(pool, `SELECT COUNT(id) AS cnt FROM \`${db}\` WHERE t = ?`, [id], { label: 'post_db_d_del_typeId_select' });
     if (instRow && instRow.cnt > 0) {
       return res.status(400).json({
         error: `Cannot delete the Type in case there are objects of this type (total objects: ${instRow.cnt})!`
@@ -8831,12 +8524,9 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     }
 
     // PHP parity: hard-block if type or its requisites are used in reports (my_die() in PHP)
-    const [repRows] = await pool.query(
-      `SELECT reqs.id FROM \`${db}\`, \`${db}\` reqs
+    const { rows: repRows } = await execSql(pool, `SELECT reqs.id FROM \`${db}\`, \`${db}\` reqs
        WHERE \`${db}\`.t = ${TYPE.REP_COLS} AND \`${db}\`.val = reqs.id
-       AND (reqs.up = ? OR reqs.id = ?) LIMIT 1`,
-      [id, id]
-    );
+       AND (reqs.up = ? OR reqs.id = ?) LIMIT 1`, [id, id], { label: 'post_db_d_del_typeId_select' });
     if (repRows.length > 0) {
       return res.status(400).json({
         error: `The type or its requisites are used in reports`
@@ -8844,12 +8534,9 @@ router.post('/:db/_d_del/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     }
 
     // PHP parity: hard-block if type or its requisites are used in roles (die() in PHP)
-    const [roleRows] = await pool.query(
-      `SELECT objs.t, objs.val FROM \`${db}\`, \`${db}\` r, \`${db}\` objs
+    const { rows: roleRows } = await execSql(pool, `SELECT objs.t, objs.val FROM \`${db}\`, \`${db}\` r, \`${db}\` objs
        WHERE r.t = ${TYPE.ROLE} AND r.up = 1 AND objs.up = r.id
-       AND objs.val = \`${db}\`.id AND (\`${db}\`.up = ? OR \`${db}\`.id = ?) LIMIT 1`,
-      [id, id]
-    );
+       AND objs.val = \`${db}\`.id AND (\`${db}\`.up = ? OR \`${db}\`.id = ?) LIMIT 1`, [id, id], { label: 'post_db_d_del_typeId_select' });
     if (roleRows.length > 0) {
       return res.status(400).json({
         error: `The type or its requisites are used in roles!`
@@ -8899,9 +8586,7 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
 
     // PHP parity (Add_Req): validate before adding requisite
     // 1. Target type exists
-    const [targetRows] = await pool.query(
-      `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId]
-    );
+    const { rows: targetRows } = await execSql(pool, `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [parentId], { label: 'post_db_d_req_typeId_select' });
     if (targetRows.length === 0) {
       return res.status(200).json({ error: `Type ${parentId} does not exist` });
     }
@@ -8917,10 +8602,7 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     }
 
     // 4. Not duplicate — check if requisite of this type already exists
-    const [dupeRows] = await pool.query(
-      `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? LIMIT 1`,
-      [parentId, reqType]
-    );
+    const { rows: dupeRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? LIMIT 1`, [parentId, reqType], { label: 'post_db_d_req_typeId_select' });
     if (dupeRows.length > 0) {
       return res.status(200).json({ error: `Requisite of type ${reqType} already exists on type ${parentId}` });
     }
@@ -8929,9 +8611,7 @@ router.post('/:db/_d_req/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     // If the requisite type is a reference (its own t is not a basic type)
     // and the multiselect parameter is set, auto-apply :MULTI: flag.
     if (!multi && multiselect) {
-      const [reqTypeRows] = await pool.query(
-        `SELECT t FROM \`${db}\` WHERE id = ? LIMIT 1`, [reqType]
-      );
+      const { rows: reqTypeRows } = await execSql(pool, `SELECT t FROM \`${db}\` WHERE id = ? LIMIT 1`, [reqType], { label: 'post_db_d_req_typeId_select' });
       if (reqTypeRows.length > 0 && REV_BASE_TYPE[reqTypeRows[0].t] === undefined) {
         multi = true;
         logger.info('[Legacy _d_req] MULTI_MASK auto-applied for reference type', { db, reqType });
@@ -8997,7 +8677,7 @@ router.post('/:db/_d_alias/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     // Update alias and rebuild value
     const newVal = buildModifiers(modifiers.name, newAlias || null, modifiers.required, modifiers.multi);
 
-    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id], { label: 'post_db_d_alias_reqId_update' });
 
     logger.info('[Legacy _d_alias] Alias set', { db, id, alias: newAlias });
 
@@ -9033,9 +8713,7 @@ router.post('/:db/_d_null/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     }
 
     // Metadata verification: only allow toggling nullable on metadata-level requisites (parent.up === 0)
-    const [parentRows] = await pool.query(
-      `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up]
-    );
+    const { rows: parentRows } = await execSql(pool, `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up], { label: 'post_db_d_null_reqId_select' });
     if (parentRows.length === 0 || parentRows[0].up !== 0) {
       return res.status(200).json({ error: 'Can only toggle NULL on type definitions, not instances' });
     }
@@ -9051,7 +8729,7 @@ router.post('/:db/_d_null/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     // Rebuild value with updated flag
     const newVal = buildModifiers(modifiers.name, modifiers.alias, newRequired, modifiers.multi);
 
-    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id], { label: 'post_db_d_null_reqId_update' });
 
     logger.info('[Legacy _d_null] NOT NULL toggled', { db, id, required: newRequired });
 
@@ -9087,9 +8765,7 @@ router.post('/:db/_d_multi/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     }
 
     // Metadata verification: only allow toggling multi on metadata-level requisites (parent.up === 0)
-    const [parentRows] = await pool.query(
-      `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up]
-    );
+    const { rows: parentRows } = await execSql(pool, `SELECT up FROM \`${db}\` WHERE id = ? LIMIT 1`, [obj.up], { label: 'post_db_d_multi_reqId_select' });
     if (parentRows.length === 0 || parentRows[0].up !== 0) {
       return res.status(200).json({ error: 'Can only toggle MULTI on type definitions, not instances' });
     }
@@ -9105,7 +8781,7 @@ router.post('/:db/_d_multi/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     // Rebuild value with updated flag
     const newVal = buildModifiers(modifiers.name, modifiers.alias, modifiers.required, newMulti);
 
-    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id], { label: 'post_db_d_multi_reqId_update' });
 
     logger.info('[Legacy _d_multi] MULTI toggled', { db, id, multi: newMulti });
 
@@ -9158,7 +8834,7 @@ router.post('/:db/_d_attrs/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     // Rebuild value
     const newVal = buildModifiers(newName, newAlias, newRequired, newMulti);
 
-    await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id]);
+    await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [newVal, id], { label: 'post_db_d_attrs_reqId_update' });
 
     logger.info('[Legacy _d_attrs] Modifiers updated', { db, id, alias: newAlias, required: newRequired, multi: newMulti });
 
@@ -9194,10 +8870,7 @@ router.post('/:db/_d_up/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDd
     }
 
     // Find the previous sibling (same parent, lower order)
-    const [siblings] = await pool.query(
-      `SELECT id, ord FROM ${db} WHERE up = ? AND ord < ? ORDER BY ord DESC LIMIT 1`,
-      [obj.up, obj.ord]
-    );
+    const { rows: siblings } = await execSql(pool, `SELECT id, ord FROM ${db} WHERE up = ? AND ord < ? ORDER BY ord DESC LIMIT 1`, [obj.up, obj.ord], { label: 'post_db_d_up_reqId_select' });
 
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
@@ -9208,10 +8881,7 @@ router.post('/:db/_d_up/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDd
     const prevSibling = siblings[0];
 
     // Atomic swap using single CASE WHEN UPDATE (PHP parity — prevents intermediate inconsistent state)
-    await pool.query(
-      `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`,
-      [id, prevSibling.ord, prevSibling.id, obj.ord, id, prevSibling.id]
-    );
+    await execSql(pool, `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`, [id, prevSibling.ord, prevSibling.id, obj.ord, id, prevSibling.id], { label: 'post_db_d_up_reqId_update' });
 
     logger.info('[Legacy _d_up] Requisite moved up', { db, id, newOrd: prevSibling.ord });
 
@@ -9248,10 +8918,7 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
     const pool = getPool();
 
     // PHP: SELECT req.ord, req.up FROM $z req, $z par WHERE req.id=$id AND par.id=req.up AND par.up=0
-    const [[reqRow]] = await pool.query(
-      `SELECT req.ord, req.up FROM \`${db}\` req, \`${db}\` par WHERE req.id=? AND par.id=req.up AND par.up=0`,
-      [id]
-    );
+    const { rows: [reqRow] } = await execSql(pool, `SELECT req.ord, req.up FROM \`${db}\` req, \`${db}\` par WHERE req.id=? AND par.id=req.up AND par.up=0`, [id], { label: 'post_db_d_ord_reqId_select' });
 
     if (!reqRow) {
       return res.status(200).json({ error: `Id=${id} not found`  });
@@ -9265,12 +8932,10 @@ router.post('/:db/_d_ord/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyD
       // UPDATE $z SET ord=(CASE WHEN id=$rid THEN LEAST($newOrd, maxOrd) ELSE ord+SIGN($ord-$newOrd) END)
       //   WHERE up=$id AND ord BETWEEN LEAST($ord, $newOrd) AND GREATEST($ord, $newOrd)
       // Use CAST to SIGNED to prevent UNSIGNED underflow when ord shifts below 0
-      await pool.query(`
+      await execSql(pool, `
         UPDATE \`${db}\` SET ord=(CASE WHEN id=? THEN LEAST(?, (SELECT max(ord) FROM (SELECT ord FROM \`${db}\` WHERE up=?) AS t))
                                        ELSE GREATEST(0, CAST(ord AS SIGNED)+SIGN(?-?)) END)
-        WHERE up=? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`,
-        [id, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd]
-      );
+        WHERE up=? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`, [id, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd], { label: 'post_db_d_ord_reqId_update' });
     }
 
     logger.info('[Legacy _d_ord] Order set', { db, id, ord: newOrd });
@@ -9301,11 +8966,8 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
     const forced = req.body.forced !== undefined || req.query.forced !== undefined;
 
     // PHP parity: fetch requisite definition row + its parent type info
-    const [[defRow]] = await pool.query(
-      `SELECT def.up, def.t AS typ, def.ord, r.t AS parentT, r.val AS parentVal
-       FROM \`${db}\` def, \`${db}\` r WHERE def.id = ? AND r.id = def.t`,
-      [id]
-    );
+    const { rows: [defRow] } = await execSql(pool, `SELECT def.up, def.t AS typ, def.ord, r.t AS parentT, r.val AS parentVal
+       FROM \`${db}\` def, \`${db}\` r WHERE def.id = ? AND r.id = def.t`, [id], { label: 'post_db_d_del_req_reqId_select' });
     if (!defRow) {
       return res.status(200).json({ error: 'Requisite not found' });
     }
@@ -9326,7 +8988,7 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
     }
 
     const usageParams = isBasic ? [typeId, defRow.typ, id] : [typeId, String(id)];
-    const [[usageRow]] = await pool.query(usageSql, usageParams);
+    const { rows: [usageRow] } = await execSql(pool, usageSql, usageParams, { label: 'post_db_d_del_req_reqId_query' });
 
     if (usageRow && usageRow.cnt > 0) {
       if (forced) {
@@ -9336,17 +8998,14 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
              WHERE obj.t = ? AND (req.t = ? OR req.t = ?) AND req.up = obj.id`
           : `SELECT req.id FROM \`${db}\` obj, \`${db}\` req
              WHERE obj.t = ? AND req.up = obj.id AND req.val = ?`;
-        const [cleanRows] = await pool.query(cleanSql, usageParams);
+        const { rows: cleanRows } = await execSql(pool, cleanSql, usageParams, { label: 'post_db_d_del_req_reqId_query' });
         for (const row of cleanRows) {
           await recursiveDelete(pool, db, row.id);
         }
         // PHP parity: also clean grants referencing this requisite
-        const [grantRows] = await pool.query(
-          `SELECT reqs.id FROM \`${db}\`, \`${db}\` reqs
+        const { rows: grantRows } = await execSql(pool, `SELECT reqs.id FROM \`${db}\`, \`${db}\` reqs
            WHERE \`${db}\`.t = ${TYPE.ROLE} AND \`${db}\`.up = 1
-           AND reqs.up = \`${db}\`.id AND reqs.val = ?`,
-          [String(id)]
-        );
+           AND reqs.up = \`${db}\`.id AND reqs.val = ?`, [String(id)], { label: 'post_db_d_del_req_reqId_select' });
         for (const row of grantRows) {
           await recursiveDelete(pool, db, row.id);
         }
@@ -9359,13 +9018,10 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
     }
 
     // PHP parity: hard-block if requisite is used in reports or roles (my_die() — no forced override)
-    const [[repRoleRow]] = await pool.query(
-      `SELECT ${TYPE.REP_COLS} AS t FROM \`${db}\` WHERE t = ${TYPE.REP_COLS} AND val = ?
+    const { rows: [repRoleRow] } = await execSql(pool, `SELECT ${TYPE.REP_COLS} AS t FROM \`${db}\` WHERE t = ${TYPE.REP_COLS} AND val = ?
        UNION SELECT reqs.t FROM \`${db}\`, \`${db}\` reqs
        WHERE \`${db}\`.t = ${TYPE.ROLE} AND \`${db}\`.up = 1
-       AND reqs.up = \`${db}\`.id AND reqs.val = ? LIMIT 1`,
-      [String(id), String(id)]
-    );
+       AND reqs.up = \`${db}\`.id AND reqs.val = ? LIMIT 1`, [String(id), String(id)], { label: 'post_db_d_del_req_reqId_select' });
     if (repRoleRow) {
       return res.status(400).json({
         error: `The requisite is used in reports or roles!`
@@ -9376,10 +9032,7 @@ router.post('/:db/_d_del_req/:reqId', legacyAuthMiddleware, legacyXsrfCheck, leg
     await recursiveDelete(pool, db, id);
 
     // Renumber remaining siblings after deletion
-    await pool.query(
-      `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND ord > ?`,
-      [typeId, myord]
-    );
+    await execSql(pool, `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND ord > ?`, [typeId, myord], { label: 'post_db_d_del_req_reqId_update' });
 
     logger.info('[Legacy _d_del_req] Requisite deleted', { db, id, forced });
 
@@ -9417,10 +9070,7 @@ router.post('/:db/_d_ref/:typeId', legacyAuthMiddleware, legacyXsrfCheck, legacy
     const pool = getPool();
 
     // PHP: SELECT obj.up, obj.t, ref.id FROM $z obj LEFT JOIN $z ref ON ref.up=0 AND ref.t=$id AND ref.val='' WHERE obj.id=$id
-    const [[row]] = await pool.query(
-      `SELECT obj.up, obj.t, ref.id refId FROM \`${db}\` obj LEFT JOIN \`${db}\` ref ON ref.up=0 AND ref.t=? AND ref.val='' WHERE obj.id=?`,
-      [id, id]
-    );
+    const { rows: [row] } = await execSql(pool, `SELECT obj.up, obj.t, ref.id refId FROM \`${db}\` obj LEFT JOIN \`${db}\` ref ON ref.up=0 AND ref.t=? AND ref.val='' WHERE obj.id=?`, [id, id], { label: 'post_db_d_ref_typeId_select' });
 
     if (!row) {
       return res.status(200).json({ error: `${id} type not found`  });
@@ -9482,10 +9132,7 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     }
 
     // Find the previous sibling (same parent and type, lower order)
-    const [siblings] = await pool.query(
-      `SELECT id, ord FROM ${db} WHERE up = ? AND t = ? AND ord < ? ORDER BY ord DESC LIMIT 1`,
-      [obj.up, obj.t, obj.ord]
-    );
+    const { rows: siblings } = await execSql(pool, `SELECT id, ord FROM ${db} WHERE up = ? AND t = ? AND ord < ? ORDER BY ord DESC LIMIT 1`, [obj.up, obj.t, obj.ord], { label: 'post_db_m_up_id_select' });
 
     if (siblings.length === 0) {
       // Already at top — still return PHP api_dump() format
@@ -9496,10 +9143,7 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     const prevSibling = siblings[0];
 
     // Atomic swap using single CASE WHEN UPDATE (replaces 2 separate UPDATEs)
-    await pool.query(
-      `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`,
-      [objectId, prevSibling.ord, prevSibling.id, obj.ord, objectId, prevSibling.id]
-    );
+    await execSql(pool, `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`, [objectId, prevSibling.ord, prevSibling.id, obj.ord, objectId, prevSibling.id], { label: 'post_db_m_up_id_update' });
 
     logger.info('[Legacy _m_up] Object moved up', { db, id: objectId, newOrd: prevSibling.ord });
 
@@ -9545,12 +9189,9 @@ router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
     // PHP: SELECT obj.ord, obj.up FROM $z obj, $z par
     //      WHERE obj.id=$id AND par.id=obj.up AND par.up!=0
     // (par.up!=0 ensures object is a data record, not a root type)
-    const [[row]] = await pool.query(
-      `SELECT obj.ord, obj.up FROM \`${db}\` obj
+    const { rows: [row] } = await execSql(pool, `SELECT obj.ord, obj.up FROM \`${db}\` obj
        JOIN \`${db}\` par ON par.id = obj.up AND par.up != 0
-       WHERE obj.id = ?`,
-      [objectId]
-    );
+       WHERE obj.id = ?`, [objectId], { label: 'post_db_m_ord_id_select' });
 
     if (!row) {
       return res.status(200).json({ error: `Id=${objectId} not found` });
@@ -9564,15 +9205,12 @@ router.post('/:db/_m_ord/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req
       //                             ELSE ord+SIGN($ord-$newOrd) END)
       //      WHERE up=$parentId AND ord BETWEEN LEAST($ord,$newOrd) AND GREATEST($ord,$newOrd)
       // Use CAST to SIGNED to prevent UNSIGNED underflow when ord shifts below 0
-      await pool.query(
-        `UPDATE \`${db}\`
+      await execSql(pool, `UPDATE \`${db}\`
          SET ord = CASE
            WHEN id = ? THEN LEAST(?, (SELECT maxo FROM (SELECT MAX(ord) AS maxo FROM \`${db}\` WHERE up = ?) AS t))
            ELSE GREATEST(0, CAST(ord AS SIGNED) + SIGN(? - ?))
          END
-         WHERE up = ? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`,
-        [objectId, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd]
-      );
+         WHERE up = ? AND ord BETWEEN LEAST(?,?) AND GREATEST(?,?)`, [objectId, newOrd, parentId, oldOrd, newOrd, parentId, oldOrd, newOrd, oldOrd, newOrd], { label: 'post_db_m_ord_id_update' });
     }
 
     logger.info('[Legacy _m_ord] Order set', { db, id: objectId, ord: newOrd });
@@ -9618,9 +9256,7 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     }
 
     // Check that the old object exists and get its parent
-    const [objRows] = await pool.query(
-      `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [oldId]
-    );
+    const { rows: objRows } = await execSql(pool, `SELECT id, up FROM \`${db}\` WHERE id = ? LIMIT 1`, [oldId], { label: 'post_db_m_id_id_select' });
     if (objRows.length === 0) {
       return res.status(200).json({ error: 'Object not found' });
     }
@@ -9632,9 +9268,7 @@ router.post('/:db/_m_id/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     }
 
     // Check that new_id is not already in use
-    const [existRows] = await pool.query(
-      `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [newId]
-    );
+    const { rows: existRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE id = ? LIMIT 1`, [newId], { label: 'post_db_m_id_id_select' });
     if (existRows.length > 0) {
       return res.status(200).json({ error: `ID ${newId} is already in use` });
     }
@@ -9709,7 +9343,7 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
       ORDER BY req.ord
     `;
 
-    const [rows] = await pool.query(query, [objectId, objectId]);
+    const { rows: rows } = await execSql(pool, query, [objectId, objectId], { label: 'query_query' });
 
     if (rows.length === 0) {
       // PHP returns HTTP 200 with error JSON, not 404
@@ -9774,9 +9408,7 @@ router.all('/:db/metadata/:typeId?', legacyAuthMiddleware, async (req, res) => {
 
     // Special case: /metadata/base returns base types (id=t, up=0)
     if (typeId === 'base') {
-      const [baseRows] = await pool.query(
-        `SELECT id, val FROM ${db} WHERE up=0 AND id=t ORDER BY id`
-      );
+      const { rows: baseRows } = await execSql(pool, `SELECT id, val FROM ${db} WHERE up=0 AND id=t ORDER BY id`, [], { label: 'query_select' });
       return res.json(baseRows.map(r => ({ id: r.id, val: r.val })));
     }
 
@@ -9824,7 +9456,7 @@ router.all('/:db/metadata/:typeId?', legacyAuthMiddleware, async (req, res) => {
       `;
     }
 
-    const [rows] = await pool.query(query, params);
+    const { rows: rows } = await execSql(pool, query, params, { label: 'query_query' });
 
     // PHP (metadata all): first pass collects req-only types to skip.
     // "req-only" = type has no own requisites AND its ID is used as req.t by another type.
@@ -9970,14 +9602,11 @@ router.post('/:db/jwt', async (req, res) => {
       : `u.t = ${TYPE.USER} AND tok.val = ?`;
     const whereParam = username || jwtToken;
 
-    const [rows] = await pool.query(
-      `SELECT u.id uid, u.val uname, tok.id tok_id, tok.val tok_val, xsrf.id xsrf_id, xsrf.val xsrf_val
+    const { rows: rows } = await execSql(pool, `SELECT u.id uid, u.val uname, tok.id tok_id, tok.val tok_val, xsrf.id xsrf_id, xsrf.val xsrf_val
        FROM \`${db}\` u
        LEFT JOIN \`${db}\` tok  ON tok.up  = u.id AND tok.t  = ${TYPE.TOKEN}
        LEFT JOIN \`${db}\` xsrf ON xsrf.up = u.id AND xsrf.t = ${TYPE.XSRF}
-       WHERE ${whereClause} LIMIT 1`,
-      [whereParam]
-    );
+       WHERE ${whereClause} LIMIT 1`, [whereParam], { label: 'post_db_jwt_select' });
 
     if (!rows.length) {
       return res.status(200).json({ error: 'JWT verification failed' });
@@ -10034,13 +9663,10 @@ async function handleConfirm(req, res) {
     if (u && o && p) {
       const pool = getPool();
       // PHP: SELECT pwd.id FROM $z pwd, $z u WHERE pwd.up=u.id AND pwd.t=PASSWORD AND u.t=USER AND u.val='u' AND pwd.val='o'
-      const [[row]] = await pool.query(
-        `SELECT pwd.id FROM \`${db}\` pwd, \`${db}\` u WHERE pwd.up=u.id AND pwd.t=? AND u.t=? AND u.val=? AND pwd.val=?`,
-        [TYPE.PASSWORD, TYPE.USER, u, o]
-      );
+      const { rows: [row] } = await execSql(pool, `SELECT pwd.id FROM \`${db}\` pwd, \`${db}\` u WHERE pwd.up=u.id AND pwd.t=? AND u.t=? AND u.val=? AND pwd.val=?`, [TYPE.PASSWORD, TYPE.USER, u, o], { label: 'u_select' });
       if (row) {
         // PHP: UPDATE $z SET val='p' WHERE id=$row[0]
-        await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [p, row.id]);
+        await execSql(pool, `UPDATE \`${db}\` SET val=? WHERE id=?`, [p, row.id], { label: 'u_update' });
         // PHP: login($z, $_REQUEST["u"], "confirm") → in API mode: {"message":"confirm","db":db,"login":u,"details":""}
         return res.status(200).json({ message: 'confirm', db, login: u, details: '' });
       }
@@ -10110,30 +9736,30 @@ router.all('/my/_new_db', async (req, res) => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `;
 
-    await pool.query(createTableQuery);
+    await execSql(pool, createTableQuery, [], { label: 'post_db_confirm_query' });
 
     // PHP parity: if template is specified and exists, copy structure from template DB
     let copiedFromTemplate = false;
     if (template && template !== 'empty' && isValidDbName(template)) {
       try {
         // Verify template table exists
-        const [tmplExists] = await pool.query(`SHOW TABLES LIKE ?`, [template]);
+        const { rows: tmplExists } = await execSql(pool, `SHOW TABLES LIKE ?`, [template], { label: 'post_db_confirm_show' });
         if (tmplExists.length > 0) {
           // Copy all metadata rows (up=0 = type definitions) from template
           // This copies type structure without instance data
-          await pool.query(`
+          await execSql(pool, `
             INSERT INTO \`${newDbName}\` (id, up, ord, t, val)
             SELECT id, up, ord, t, val FROM \`${template}\` WHERE up = 0
-          `);
+          `, [], { label: 'post_db_confirm_insert' });
           // Copy requisite definitions (children of type definitions, i.e. rows whose up
           // is a metadata row). These define the schema/attributes for each type.
-          await pool.query(`
+          await execSql(pool, `
             INSERT IGNORE INTO \`${newDbName}\` (id, up, ord, t, val)
             SELECT child.id, child.up, child.ord, child.t, child.val
             FROM \`${template}\` child
             JOIN \`${template}\` parent ON parent.id = child.up AND parent.up = 0
             WHERE child.up != 0
-          `);
+          `, [], { label: 'post_db_confirm_insert' });
           copiedFromTemplate = true;
           logger.info('[Legacy _new_db] Copied structure from template', { template, newDb: newDbName });
         }
@@ -10167,7 +9793,7 @@ router.all('/my/_new_db', async (req, res) => {
 
       for (const initQuery of initQueries) {
         try {
-          await pool.query(initQuery);
+          await execSql(pool, initQuery, [], { label: 'query_query' });
         } catch (e) {
           // Ignore duplicate key errors
           if (!e.message.includes('Duplicate')) {
@@ -10184,25 +9810,19 @@ router.all('/my/_new_db', async (req, res) => {
 
     if (token) {
       try {
-        const [userRows] = await pool.query(
-          `SELECT u.id FROM my u JOIN my tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} WHERE tok.val = ? LIMIT 1`,
-          [token]
-        );
+        const { rows: userRows } = await execSql(pool, `SELECT u.id FROM my u JOIN my tok ON tok.up = u.id AND tok.t = ${TYPE.TOKEN} WHERE tok.val = ? LIMIT 1`, [token], { label: 'query_select' });
         if (userRows.length > 0) {
           userId = userRows[0].id;
 
           // PHP: $id = Insert($GLOBALS["GLOBAL_VARS"]["user_id"], 1, DATABASE, $db, "Register extra DB");
-          const [insertResult] = await pool.query(
-            `INSERT INTO my (up, ord, t, val) VALUES (?, 1, ${TYPE.DATABASE}, ?)`,
-            [userId, newDbName.toLowerCase()]
-          );
+          const { rows: insertResult } = await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, ${TYPE.DATABASE}, ?)`, [userId, newDbName.toLowerCase()], { label: 'query_insert' });
           recordId = insertResult.insertId;
 
           // PHP also inserts date and template info
-          await pool.query(`INSERT INTO my (up, ord, t, val) VALUES (?, 1, 275, ?)`, [recordId, new Date().toISOString().slice(0, 10).replace(/-/g, '')]);
-          await pool.query(`INSERT INTO my (up, ord, t, val) VALUES (?, 1, 283, ?)`, [recordId, template]);
+          await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 275, ?)`, [recordId, new Date().toISOString().slice(0, 10).replace(/-/g, '')], { label: 'query_insert' });
+          await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 283, ?)`, [recordId, template], { label: 'query_insert' });
           if (description) {
-            await pool.query(`INSERT INTO my (up, ord, t, val) VALUES (?, 1, 276, ?)`, [recordId, description]);
+            await execSql(pool, `INSERT INTO my (up, ord, t, val) VALUES (?, 1, 276, ?)`, [recordId, description], { label: 'query_insert' });
           }
         }
       } catch (e) {
@@ -10589,10 +10209,7 @@ async function resolveReportSubqueries(pool, db, sqlStr, depth = 0) {
 
   for (const reportName of refs) {
     // Look up report by name
-    const [nameRows] = await pool.query(
-      `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
-      [reportName]
-    );
+    const { rows: nameRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`, [reportName], { label: 'resolveReportSubqueries_select' });
     if (nameRows.length === 0) {
       logger.warn('[Report] Subquery reference not found', { reportName, db });
       continue;
@@ -10738,10 +10355,7 @@ async function compileReport(pool, db, reportId) {
 
   try {
     // Get report definition row
-    const [reportRows] = await pool.query(
-      `SELECT id, val, t, up FROM \`${db}\` WHERE id = ?`,
-      [reportId]
-    );
+    const { rows: reportRows } = await execSql(pool, `SELECT id, val, t, up FROM \`${db}\` WHERE id = ?`, [reportId], { label: 'compileReport_select' });
 
     if (reportRows.length === 0) return null;
 
@@ -10751,8 +10365,7 @@ async function compileReport(pool, db, reportId) {
 
     // Get REP_COLS rows.
     // val = requisite type ID (the JOIN key); we look up its display name from the type row.
-    const [colRows] = await pool.query(
-      `SELECT
+    const { rows: colRows } = await execSql(pool, `SELECT
          col.id,
          col.val  AS req_type_raw,
          col.ord,
@@ -10761,9 +10374,7 @@ async function compileReport(pool, db, reportId) {
        FROM \`${db}\` col
        LEFT JOIN \`${db}\` typ ON typ.id = CAST(col.val AS UNSIGNED)
        WHERE col.up = ? AND col.t = ${TYPE.REP_COLS}
-       ORDER BY col.ord`,
-      [reportId]
-    );
+       ORDER BY col.ord`, [reportId], { label: 'compileReport_select' });
 
     for (const col of colRows) {
       const reqTypeId = parseInt(col.req_type_raw, 10);
@@ -10802,11 +10413,8 @@ async function compileReport(pool, db, reportId) {
     if (report.columns.length > 0) {
       const colIds = report.columns.map(c => c.id);
       const colPh  = colIds.map(() => '?').join(',');
-      const [subRows] = await pool.query(
-        `SELECT up, t, val FROM \`${db}\`
-         WHERE up IN (${colPh}) AND t IN (${REP_COL_FUNC}, ${REP_COL_TOTAL}, ${REP_COL_NAME}, ${REP_COL_FORMULA}, ${REP_COL_FROM}, ${REP_COL_TO}, ${REP_COL_HIDE})`,
-        colIds
-      );
+      const { rows: subRows } = await execSql(pool, `SELECT up, t, val FROM \`${db}\`
+         WHERE up IN (${colPh}) AND t IN (${REP_COL_FUNC}, ${REP_COL_TOTAL}, ${REP_COL_NAME}, ${REP_COL_FORMULA}, ${REP_COL_FROM}, ${REP_COL_TO}, ${REP_COL_HIDE})`, colIds, { label: 'compileReport_select' });
       for (const sr of subRows) {
         const col = report.columns.find(c => c.id === sr.up);
         if (!col) continue;
@@ -10843,8 +10451,7 @@ async function compileReport(pool, db, reportId) {
         const reqPh = colReqTypeIds.map(() => '?').join(',');
         // PHP: SELECT ... col_def.up=0 ? col_def.id : col_def.up → the parent type
         // We find requisites of each column's parent type and check for :MULTI: in val
-        const [multiRows] = await pool.query(
-          `SELECT DISTINCT
+        const { rows: multiRows } = await execSql(pool, `SELECT DISTINCT
              CASE WHEN col_def.up = 0 THEN col_def.id ELSE col_def.up END AS typ,
              reqs.id AS req,
              reqs.val AS attr,
@@ -10852,9 +10459,7 @@ async function compileReport(pool, db, reportId) {
            FROM \`${db}\` col_def
            LEFT JOIN \`${db}\` reqs ON reqs.up = CASE WHEN col_def.up = 0 THEN col_def.id ELSE col_def.up END
            WHERE col_def.id IN (${reqPh})
-             AND reqs.val LIKE '%:MULTI:%'`,
-          colReqTypeIds
-        );
+             AND reqs.val LIKE '%:MULTI:%'`, colReqTypeIds, { label: 'query_select' });
         // Build a set of parent type IDs that have multi-valued requisites
         const multiParentTypes = new Set();
         for (const mr of multiRows) {
@@ -10872,10 +10477,7 @@ async function compileReport(pool, db, reportId) {
         }
         // Also check if any column's reqTypeId itself is a multi-valued requisite
         // (the requisite row's own val contains :MULTI:)
-        const [directMultiRows] = await pool.query(
-          `SELECT id, val FROM \`${db}\` WHERE id IN (${reqPh}) AND val LIKE '%:MULTI:%'`,
-          colReqTypeIds
-        );
+        const { rows: directMultiRows } = await execSql(pool, `SELECT id, val FROM \`${db}\` WHERE id IN (${reqPh}) AND val LIKE '%:MULTI:%'`, colReqTypeIds, { label: 'query_select' });
         for (const dm of directMultiRows) {
           const dmId = parseInt(dm.id, 10);
           for (const col of report.columns) {
@@ -10886,10 +10488,7 @@ async function compileReport(pool, db, reportId) {
     }
 
     // Get REP_JOIN rows (explicit additional joins)
-    const [joinRows] = await pool.query(
-      `SELECT id, val, t FROM \`${db}\` WHERE up = ? AND t = ${TYPE.REP_JOIN}`,
-      [reportId]
-    );
+    const { rows: joinRows } = await execSql(pool, `SELECT id, val, t FROM \`${db}\` WHERE up = ? AND t = ${TYPE.REP_JOIN}`, [reportId], { label: 'query_select' });
 
     for (const join of joinRows) {
       report.joins.push({
@@ -10918,16 +10517,13 @@ async function compileReport(pool, db, reportId) {
       TYPE.REP_JOIN_ON,  // 266
     ];
     const paramPh = PARAM_TYPES.map(() => '?').join(',');
-    const [paramRows] = await pool.query(
-      `SELECT r.t, r.val, r.ord,
+    const { rows: paramRows } = await execSql(pool, `SELECT r.t, r.val, r.ord,
               COALESCE(def_orig.val, def.val) AS param_name
        FROM \`${db}\` r
        LEFT JOIN \`${db}\` def ON def.id = r.t AND r.t != ${TYPE.REP_COLS}
        LEFT JOIN \`${db}\` def_orig ON def_orig.id = def.t
        WHERE r.up = ? AND r.t IN (${paramPh})
-       ORDER BY r.ord`,
-      [reportId, ...PARAM_TYPES]
-    );
+       ORDER BY r.ord`, [reportId, ...PARAM_TYPES], { label: 'query_select' });
     for (const pr of paramRows) {
       const typeId = parseInt(pr.t, 10);
       const val = pr.val || '';
@@ -11283,7 +10879,7 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
 
     logger.debug('[Report] SQL', { sql });
 
-    const [rows] = await pool.query(sql, whereParams);
+    const { rows: rows } = await execSql(pool, sql, whereParams, { label: 'query_query' });
 
     // ── Map rows → named output ───────────────────────────────────────────
     // Collect columns that need abn_* post-processing (PHP parity: index.php:3364)
@@ -11376,18 +10972,13 @@ router.all('/:db/report/:reportId?', async (req, res) => {
 
     // PHP supports report lookup by name (e.g. /:db/report/MyRoleMenu)
     if (reportId && !id) {
-      const [nameRows] = await pool.query(
-        `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
-        [decodeURIComponent(reportId)]
-      );
+      const { rows: nameRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`, [decodeURIComponent(reportId)], { label: 'func_select' });
       if (nameRows.length > 0) id = nameRows[0].id;
     }
 
     if (!id) {
       // List available reports
-      const [rows] = await pool.query(
-        `SELECT id, val AS name, ord FROM ${db} WHERE t = ${TYPE.REPORT} ORDER BY ord`
-      );
+      const { rows: rows } = await execSql(pool, `SELECT id, val AS name, ord FROM ${db} WHERE t = ${TYPE.REPORT} ORDER BY ord`, [], { label: 'func_select' });
 
       // PHP returns plain array — match that format
       return res.json(rows.map(r => ({ id: r.id, name: r.name, val: r.name, ord: r.ord })));
@@ -11405,14 +10996,14 @@ router.all('/:db/report/:reportId?', async (req, res) => {
     let username = '';
     let grants = {};
     if (token) {
-      const [userRows] = await pool.query(`
+      const { rows: userRows } = await execSql(pool, `
         SELECT u.id, u.val AS username, role_def.id AS role_id
         FROM ${db} tok
         JOIN ${db} u ON tok.up = u.id
         LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
         WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
         LIMIT 1
-      `, [token]);
+      `, [token], { label: 'func_select' });
       if (userRows.length > 0) {
         username = userRows[0].username;
         grants = await getGrants(pool, db, userRows[0].role_id, {
@@ -11769,10 +11360,7 @@ router.get('/:db/export/:typeId', async (req, res) => {
     const type = parseInt(typeId, 10);
 
     // Get type requisites for header
-    const [reqRows] = await pool.query(
-      `SELECT id, val, t FROM ${db} WHERE up = ? ORDER BY ord`,
-      [type]
-    );
+    const { rows: reqRows } = await execSql(pool, `SELECT id, val, t FROM ${db} WHERE up = ? ORDER BY ord`, [type], { label: 'get_db_export_typeId_select' });
 
     // Parse requisite names and aliases
     const requisites = reqRows.map(r => {
@@ -11786,10 +11374,7 @@ router.get('/:db/export/:typeId', async (req, res) => {
     });
 
     // Get objects of the type
-    const [rows] = await pool.query(
-      `SELECT id, val, up, ord FROM ${db} WHERE t = ? ORDER BY ord`,
-      [type]
-    );
+    const { rows: rows } = await execSql(pool, `SELECT id, val, up, ord FROM ${db} WHERE t = ? ORDER BY ord`, [type], { label: 'get_db_export_typeId_select' });
 
     // If include requisites, fetch all requisite values
     let exportData = rows;
@@ -11798,10 +11383,7 @@ router.get('/:db/export/:typeId', async (req, res) => {
 
       if (objectIds.length > 0) {
         // Get all requisite values for these objects
-        const [reqValues] = await pool.query(
-          `SELECT up AS obj_id, t AS req_type, val FROM ${db} WHERE up IN (?) AND t IN (?)`,
-          [objectIds, requisites.map(r => r.id)]
-        );
+        const { rows: reqValues } = await execSql(pool, `SELECT up AS obj_id, t AS req_type, val FROM ${db} WHERE up IN (?) AND t IN (?)`, [objectIds, requisites.map(r => r.id)], { label: 'get_db_export_typeId_select' });
 
         // Build a map of requisite values per object
         const reqValueMap = {};
@@ -11889,14 +11471,14 @@ router.get('/:db/grants', async (req, res) => {
     }
 
     // Validate token and get user role
-    const [userRows] = await pool.query(`
+    const { rows: userRows } = await execSql(pool, `
       SELECT u.id, u.val AS username, role_def.id AS role_id, role_def.val AS role_name
       FROM ${db} tok
       JOIN ${db} u ON tok.up = u.id
       LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
       WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
       LIMIT 1
-    `, [token]);
+    `, [token], { label: 'get_db_grants_select' });
 
     if (userRows.length === 0) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -11955,14 +11537,14 @@ router.post('/:db/check_grant', async (req, res) => {
     }
 
     // Validate token and get user
-    const [userRows] = await pool.query(`
+    const { rows: userRows } = await execSql(pool, `
       SELECT u.id, u.val AS username, role_def.id AS role_id
       FROM ${db} tok
       JOIN ${db} u ON tok.up = u.id
       LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
       WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
       LIMIT 1
-    `, [token]);
+    `, [token], { label: 'post_db_check_grant_select' });
 
     if (userRows.length === 0) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -12023,14 +11605,14 @@ router.get('/:db/csv_all', async (req, res) => {
     let grants = {};
 
     if (token) {
-      const [userRows] = await pool.query(`
+      const { rows: userRows } = await execSql(pool, `
         SELECT u.id, u.val AS username, role_def.id AS role_id
         FROM ${db} tok
         JOIN ${db} u ON tok.up = u.id
         LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
         WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
         LIMIT 1
-      `, [token]);
+      `, [token], { label: 'get_db_csv_all_select' });
 
       if (userRows.length > 0) {
         username = userRows[0].username;
@@ -12046,7 +11628,7 @@ router.get('/:db/csv_all', async (req, res) => {
     }
 
     // Get all types (PHP query from csv_all)
-    const [typeRows] = await pool.query(`
+    const { rows: typeRows } = await execSql(pool, `
       SELECT a.id, a.val, IF(base.t=base.id,0,1) ref,
              IF(base.t=base.id,defs.val,base.val) req,
              COUNT(def_reqs.id) req_req, reqs.id req_id,
@@ -12059,7 +11641,7 @@ router.get('/:db/csv_all', async (req, res) => {
       WHERE a.up=0 AND a.id!=a.t AND a.val!='' AND a.t!=0
       GROUP BY reqs.id
       ORDER BY a.id, reqs.ord
-    `);
+    `, [], { label: 'get_db_csv_all_select' });
 
     // Build type structure with optimized JOINs (PHP parity: index.php 4101–4131)
     // PHP builds $select[$i], $join[$i] per type so all requisite values are fetched
@@ -12141,7 +11723,7 @@ router.get('/:db/csv_all', async (req, res) => {
           idQuery = `SELECT id FROM ${db} obj WHERE t=${id} AND up!=0 AND id>${last} ORDER BY id LIMIT ${limit}`;
         }
 
-        const [idRows] = await pool.query(idQuery);
+        const { rows: idRows } = await execSql(pool, idQuery, [], { label: 'reqCount_query' });
         rowsNumber = idRows.length;
 
         if (idRows.length > 0) {
@@ -12150,7 +11732,7 @@ router.get('/:db/csv_all', async (req, res) => {
 
           // PHP: single query with all JOINs to fetch object + all requisite values at once
           const dataQuery = `SELECT obj.id, obj.val${select[id] || ''} FROM ${db} obj${join[id] || ''} WHERE obj.t=${id} AND obj.up!=0 AND obj.id>=${first} AND obj.id<=${last}`;
-          const [dataRows] = await pool.query(dataQuery);
+          const { rows: dataRows } = await execSql(pool, dataQuery, [], { label: 'reqCount_query' });
 
           let h = '';
           let prev = 0;
@@ -12405,14 +11987,14 @@ router.get('/:db/backup', async (req, res) => {
     let grants = {};
 
     if (token) {
-      const [userRows] = await pool.query(`
+      const { rows: userRows } = await execSql(pool, `
         SELECT u.id, u.val AS username, role_def.id AS role_id
         FROM ${db} tok
         JOIN ${db} u ON tok.up = u.id
         LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
         WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
         LIMIT 1
-      `, [token]);
+      `, [token], { label: 'get_db_backup_select' });
 
       if (userRows.length > 0) {
         username = userRows[0].username;
@@ -12438,13 +12020,13 @@ router.get('/:db/backup', async (req, res) => {
     let hasMore = true;
 
     while (hasMore) {
-      const [rows] = await pool.query(`
+      const { rows: rows } = await execSql(pool, `
         SELECT id, up, t, ord, val
         FROM ${db}
         WHERE id > ?
         ORDER BY id
         LIMIT ?
-      `, [lastId, limit]);
+      `, [lastId, limit], { label: 'get_db_backup_select' });
 
       if (rows.length < limit) {
         hasMore = false;
@@ -12535,7 +12117,7 @@ async function constructHeader(pool, db, id, ctx, parent = 0) {
 
   ctx.parents[id] = parent;
 
-  const [rows] = await pool.query(`
+  const { rows: rows } = await execSql(pool, `
     SELECT CASE WHEN LENGTH(obj.val)=0 THEN obj.id ELSE obj.t END AS t,
            CASE WHEN LENGTH(obj.val)=0 THEN obj.t ELSE obj.val END AS val,
            req.id AS req_id, req.t AS req_t, refr.val AS req, refr.t AS ref_t,
@@ -12548,7 +12130,7 @@ async function constructHeader(pool, db, id, ctx, parent = 0) {
       CROSS JOIN (SELECT COUNT(1) AS i FROM \`${db}\` WHERE up = 0 AND t = ?) linx
     WHERE obj.id = ?
     ORDER BY req.ord
-  `, [id, id]);
+  `, [id, id], { label: 'constructHeader_select' });
 
   for (const row of rows) {
     if (!ctx.localStruct[id]) {
@@ -12632,11 +12214,11 @@ function exportHeader(ctx) {
 async function exportTerms(pool, db, id, ctx) {
   ctx.termDefs[id] = 1;
 
-  const [rows] = await pool.query(`
+  const { rows: rows } = await execSql(pool, `
     SELECT obj.t AS type, obj.up, type.t AS base
     FROM \`${db}\` obj, \`${db}\` type
     WHERE obj.id = ? AND type.id = obj.t
-  `, [id]);
+  `, [id], { label: 'exportTerms_select' });
 
   if (rows.length === 0) return;
   const row = rows[0];
@@ -12723,7 +12305,7 @@ async function Export_reqs(pool, db, id, obj, val, ctx, ref = '', fU = 0) {
   if (ctx.data[obj] === undefined) {
     const reqs = {};
 
-    const [rows] = await pool.query(`
+    const { rows: rows } = await execSql(pool, `
       SELECT DISTINCT obj.id, obj.t, obj.val, obj.ord,
              req.t AS req_t, req.val AS req_val, req.up AS rup, par.up AS ref
       FROM \`${db}\` obj
@@ -12731,7 +12313,7 @@ async function Export_reqs(pool, db, id, obj, val, ctx, ref = '', fU = 0) {
         LEFT JOIN \`${db}\` par ON par.id = req.up
       WHERE obj.up = ?
       ORDER BY obj.ord
-    `, [obj]);
+    `, [obj], { label: 'Export_reqs_select' });
 
     for (const row of rows) {
       // If this is a REP_COLS reference to a term not yet in localStruct, export it
@@ -12814,7 +12396,7 @@ router.get('/:db/bki-export', async (req, res) => {
     let grants = {};
 
     if (token) {
-      const [userRows] = await pool.query(`
+      const { rows: userRows } = await execSql(pool, `
         SELECT u.id, u.val AS username, role_def.id AS role_id
         FROM \`${db}\` tok
         JOIN \`${db}\` u ON tok.up = u.id
@@ -12822,7 +12404,7 @@ router.get('/:db/bki-export', async (req, res) => {
           ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
         WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
         LIMIT 1
-      `, [token]);
+      `, [token], { label: 'get_db_bki-export_select' });
 
       if (userRows.length > 0) {
         username = userRows[0].username;
@@ -12858,12 +12440,12 @@ router.get('/:db/bki-export', async (req, res) => {
     await constructHeader(pool, db, id, ctx);
 
     // Step 2: iterate all objects of this type and export their data
-    const [objRows] = await pool.query(`
+    const { rows: objRows } = await execSql(pool, `
       SELECT id, t, val, up, ord
       FROM \`${db}\`
       WHERE t = ? AND t != up
       ORDER BY ord
-    `, [id]);
+    `, [id], { label: 'get_db_bki-export_select' });
 
     const dataLines = [];
     for (const row of objRows) {
@@ -12923,10 +12505,7 @@ async function resolveType(pool, db, typ, ctx) {
     throw new Error(`Unknown base type "${typ[2]}" for imported type "${typ[1]}"`);
   }
 
-  const [rows] = await pool.query(
-    `SELECT id FROM \`${db}\` WHERE val = ? AND up = 0 AND t = ?`,
-    [typ[1], baseTypeId]
-  );
+  const { rows: rows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND up = 0 AND t = ?`, [typ[1], baseTypeId], { label: 'resolveType_select' });
 
   let id;
   if (rows.length > 0) {
@@ -12935,10 +12514,7 @@ async function resolveType(pool, db, typ, ctx) {
   } else {
     // No analogue — insert new type
     const ord = typ[3] ? 1 : 0; // "unique" flag → ord=1
-    const [ins] = await pool.query(
-      `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (0, ?, ?, ?)`,
-      [ord, baseTypeId, typ[1]]
-    );
+    const { rows: ins } = await execSql(pool, `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (0, ?, ?, ?)`, [ord, baseTypeId, typ[1]], { label: 'resolveType_insert' });
     id = ins.insertId;
     ctx.localStruct[id] = { 0: `${id}:${MaskDelimiters(typ[1])}:${baseTypeId}${typ[3] ? ':unique' : ''}` };
   }
@@ -12955,7 +12531,7 @@ async function resolveType(pool, db, typ, ctx) {
  * PHP parity: index.php lines 978–983
  */
 async function isOccupied(pool, db, id) {
-  const [rows] = await pool.query(`SELECT 1 FROM \`${db}\` WHERE id = ? LIMIT 1`, [id]);
+  const { rows: rows } = await execSql(pool, `SELECT 1 FROM \`${db}\` WHERE id = ? LIMIT 1`, [id], { label: 'isOccupied_select' });
   return rows.length > 0;
 }
 
@@ -12965,10 +12541,7 @@ async function isOccupied(pool, db, id) {
  * Named differently from the existing insertRow() to avoid collision.
  */
 async function bkiInsertRow(pool, db, up, ord, t, val) {
-  const [result] = await pool.query(
-    `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
-    [up, ord, t, val]
-  );
+  const { rows: result } = await execSql(pool, `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`, [up, ord, t, val], { label: 'bkiInsertRow_insert' });
   return result.insertId;
 }
 
@@ -12981,7 +12554,7 @@ async function getOrd(pool, db, parent, typ = 0) {
     ? `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM \`${db}\` WHERE up = ? AND t = ?`
     : `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM \`${db}\` WHERE up = ?`;
   const params = typ ? [parent, typ] : [parent];
-  const [rows] = await pool.query(sql, params);
+  const { rows: rows } = await execSql(pool, sql, params, { label: 'getOrd_query' });
   return rows[0].next_ord;
 }
 
@@ -13012,7 +12585,7 @@ router.post('/:db/bki-import', (req, res, next) => {
     let grants = {};
 
     if (token) {
-      const [userRows] = await pool.query(`
+      const { rows: userRows } = await execSql(pool, `
         SELECT u.id, u.val AS username, role_def.id AS role_id
         FROM \`${db}\` tok
         JOIN \`${db}\` u ON tok.up = u.id
@@ -13020,7 +12593,7 @@ router.post('/:db/bki-import', (req, res, next) => {
           ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
         WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
         LIMIT 1
-      `, [token]);
+      `, [token], { label: 'post_db_bki-import_select' });
 
       if (userRows.length > 0) {
         username = userRows[0].username;
@@ -13136,10 +12709,7 @@ router.post('/:db/bki-import', (req, res, next) => {
             // ID is free — create type with this ID
             const baseTypeId = BASE_TYPE_BY_NAME[typ[2]];
             if (baseTypeId !== undefined) {
-              await pool.query(
-                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 0, ?, ?, ?)`,
-                [obj, typ[3] ? 1 : 0, baseTypeId, typ[1]]
-              );
+              await execSql(pool, `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 0, ?, ?, ?)`, [obj, typ[3] ? 1 : 0, baseTypeId, typ[1]], { label: 'query_insert' });
               ctx.localStruct[obj] = { 0: imported[obj][0] };
             }
           }
@@ -13194,10 +12764,7 @@ router.post('/:db/bki-import', (req, res, next) => {
 
             // Create ref object if needed
             if (await isOccupied(pool, db, refID)) {
-              const [seekRows] = await pool.query(
-                `SELECT id FROM \`${db}\` WHERE up = 0 AND t = ? AND val = ''`,
-                [refObjName]
-              );
+              const { rows: seekRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = 0 AND t = ? AND val = ''`, [refObjName], { label: 'query_select' });
               if (seekRows.length > 0) {
                 refID = seekRows[0].id;
               } else {
@@ -13206,20 +12773,14 @@ router.post('/:db/bki-import', (req, res, next) => {
                 ctx.localStruct.subst[typ[2]] = refID;
               }
             } else {
-              await pool.query(
-                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 0, 0, ?, '')`,
-                [refID, refObjName]
-              );
+              await execSql(pool, `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 0, 0, ?, '')`, [refID, refObjName], { label: 'query_insert' });
             }
             ctx.refs[refID] = '';
 
             // Create ref requisite if needed
             let finalReqID = reqID;
             if (await isOccupied(pool, db, reqID)) {
-              const [seekRows] = await pool.query(
-                `SELECT id FROM \`${db}\` WHERE t = ? AND up = ?`,
-                [refID, parent]
-              );
+              const { rows: seekRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE t = ? AND up = ?`, [refID, parent], { label: 'query_select' });
               if (seekRows.length > 0) {
                 finalReqID = seekRows[0].id;
               } else {
@@ -13229,10 +12790,7 @@ router.post('/:db/bki-import', (req, res, next) => {
                 ctx.localStruct.subst[reqID] = finalReqID;
               }
             } else {
-              await pool.query(
-                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, ?, ?, ?, '')`,
-                [reqID, parent, order, refID]
-              );
+              await execSql(pool, `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, ?, ?, ?, '')`, [reqID, parent, order, refID], { label: 'query_insert' });
             }
 
             // Check MULTI
@@ -13257,10 +12815,7 @@ router.post('/:db/bki-import', (req, res, next) => {
             const baseId = BASE_TYPE_BY_NAME[typ[1]];
             let typeId;
             if (baseId !== undefined) {
-              const [seekRows] = await pool.query(
-                `SELECT id FROM \`${db}\` WHERE val = ? AND up = 0 AND id != t AND t = ?`,
-                [typ[0], baseId]
-              );
+              const { rows: seekRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE val = ? AND up = 0 AND id != t AND t = ?`, [typ[0], baseId], { label: 'query_select' });
               if (seekRows.length > 0) {
                 typeId = seekRows[0].id;
               } else {
@@ -13319,10 +12874,7 @@ router.post('/:db/bki-import', (req, res, next) => {
         // Check unique constraint
         let existingId = null;
         if (isUnique) {
-          const [existRows] = await pool.query(
-            `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? AND val = ? LIMIT 1`,
-            [curParent[ctx.parents[rootTypeId]] || parentId, rootTypeId, mainVal]
-          );
+          const { rows: existRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? AND val = ? LIMIT 1`, [curParent[ctx.parents[rootTypeId]] || parentId, rootTypeId, mainVal], { label: 'query_select' });
           if (existRows.length > 0) existingId = existRows[0].id;
         }
 
@@ -13412,18 +12964,13 @@ router.post('/:db/bki-import', (req, res, next) => {
         } else {
           // ID specified — check for collision
           newId = parseInt(typ[1], 10);
-          const [checkRows] = await pool.query(
-            `SELECT t, val FROM \`${db}\` WHERE id = ?`, [newId]
-          );
+          const { rows: checkRows } = await execSql(pool, `SELECT t, val FROM \`${db}\` WHERE id = ?`, [newId], { label: 'query_select' });
           if (checkRows.length > 0) {
             if (checkRows[0].t === t && checkRows[0].val === typ[2]) {
               // Exact match — reuse
             } else {
               // ID collision — create new and record substitution
-              const [valCheck] = await pool.query(
-                `SELECT id FROM \`${db}\` WHERE t = ? AND val = ?`,
-                [t, typ[2]]
-              );
+              const { rows: valCheck } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE t = ? AND val = ?`, [t, typ[2]], { label: 'query_select' });
               if (valCheck.length > 0) {
                 newId = ctx.objSubst[newId] = valCheck[0].id;
               } else {
@@ -13435,15 +12982,9 @@ router.post('/:db/bki-import', (req, res, next) => {
           } else {
             // ID is free
             if (isref) {
-              await pool.query(
-                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 1, 1, ?, ?)`,
-                [newId, t, UnMaskDelimiters(typ[2])]
-              );
+              await execSql(pool, `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 1, 1, ?, ?)`, [newId, t, UnMaskDelimiters(typ[2])], { label: 'query_insert' });
             } else {
-              await pool.query(
-                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, ?, ?, ?, ?)`,
-                [newId, parent, ord, t, UnMaskDelimiters(typ[2])]
-              );
+              await execSql(pool, `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, ?, ?, ?, ?)`, [newId, parent, ord, t, UnMaskDelimiters(typ[2])], { label: 'query_insert' });
             }
           }
         }
@@ -13486,25 +13027,17 @@ router.post('/:db/bki-import', (req, res, next) => {
               }
 
               if (refObjID > 0) {
-                const [chk] = await pool.query(
-                  `SELECT t, val FROM \`${db}\` WHERE id = ?`, [refObjID]
-                );
+                const { rows: chk } = await execSql(pool, `SELECT t, val FROM \`${db}\` WHERE id = ?`, [refObjID], { label: 'key_select' });
                 if (chk.length > 0) {
                   if (chk[0].t !== refType) {
                     // Type mismatch — create new
                     refObjID = ctx.objSubst[refObjID] = await bkiInsertRow(pool, db, 1, 1, refType, refObjVal);
                   }
                 } else if (refObjVal) {
-                  await pool.query(
-                    `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 1, 1, ?, ?)`,
-                    [refObjID, refType, refObjVal]
-                  );
+                  await execSql(pool, `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 1, 1, ?, ?)`, [refObjID, refType, refObjVal], { label: 'key_insert' });
                 }
               } else if (refObjVal) {
-                const [seekRows] = await pool.query(
-                  `SELECT id FROM \`${db}\` WHERE t = ? AND val = ?`,
-                  [refType, refObjVal]
-                );
+                const { rows: seekRows } = await execSql(pool, `SELECT id FROM \`${db}\` WHERE t = ? AND val = ?`, [refType, refObjVal], { label: 'key_select' });
                 if (seekRows.length > 0) {
                   refObjID = seekRows[0].id;
                 } else {
@@ -13582,14 +13115,14 @@ router.post('/:db/restore', (req, res, next) => {
     let grants = {};
 
     if (token) {
-      const [userRows] = await pool.query(`
+      const { rows: userRows } = await execSql(pool, `
         SELECT u.id, u.val AS username, role_def.id AS role_id
         FROM ${db} tok
         JOIN ${db} u ON tok.up = u.id
         LEFT JOIN (${db} r CROSS JOIN ${db} role_def) ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
         WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
         LIMIT 1
-      `, [token]);
+      `, [token], { label: 'post_db_restore_select' });
 
       if (userRows.length > 0) {
         username = userRows[0].username;
@@ -14066,6 +13599,7 @@ export {
   makeTree,
   parseBlock,
   localize,
+  removeMasks,
 };
 
 export default router;

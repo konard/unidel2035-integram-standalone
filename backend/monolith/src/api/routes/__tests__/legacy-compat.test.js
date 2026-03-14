@@ -56,20 +56,18 @@ vi.mock('mysql2/promise', () => ({
 
 // ─── mock logger ─────────────────────────────────────────────────────────────
 
-vi.mock('../../../utils/logger.js', () => ({
-  default: {
+vi.mock('../../../utils/logger.js', () => {
+  const loggerStub = {
     info: vi.fn(),
     error: vi.fn(),
     warn: vi.fn(),
     debug: vi.fn(),
-  },
-  createLogger: () => ({
-    info: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-    debug: vi.fn(),
-  }),
-}));
+  };
+  return {
+    default: loggerStub,
+    createLogger: vi.fn(() => loggerStub),
+  };
+});
 
 // ─── import router AFTER mocks ────────────────────────────────────────────────
 
@@ -87,6 +85,7 @@ const {
   checkNewRef,
   constructWhere,
   formatDateForStorage,
+  updateTokens,
 } = await import('../legacy-compat.js');
 
 // ─── app factory ─────────────────────────────────────────────────────────────
@@ -1157,5 +1156,73 @@ describe('constructWhere', () => {
       expect(r.params.length).toBeGreaterThan(0);
       expect(r.where).not.toContain("'test'");
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// updateTokens — activity timestamp format (#329)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('updateTokens activity timestamp format (#329)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('stores activity timestamp with fractional seconds (float string)', async () => {
+    const capturedParams = [];
+    const pool = {
+      query: vi.fn(async (sql, params) => {
+        capturedParams.push({ sql, params });
+        return [{ affectedRows: 1 }];
+      }),
+    };
+
+    await updateTokens(pool, DB, { uid: 1, tok: 10, xsrf: 20, act: 30 });
+
+    // The third query is the activity timestamp UPDATE
+    const actQuery = capturedParams.find(q => q.sql.includes('Update Activity Timestamp') || (q.params && q.params[1] === 30));
+    // Fallback: activity timestamp is the val param of the third UPDATE call
+    const actTimestamp = actQuery ? actQuery.params[0] : capturedParams[2].params[0];
+
+    expect(actTimestamp).toContain('.');
+    expect(Number(actTimestamp)).toBeGreaterThan(1000000000);
+    expect(Number(actTimestamp)).toBeLessThan(99999999999);
+  });
+
+  it('activity timestamp includes decimal point matching PHP microtime(true) format', async () => {
+    const capturedParams = [];
+    const pool = {
+      query: vi.fn(async (sql, params) => {
+        capturedParams.push({ sql, params });
+        if (sql.includes('INSERT')) return [{ insertId: 99 }];
+        return [{ affectedRows: 1 }];
+      }),
+    };
+
+    await updateTokens(pool, DB, { uid: 1, tok: null, xsrf: null, act: null });
+
+    // When act is null, INSERT is used; the activity timestamp is the 3rd param of the 3rd INSERT
+    const actInsert = capturedParams[2];
+    const actTimestamp = actInsert.params[2];
+
+    // Must contain a decimal point (fractional seconds like PHP microtime(true))
+    expect(actTimestamp).toMatch(/^\d+\.\d+$/);
+  });
+
+  it('activity timestamp is not an integer string (regression guard)', async () => {
+    const capturedParams = [];
+    const pool = {
+      query: vi.fn(async (sql, params) => {
+        capturedParams.push({ sql, params });
+        return [{ affectedRows: 1 }];
+      }),
+    };
+
+    await updateTokens(pool, DB, { uid: 1, tok: 10, xsrf: 20, act: 30 });
+
+    const actTimestamp = capturedParams[2].params[0];
+
+    // Should NOT be a plain integer (that was the bug)
+    expect(actTimestamp).not.toMatch(/^\d+$/);
+    // Should be a float string
+    expect(actTimestamp).toMatch(/\./);
   });
 });
