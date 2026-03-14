@@ -633,6 +633,32 @@ const REV_BASE_TYPE = {
   [TYPE.PATH]: 'PATH',                   // 17
 };
 
+// ── isDbVacant — database name uniqueness check (Issue #303) ────────────
+// PHP: isDbVacant($db) — index.php:7493
+// Returns true if `dbName` is not yet registered in the master table, false if taken.
+
+/**
+ * Check whether a database name is available (not already registered).
+ *
+ * Port of PHP isDbVacant($db) — queries the master management table
+ * for an existing row with val=dbName AND t=DATABASE.
+ *
+ * @param {import('mysql2/promise').Pool} pool   - MySQL connection pool
+ * @param {string} masterDb - Master/management table name (e.g. 'my')
+ * @param {string} dbName   - Database name to check
+ * @returns {Promise<boolean>} true if the name is available, false if taken
+ */
+async function isDbVacant(pool, masterDb, dbName) {
+  const z = sanitizeIdentifier(masterDb);
+  const { rows } = await execSql(
+    pool,
+    `SELECT 1 FROM ${z} WHERE val = ? AND t = ${TYPE.DATABASE} LIMIT 1`,
+    [dbName],
+    { label: 'Check DB name uniquity' }
+  );
+  return rows.length === 0;
+}
+
 // ── Mask constants & removeMasks (PHP index.php:7553-7557) ──────────────
 const NOT_NULL_MASK = /:!NULL:/g;
 const MULTI_MASK    = /:MULTI:/g;
@@ -3480,8 +3506,7 @@ async function createUserDb(pool, z, userId, email, locale, prefix = 'u') {
   if (email) {
     const emailPrefix = email.split('@')[0].replace(/[^A-Za-z0-9]/g, '').toLowerCase().substring(0, 15);
     if (USER_DB_MASK.test(emailPrefix)) {
-      const [existsCheck] = await pool.query(`SHOW TABLES LIKE ?`, [emailPrefix]);
-      if (existsCheck.length === 0) {
+      if (await isDbVacant(pool, z, emailPrefix)) {
         newDbName = emailPrefix;
       }
     }
@@ -9511,11 +9536,8 @@ router.all('/my/_new_db', async (req, res) => {
   try {
     const pool = getPool();
 
-    // Check if database already exists
-    const existsQuery = `SHOW TABLES LIKE '${newDbName}'`;
-    const [existingTables] = await pool.query(existsQuery);
-
-    if (existingTables.length > 0) {
+    // Check if database name is already registered (PHP: isDbVacant)
+    if (!(await isDbVacant(pool, 'my', newDbName))) {
       return res.status(200).json({ error: `Database "${newDbName}" already exists` });
     }
 
@@ -13460,6 +13482,7 @@ export {
   checkInjection,
   getRefOrd,
   calcOrder,
+  isDbVacant,
 };
 
 export default router;
