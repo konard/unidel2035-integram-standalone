@@ -10,7 +10,7 @@
 
 | Category | Total | Full | Partial | Stub | Missing | N/A |
 |----------|-------|------|---------|------|---------|-----|
-| **Functions** | 96 | 38 | 12 | 3 | 22 | 21 |
+| **Functions** | 96 | 44 | 12 | 3 | 16 | 21 |
 | **Route Case Blocks** | 31 | 25 | 2 | 0 | 2 | 2 |
 | **Block Type Handlers** | 82 | 0 | 0 | 0 | 0 | 82 |
 | **Global Init Code** | 5 | 3 | 1 | 0 | 1 | 0 |
@@ -61,7 +61,7 @@
 | # | PHP Function | Lines | Node.js Equivalent | Status | What's Missing |
 |---|--------------|-------|-------------------|--------|----------------|
 | 20 | `Insert()` | 7054-7058 | `insertRow()` | **Full** | — |
-| 21 | `Insert_batch()` | 7034-7051 | Not implemented | **Missing** | Batch insert for performance optimization |
+| 21 | `Insert_batch()` | 7034-7051 | `insertBatch()` | **Full** | Implemented in PR #284 |
 | 22 | `Update_Val()` | 7067-7069 | `updateRowValue()` | **Full** | — |
 | 23 | `UpdateTyp()` | 7061-7064 | Inline SQL in handlers | **Full** | — |
 | 24 | `Delete()` | 1514-1527 | `recursiveDelete()` | **Full** | — |
@@ -163,16 +163,16 @@
 | 75 | `die_info()` | 7072-7078 | `res.send()` | **Full** | — |
 | 76 | `myexit()` | 7458-7465 | Process exit inline | **N/A** | — |
 | 77 | `mywrite()` | 7467-7474 | `logger.*` | **Full** | — |
-| 78 | `MaskDelimiters()` | 1619-1621 | Not implemented | **Missing** | CSV delimiter masking |
-| 79 | `UnMaskDelimiters()` | 1623-1625 | Not implemented | **Missing** | CSV delimiter unmasking |
-| 80 | `HideDelimiters()` | 1627-1629 | Not implemented | **Missing** | CSV delimiter hiding |
-| 81 | `UnHideDelimiters()` | 1631-1633 | Not implemented | **Missing** | CSV delimiter unhiding |
+| 78 | `MaskDelimiters()` | 1619-1621 | `maskDelimiters()` | **Full** | Implemented in PR #280 |
+| 79 | `UnMaskDelimiters()` | 1623-1625 | `unMaskDelimiters()` | **Full** | Implemented in PR #280 |
+| 80 | `HideDelimiters()` | 1627-1629 | `hideDelimiters()` | **Full** | Implemented in PR #280 |
+| 81 | `UnHideDelimiters()` | 1631-1633 | `unHideDelimiters()` | **Full** | Implemented in PR #280 |
 | 82 | `constructHeader()` | 1635-1681 | Inline in export | **Full** | — |
 | 83 | `build_post_fields()` | 3883-3910 | Not implemented | **Missing** | Multipart form builder for connectors |
 | 84 | `getJsonVal()` | 3912-3930 | Not implemented | **Missing** | JSON path extraction for reports |
 | 85 | `checkJson()` | 3932-3938 | Not implemented | **Missing** | JSON validation for reports |
-| 86 | `Slash_semi()` | 3940-3942 | Not implemented | **Missing** | Semicolon escaping |
-| 87 | `UnSlash_semi()` | 3944-3946 | Not implemented | **Missing** | Semicolon unescaping |
+| 86 | `Slash_semi()` | 3940-3942 | `slashSemi()` | **Full** | Implemented in PR #281 |
+| 87 | `UnSlash_semi()` | 3944-3946 | `unSlashSemi()` | **Full** | Implemented in PR #281 |
 | 88 | `Download_send_headers()` | 3948-3957 | `res.setHeader()` inline | **Full** | — |
 | 89 | `FetchAlias()` | 3959-3961 | Not implemented | **Missing** | Alias extraction from modifiers |
 | 90 | `sendJsonHeaders()` | 3963-3968 | `res.json()` | **Full** | — |
@@ -331,7 +331,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
 | 1 | ~~`Compile_Report()` sub-queries `[report_name]`~~ | ~~Reports referencing other reports fail~~ | ~~Core reporting~~ — **Implemented in PR #267** |
-| 2 | `Insert_batch()` | Performance degradation on bulk imports | Restore, data migration |
+| 2 | ~~`Insert_batch()`~~ | ~~Performance degradation on bulk imports~~ | ~~Restore, data migration~~ — **Implemented in PR #284** |
 
 ### 6.2 High (Affects Significant Features)
 
@@ -356,7 +356,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
-| 12 | Delimiter masking functions | CSV edge cases | Export |
+| 12 | ~~Delimiter masking functions~~ | ~~CSV edge cases~~ | ~~Export~~ — **Implemented in PR #280 (`MaskDelimiters`, `UnMaskDelimiters`, `HideDelimiters`, `UnHideDelimiters`) and PR #281 (`Slash_semi`, `UnSlash_semi`)** |
 | 13 | `CheckSubst()` / `CheckObjSubst()` | Column substitution | Advanced reporting |
 | 14 | `FetchAlias()` | Alias extraction | Advanced reporting |
 | 15 | `mail2DB()` | Email-to-DB linking | Multi-tenant |
@@ -376,7 +376,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. Pivot tables are used in production reports. (Note: Aggregates implemented in PR #266, sub-queries implemented in PR #267, abn_* functions implemented in PR #268, GROUP_CONCAT for arrays implemented in PR #269, REP_WHERE stored filters implemented in PR #270, CSV export implemented in PR #271. Remaining: REP_PIVOT, complex JOIN aliases.)
 
-2. **Add batch insert** — `Insert_batch()` is critical for restore and data migration performance.
+2. ~~**Add batch insert**~~ — **Implemented in PR #284** — `insertBatch()` is now available for restore and bulk import operations.
 
 3. ~~**Implement `abn_*` functions**~~ — **Implemented in PR #268** — These are now available for Russian-locale reports.
 
@@ -385,3 +385,9 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 5. **Block handlers are N/A** — All 82 block handlers are PHP-specific HTML template providers. The Node.js API returns JSON, so these are correctly not implemented.
 
 6. **BuiltIn placeholders complete** — 11 additional placeholders added in PR #273 (`[YESTERDAY]`, `[TOMORROW]`, `[MONTH_AGO]`, `[WEEK_AGO]`, `[MONTH_PLUS]`, `[ROLE]`, `[ROLE_ID]`, `[TSHIFT]`, `[REMOTE_HOST]`, `[HTTP_USER_AGENT]`, `[HTTP_REFERER]`).
+
+7. ~~**BKI delimiter functions**~~ — **Implemented in PR #280 and #281** — All delimiter masking functions (`MaskDelimiters`, `UnMaskDelimiters`, `HideDelimiters`, `UnHideDelimiters`, `Slash_semi`, `UnSlash_semi`) are now available.
+
+8. ~~**BKI export functions**~~ — **Implemented in PR #282** — `constructHeader`, `exportHeader`, `exportTerms`, `Export_reqs` are now integrated into backup/export route.
+
+9. ~~**csv_all optimizations**~~ — **Implemented in PR #283** — Large export queries now use type-specific JOINs instead of N+1 per-object queries.
