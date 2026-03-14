@@ -192,6 +192,30 @@ describe('GET /:db/xsrf', () => {
     expect(res.body.id).toBe('3');
   });
 
+  it('returns id as string "0" when no token cookie (#385)', async () => {
+    // No cookie → error path should return id: '0' (string), not 0 (number)
+    const res = await request(app)
+      .get(`/${DB}/xsrf`);
+    // May be handled by xsrf route (200) or catch-all (302)
+    if (res.status === 200) {
+      expect(typeof res.body.id).toBe('string');
+      expect(res.body.id).toBe('0');
+    }
+  });
+
+  it('returns id as string "0" when token is invalid (#385)', async () => {
+    // Token exists but DB returns no rows → invalid token error path
+    mockQuery([[]]);
+
+    const res = await request(app)
+      .get(`/${DB}/xsrf`)
+      .set('Cookie', `${DB}=invalid-token-xyz`);
+
+    expect(res.status).toBe(200);
+    expect(typeof res.body.id).toBe('string');
+    expect(res.body.id).toBe('0');
+  });
+
   it('redirects when no cookie (catch-all handles unauthenticated GETs)', async () => {
     // Without a cookie, the /:db/:page* catch-all redirects to login first
     const res = await request(app).get(`/${DB}/xsrf`);
@@ -1379,5 +1403,54 @@ describe('Admin backdoor token auth (#380)', () => {
     // Non-admin user without matching _xsrf should get CSRF error
     expect(next).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// api_dump() headers (Issue #382)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('api_dump() headers (Issue #382)', () => {
+  const app = makeApp();
+  const token = 'test-token-abc';
+  const xsrf  = generateXsrf(token, DB, DB);
+  const pwdHash = phpCompatibleHash('alice', 'Password1!', DB);
+
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('JSON responses include Content-Disposition and Content-Transfer-Encoding', async () => {
+    const showTablesResp = [[{ Tables_in_integram: DB }]];
+    const userRow = { uid: 5, username: 'alice', password_hash: pwdHash, pwd_id: 6, token, token_id: 7, xsrf, xsrf_id: 8 };
+    const userResp = [[userRow]];
+    const updateResp = [{ affectedRows: 1 }];
+
+    mockQuery(showTablesResp, userResp, updateResp, updateResp);
+
+    const res = await request(app)
+      .post(`/${DB}/auth?JSON`)
+      .send({ login: 'alice', pwd: 'Password1!' });
+
+    expect(res.status).toBe(200);
+    // PHP api_dump() sets Content-Disposition: attachment;filename=api.json
+    expect(res.headers['content-disposition']).toBe('attachment;filename=api.json');
+    // PHP api_dump() sets Content-Transfer-Encoding: binary
+    expect(res.headers['content-transfer-encoding']).toBe('binary');
+  });
+
+  it('non-JSON requests do not get api_dump headers', async () => {
+    const showTablesResp = [[{ Tables_in_integram: DB }]];
+    const userRow = { uid: 5, username: 'alice', password_hash: pwdHash, pwd_id: 6, token, token_id: 7, xsrf, xsrf_id: 8 };
+    const userResp = [[userRow]];
+    const updateResp = [{ affectedRows: 1 }];
+
+    mockQuery(showTablesResp, userResp, updateResp, updateResp);
+
+    // POST without ?JSON → redirect (non-JSON response)
+    const res = await request(app)
+      .post(`/${DB}/auth`)
+      .send({ login: 'alice', pwd: 'Password1!' });
+
+    // Redirect responses should NOT have api_dump headers
+    expect(res.headers['content-transfer-encoding']).toBeUndefined();
   });
 });

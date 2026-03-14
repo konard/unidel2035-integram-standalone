@@ -127,7 +127,7 @@ class IntegramMCPClient {
 
       // Check for authentication failure
       if (data.failed) {
-        throw new Error('Invalid login or password');
+        throw new Error(`Wrong credentials for user ${login} in ${this.database}. Please send login and password as POST-parameters.`);
       }
 
       // Get token from auth response
