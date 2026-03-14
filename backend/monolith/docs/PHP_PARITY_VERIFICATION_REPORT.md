@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This audit independently verifies the 37 PHP→Node.js parity issues (#221–#257) that were implemented in PRs #258–#293 and merged to master. The verification confirms that **all 37 issues have been addressed**, with 34 marked as **DONE** and 3 marked as **PARTIAL** (minor gaps that don't affect core functionality).
+This audit independently verifies the 37 PHP→Node.js parity issues (#221–#257) that were implemented in PRs #258–#293 and merged to master. The verification confirms that **all 37 issues have been addressed**, with 35 marked as **DONE** and 2 marked as **PARTIAL** (minor gaps that don't affect core functionality).
 
 ---
 
