@@ -295,33 +295,40 @@ function getPool() {
 }
 
 /**
- * Send OTP email — matches PHP mysendmail() in getcode handler.
- * Config priority: SMTP_* env vars → PHP connection.php defaults.
- * If SMTP_HOST is not set (or connection fails), logs code to console (dev mode).
+ * sendMail — general-purpose mail sender (PHP parity: smtpmail/mysendmail).
  *
- * PHP message format (index.php lines 7732-7738):
- *   Subject: "Одноразовый пароль <email>"
- *   Body:    "Ваш код для входа: <XXXX>\r\n\r\n<unsubscribe footer>"
+ * Mirrors PHP smtpmail() + mysendmail() from index.php lines 7263-7368.
+ * Translates SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD and FROM_*
+ * env vars into a nodemailer transport.
+ *
+ * If SMTP_HOST is not set, logs to console instead of sending (dev mode).
+ *
+ * @param {object} opts
+ * @param {string}        opts.to          — recipient email address (required)
+ * @param {string}        opts.subject     — email subject (required)
+ * @param {string}        [opts.text]      — plain text body
+ * @param {string}        [opts.html]      — HTML body
+ * @param {string}        [opts.from]      — override "Name <addr>" sender
+ * @param {Array}         [opts.attachments] — nodemailer attachments array
+ * @param {string}        [opts.tag]       — log prefix tag, e.g. '[Legacy GetCode]'
+ * @param {object}        [opts.devLog]    — extra fields to log in dev mode (no SMTP)
+ * @returns {Promise<boolean>} true if sent (or logged in dev mode), false on error
  */
-async function sendOtpEmail(email, code, db, host) {
+async function sendMail({ to, subject, text, html, from, attachments, tag = '[Mail]', devLog = {} }) {
   const smtpHostRaw = process.env.SMTP_HOST || 'ssl://smtp.yandex.ru';
   const smtpPort    = parseInt(process.env.SMTP_PORT || '465', 10);
   const smtpUser    = process.env.SMTP_USER    || 'abc@tryjob.ru';
   const smtpPass    = process.env.SMTP_PASSWORD || 'CoffeeClick';
   const fromEmail   = process.env.FROM_EMAIL    || smtpUser;
   const fromName    = process.env.FROM_NAME     || 'Integram';
-  // Handle 'ssl://host' format from PHP config
   const smtpHost    = smtpHostRaw.replace(/^(ssl|tls):\/\//, '');
   const smtpSecure  = smtpHostRaw.startsWith('ssl://') || smtpPort === 465;
 
-  const unsubUrl = `https://${host || 'localhost'}/${db}/register?optout=${encodeURIComponent(email)}`;
-  const subject  = `Одноразовый пароль ${email}`;
-  const text     = `Ваш код для входа: ${code.toUpperCase()}\r\n\r\nЕсли вы не хотите получать от нас писем, связанных с регистрацией ${email}, вы можете отписаться от оповещений:\r\n${unsubUrl}`;
+  const defaultFrom = `"${fromName}" <${fromEmail}>`;
 
   if (!process.env.SMTP_HOST) {
-    // Dev mode: no SMTP configured — log code so developer can use it
-    logger.info('[Legacy GetCode] OTP (no SMTP configured — dev mode)', { email, code: code.toUpperCase() });
-    return;
+    logger.info(`${tag} (no SMTP configured — dev mode)`, { to, subject, ...devLog });
+    return true;
   }
 
   try {
@@ -330,12 +337,43 @@ async function sendOtpEmail(email, code, db, host) {
       auth: { user: smtpUser, pass: smtpPass },
       tls: { rejectUnauthorized: false },
     });
-    await transporter.sendMail({ from: `"${fromName}" <${fromEmail}>`, to: email, subject, text });
-    logger.info('[Legacy GetCode] OTP email sent', { email });
+    const mailOpts = {
+      from: from || defaultFrom,
+      to,
+      subject,
+    };
+    if (html) mailOpts.html = html;
+    if (text) mailOpts.text = text;
+    if (attachments && attachments.length) mailOpts.attachments = attachments;
+    await transporter.sendMail(mailOpts);
+    logger.info(`${tag} email sent`, { to });
+    return true;
   } catch (err) {
-    // Log the code so it's not silently lost if SMTP fails
-    logger.error('[Legacy GetCode] SMTP error, OTP:', { email, code: code.toUpperCase(), err: err.message });
+    logger.error(`${tag} SMTP error`, { to, err: err.message, ...devLog });
+    return false;
   }
+}
+
+/**
+ * sendOtpEmail — one-time-password email sender.
+ * Wrapper around sendMail() for OTP codes.
+ *
+ * PHP message format (index.php lines 7732-7738):
+ *   Subject: "Одноразовый пароль <email>"
+ *   Body:    "Ваш код для входа: <XXXX>\r\n\r\n<unsubscribe footer>"
+ */
+async function sendOtpEmail(email, code, db, host) {
+  const unsubUrl = `https://${host || 'localhost'}/${db}/register?optout=${encodeURIComponent(email)}`;
+  const subject  = `Одноразовый пароль ${email}`;
+  const text     = `Ваш код для входа: ${code.toUpperCase()}\r\n\r\nЕсли вы не хотите получать от нас писем, связанных с регистрацией ${email}, вы можете отписаться от оповещений:\r\n${unsubUrl}`;
+
+  await sendMail({
+    to: email,
+    subject,
+    text,
+    tag: '[Legacy GetCode]',
+    devLog: { email, code: code.toUpperCase() },
+  });
 }
 
 // PHP SALT constant — must match integram-server/include/connection.php define("SALT", ...)
@@ -2909,35 +2947,13 @@ router.post('/my/register', async (req, res) => {
       // Send confirmation email (PHP parity: mail() with confirmation link)
       const host = req.get('host') || 'localhost';
       const confirmUrl = `https://${host}/my/register?confirm=${confirmToken}`;
-      const smtpHostRaw = process.env.SMTP_HOST || 'ssl://smtp.yandex.ru';
-      const smtpPort    = parseInt(process.env.SMTP_PORT || '465', 10);
-      const smtpUser    = process.env.SMTP_USER    || 'abc@tryjob.ru';
-      const smtpPass    = process.env.SMTP_PASSWORD || 'CoffeeClick';
-      const fromEmail   = process.env.FROM_EMAIL    || smtpUser;
-      const fromName    = process.env.FROM_NAME     || 'Integram';
-      const smtpHost    = smtpHostRaw.replace(/^(ssl|tls):\/\//, '');
-      const smtpSecure  = smtpHostRaw.startsWith('ssl://') || smtpPort === 465;
-
-      if (!process.env.SMTP_HOST) {
-        logger.info('[Legacy Register] Confirmation (no SMTP — dev mode)', { email, confirmToken, confirmUrl });
-      } else {
-        try {
-          const transporter = nodemailer.createTransport({
-            host: smtpHost, port: smtpPort, secure: smtpSecure,
-            auth: { user: smtpUser, pass: smtpPass },
-            tls: { rejectUnauthorized: false },
-          });
-          await transporter.sendMail({
-            from: `"${fromName}" <${fromEmail}>`,
-            to: email,
-            subject: `Подтверждение регистрации ${email}`,
-            text: `Для подтверждения регистрации перейдите по ссылке:\r\n${confirmUrl}`,
-          });
-          logger.info('[Legacy Register] Confirmation email sent', { email });
-        } catch (mailErr) {
-          logger.error('[Legacy Register] SMTP error', { email, confirmToken, err: mailErr.message });
-        }
-      }
+      await sendMail({
+        to: email,
+        subject: `Подтверждение регистрации ${email}`,
+        text: `Для подтверждения регистрации перейдите по ссылке:\r\n${confirmUrl}`,
+        tag: '[Legacy Register]',
+        devLog: { email, confirmToken, confirmUrl },
+      });
 
       logger.info('[Legacy Register] User created in my table', { email, userId, confirmToken });
     } else {
@@ -11062,6 +11078,7 @@ export {
   checkRepColGranted,
   constructWhere,
   formatDateForStorage,
+  sendMail,
 };
 
 export default router;
