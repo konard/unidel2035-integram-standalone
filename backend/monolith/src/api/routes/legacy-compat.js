@@ -11037,6 +11037,345 @@ router.get('/:db/backup', async (req, res) => {
 });
 
 // ============================================================================
+// BKI export — constructHeader, exportHeader, exportTerms, Export_reqs
+// PHP: index.php lines 1635–1749
+// Exports object data in BKI (structured text) format
+// ============================================================================
+
+/**
+ * constructHeader — recursively builds BKI header metadata for a type.
+ * Populates ctx.localStruct, ctx.base, ctx.uniq, ctx.linx, ctx.refs,
+ * ctx.arrays, ctx.pwds, ctx.multi with structural information.
+ *
+ * @param {object} pool   - MySQL connection pool
+ * @param {string} db     - database (table) name
+ * @param {number} id     - object/type ID to describe
+ * @param {object} ctx    - shared context accumulator
+ * @param {number} parent - parent ID (for recursion tracking)
+ */
+async function constructHeader(pool, db, id, ctx, parent = 0) {
+  if (ctx.localStruct[id]) return; // already processed
+
+  ctx.parents[id] = parent;
+
+  const [rows] = await pool.query(`
+    SELECT CASE WHEN LENGTH(obj.val)=0 THEN obj.id ELSE obj.t END AS t,
+           CASE WHEN LENGTH(obj.val)=0 THEN obj.t ELSE obj.val END AS val,
+           req.id AS req_id, req.t AS req_t, refr.val AS req, refr.t AS ref_t,
+           req.val AS attr, base.t AS base_t, arr.id AS arr,
+           linx.i, obj.ord AS uniq
+    FROM \`${db}\` obj
+      LEFT JOIN (\`${db}\` req CROSS JOIN \`${db}\` refr CROSS JOIN \`${db}\` base)
+        ON req.up = obj.id AND refr.id = req.t AND base.id = refr.t
+      LEFT JOIN \`${db}\` arr ON arr.up = req.t AND arr.t != 0 AND arr.ord = 1
+      CROSS JOIN (SELECT COUNT(1) AS i FROM \`${db}\` WHERE up = 0 AND t = ?) linx
+    WHERE obj.id = ?
+    ORDER BY req.ord
+  `, [id, id]);
+
+  for (const row of rows) {
+    if (!ctx.localStruct[id]) {
+      // First row — build the type descriptor line (slot 0)
+      const baseLabel = REV_BASE_TYPE[row.t] ? ':' + REV_BASE_TYPE[row.t] : '';
+      const uniqueTag = String(row.uniq) === '1' ? ':unique' : '';
+      ctx.localStruct[id] = { 0: `${id}:${MaskDelimiters(row.val)}${baseLabel}${uniqueTag}` };
+      ctx.base[id] = row.t;
+      ctx.uniq[id] = row.uniq;
+      if (Number(row.i)) {
+        // Other objects reference this type — need to export IDs
+        ctx.linx[id] = '';
+      }
+    }
+
+    if (row.req_t) {
+      // This type has requisites
+      if (row.ref_t !== row.base_t) {
+        // Reference requisite
+        const attrStr = row.attr ? ':' + MaskDelimiters(row.attr) : '';
+        ctx.localStruct[id][row.req_id] = `ref:${row.req_id}:${row.req_t}${attrStr}`;
+        if (!ctx.localStruct[row.req_t]) {
+          await constructHeader(pool, db, row.req_t, ctx, id);
+        }
+        if (!ctx.localStruct[row.ref_t]) {
+          await constructHeader(pool, db, row.ref_t, ctx, id);
+        }
+        ctx.refs[row.req_id] = row.ref_t;
+        if (row.attr && String(row.attr).includes(':MULTI:')) {
+          ctx.multi[row.req_id] = row.ref_t;
+        }
+      } else if (row.arr) {
+        // Array requisite
+        const attrStr = row.attr ? ':' + MaskDelimiters(row.attr) : '';
+        ctx.localStruct[id][row.req_id] = `arr:${row.req_t}${attrStr}`;
+        if (!ctx.localStruct[row.req_t]) {
+          await constructHeader(pool, db, row.req_t, ctx, id);
+          ctx.arrays[row.req_t] = '';
+        }
+      } else {
+        // Simple (scalar) requisite
+        const typeName = REV_BASE_TYPE[row.ref_t] || 'SHORT';
+        const attrStr = row.attr ? ':' + MaskDelimiters(row.attr) : '';
+        ctx.localStruct[id][row.req_id] = `${MaskDelimiters(row.req)}:${typeName}${attrStr}`;
+        if (typeName === 'PWD') {
+          ctx.pwds[row.req_id] = '';
+        }
+        ctx.base[row.req_id] = row.base_t;
+      }
+    }
+  }
+}
+
+/**
+ * exportHeader — serialises all collected localStruct entries into BKI header text.
+ * @param {object} ctx - shared context with localStruct
+ * @returns {string} header section
+ */
+function exportHeader(ctx) {
+  let headStr = '';
+  for (const id of Object.keys(ctx.localStruct)) {
+    const entry = ctx.localStruct[id];
+    // entry is an object keyed by 0, reqId, reqId, …  – join values with ";"
+    const vals = Object.keys(entry)
+      .sort((a, b) => Number(a) - Number(b))
+      .map(k => entry[k]);
+    headStr += vals.join(';') + ';\r\n';
+  }
+  return headStr;
+}
+
+/**
+ * exportTerms — ensures that a term/dictionary type referenced from a REP_COLS
+ * row has its header emitted (possibly as a "subst:" substitution line).
+ *
+ * @param {object} pool - MySQL connection pool
+ * @param {string} db   - database name
+ * @param {number} id   - the term object ID
+ * @param {object} ctx  - shared context
+ */
+async function exportTerms(pool, db, id, ctx) {
+  ctx.termDefs[id] = 1;
+
+  const [rows] = await pool.query(`
+    SELECT obj.t AS type, obj.up, type.t AS base
+    FROM \`${db}\` obj, \`${db}\` type
+    WHERE obj.id = ? AND type.id = obj.t
+  `, [id]);
+
+  if (rows.length === 0) return;
+  const row = rows[0];
+
+  if (String(row.up) === '0') {
+    // Top-level object — just ensure its header is built
+    await constructHeader(pool, db, id, ctx);
+  } else {
+    // Sub-object — build parent header then create a "subst:" alias
+    await constructHeader(pool, db, row.up, ctx);
+    const parentStruct = ctx.localStruct[row.up];
+    if (parentStruct) {
+      for (const key of Object.keys(parentStruct)) {
+        if (Number(key) === id) {
+          ctx.localStruct[id] = { 0: `subst:${id}:${row.up}:${parentStruct[key]}` };
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Export_reqs — recursively exports the data rows for a single object in BKI
+ * format.  Mirrors PHP Export_reqs($id, $obj, $val, $ref).
+ *
+ * @param {object}  pool - MySQL pool
+ * @param {string}  db   - database name
+ * @param {number}  id   - type / structural ID
+ * @param {number}  obj  - concrete object row ID
+ * @param {string}  val  - masked value for the object
+ * @param {object}  ctx  - shared context
+ * @param {string}  ref  - ref prefix (empty or "val:")
+ * @param {number}  fU   - F_U parameter (>1 means export order)
+ * @returns {string} BKI data lines
+ */
+async function Export_reqs(pool, db, id, obj, val, ctx, ref = '', fU = 0) {
+  if (ctx.exported[obj] !== undefined) return '';
+  ctx.exported[obj] = '';
+
+  let str = '';
+  let children = '';
+  let refs = '';
+
+  if (ctx.data[obj] === undefined) {
+    const reqs = {};
+
+    const [rows] = await pool.query(`
+      SELECT DISTINCT obj.id, obj.t, obj.val, obj.ord,
+             req.t AS req_t, req.val AS req_val, req.up AS rup, par.up AS ref
+      FROM \`${db}\` obj
+        LEFT JOIN \`${db}\` req ON req.id = obj.t
+        LEFT JOIN \`${db}\` par ON par.id = req.up
+      WHERE obj.up = ?
+      ORDER BY obj.ord
+    `, [obj]);
+
+    for (const row of rows) {
+      // If this is a REP_COLS reference to a term not yet in localStruct, export it
+      if (Number(row.t) === TYPE.REP_COLS &&
+          String(row.val) !== '0' &&
+          !ctx.localStruct[row.val] &&
+          !ctx.termDefs[row.val]) {
+        await exportTerms(pool, db, Number(row.val), ctx);
+      }
+
+      if (Number(row.rup) !== id && Number(row.rup) !== 0) {
+        // Reference value
+        const key = row.val;
+        reqs[key] = (reqs[key] !== undefined ? reqs[key] + ',' : '') + row.t;
+        const refArg = String(row.ref) === '1' ? row.val + ':' : '0';
+        refs += await Export_reqs(pool, db, Number(row.req_t), Number(row.t),
+          MaskDelimiters(row.req_val), ctx, refArg, fU);
+      } else if (ctx.arrays[row.t] !== undefined) {
+        // Array child
+        children += await Export_reqs(pool, db, Number(row.t), Number(row.id),
+          row.val, ctx, '', fU);
+      } else if (ctx.pwds[row.t] === undefined) {
+        // Simple value (skip PWD hashes)
+        reqs[row.t] = MaskDelimiters(row.val);
+      }
+    }
+
+    // Build the line from localStruct column order
+    const struct = ctx.localStruct[id];
+    if (struct) {
+      for (const key of Object.keys(struct).sort((a, b) => Number(a) - Number(b))) {
+        if (Number(key) === 0) {
+          str = MaskDelimiters(val) + ';';
+        } else {
+          str += (reqs[key] !== undefined ? reqs[key] : '') + ';';
+        }
+      }
+    }
+
+    // Determine line prefix
+    if (ctx.arrays[id] !== undefined || ctx.linx[id] === undefined ||
+        (ctx.rootId === id && fU > 1)) {
+      str = `${id}::${str}\r\n`;
+    } else {
+      str = `${ref}${id}:${obj}:${str}\r\n`;
+      ctx.data[obj] = '';
+    }
+  }
+
+  return refs + str + children;
+}
+
+/**
+ * BKI export route.
+ * GET /:db/bki-export?id=<typeId>&F_U=<level>
+ *
+ * Produces a .bki file (zipped) containing:
+ *   - Header lines (type structure)
+ *   - DATA marker
+ *   - Data rows
+ */
+router.get('/:db/bki-export', async (req, res) => {
+  const { db } = req.params;
+  const id = parseInt(req.query.id, 10);
+  const fU = parseInt(req.query.F_U || '0', 10);
+
+  if (!isValidDbName(db)) {
+    return res.status(200).send('Invalid database');
+  }
+  if (!id || isNaN(id)) {
+    return res.status(400).send('Missing or invalid id parameter');
+  }
+
+  try {
+    const pool = getPool();
+
+    // ── Auth & grant check (same as backup) ──
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let username = '';
+    let grants = {};
+
+    if (token) {
+      const [userRows] = await pool.query(`
+        SELECT u.id, u.val AS username, role_def.id AS role_id
+        FROM \`${db}\` tok
+        JOIN \`${db}\` u ON tok.up = u.id
+        LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+          ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+        WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+        LIMIT 1
+      `, [token]);
+
+      if (userRows.length > 0) {
+        username = userRows[0].username;
+        grants = await getGrants(pool, db, userRows[0].role_id, {
+          username: userRows[0].username, roleId: userRows[0].role_id,
+        });
+      }
+    }
+
+    if (!grants.EXPORT?.[1] && !grants.EXPORT?.[id] &&
+        username.toLowerCase() !== 'admin' && username !== db) {
+      return res.status(403).send('You do not have permission to export');
+    }
+
+    // ── Build BKI context ──
+    const ctx = {
+      localStruct: {},
+      base: {},
+      uniq: {},
+      linx: {},
+      refs: {},
+      arrays: {},
+      pwds: {},
+      multi: {},
+      parents: {},
+      termDefs: {},
+      exported: {},
+      data: {},
+      rootId: id,
+    };
+
+    // Step 1: build header structure for the root type
+    await constructHeader(pool, db, id, ctx);
+
+    // Step 2: iterate all objects of this type and export their data
+    const [objRows] = await pool.query(`
+      SELECT id, t, val, up, ord
+      FROM \`${db}\`
+      WHERE t = ? AND t != up
+      ORDER BY ord
+    `, [id]);
+
+    const dataLines = [];
+    for (const row of objRows) {
+      const line = await Export_reqs(pool, db, id, Number(row.id), row.val, ctx, '', fU);
+      if (line) dataLines.push(line);
+    }
+
+    // Step 3: assemble BKI content
+    const bkiContent = exportHeader(ctx) + 'DATA\r\n' + dataLines.join('');
+
+    // Step 4: wrap in ZIP and send
+    const timestamp = new Date().toISOString().replace(/[:-]/g, '').replace('T', '_').slice(0, 15);
+    const bkiFilename = `data_export_${db}_${timestamp}.bki`;
+    const zipFilename = `${bkiFilename}.zip`;
+    const zipBuffer = buildZip(bkiFilename, bkiContent);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+    res.setHeader('Content-Length', zipBuffer.length);
+
+    logger.info('[Legacy BKI export] Completed', { db, id, objects: objRows.length });
+    res.send(zipBuffer);
+  } catch (error) {
+    logger.error('[Legacy BKI export] Error', { error: error.message, db });
+    res.status(500).send('BKI export failed: ' + error.message);
+  }
+});
+
+// ============================================================================
 // restore - Import from binary dump (P0 Critical)
 // PHP: index.php lines 4178–4238
 // Parses compact dump format and generates INSERT statements
