@@ -16,6 +16,7 @@ import nodemailer from 'nodemailer';
 import { phpJsonMiddleware } from '../../utils/jsonSortKeys.js';
 import { isAbnPostProcessFunction, applyAbnFunction, isAbnFunction, ABN_SQL_FIELD_FUNCS, getJsonVal, checkJson } from '../utils/report-functions.js';
 import { t9n, getLocale } from '../../utils/t9n.js';
+import { execSql } from '../../utils/execSql.js';
 
 const router = express.Router();
 
@@ -2306,7 +2307,7 @@ async function recursiveDelete(pool, db, id) {
   for (let i = 0; i < idsToDelete.length; i += BATCH_DELETE_THRESHOLD) {
     const batch = idsToDelete.slice(i, i + BATCH_DELETE_THRESHOLD);
     const placeholders = batch.map(() => '?').join(',');
-    await pool.query(`DELETE FROM ${db} WHERE id IN (${placeholders})`, batch);
+    await execSql(pool, `DELETE FROM ${db} WHERE id IN (${placeholders})`, batch, { label: 'batchDeleteObjects', db });
   }
 }
 
@@ -2491,11 +2492,12 @@ async function populateReqs(pool, db, srcId, dstId) {
         }
       }
       // FILE reqs need insertId for file naming — individual INSERT
-      const [insertResult] = await pool.query(
+      const { insertId: fileInsertId } = await execSql(pool,
         `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
-        [dstId, child.ord, child.t, copiedVal]
+        [dstId, child.ord, child.t, copiedVal],
+        { label: 'populateReqs/file', db }
       );
-      await populateReqs(pool, db, child.id, insertResult.insertId);
+      await populateReqs(pool, db, child.id, fileInsertId);
     } else if (child.ch === 1) {
       // Req has children — need insertId for recursion, individual INSERT
       const [insertResult] = await pool.query(
@@ -2640,11 +2642,12 @@ router.all('/:db/auth', async (req, res, next) => {
 
     // Update or insert XSRF
     if (user.xsrf_id) {
-      await pool.query(`UPDATE ${db} SET val = ? WHERE id = ?`, [xsrf, user.xsrf_id]);
+      await execSql(pool, `UPDATE ${db} SET val = ? WHERE id = ?`, [xsrf, user.xsrf_id], { label: 'updateXsrf', db });
     } else {
-      await pool.query(
+      await execSql(pool,
         `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.XSRF}, ?)`,
-        [user.uid, xsrf]
+        [user.uid, xsrf],
+        { label: 'insertXsrf', db }
       );
     }
 
@@ -2904,11 +2907,12 @@ router.post('/:db/auth', async (req, res, next) => {
     const xsrf = generateXsrf(token, db, db);
 
     if (user.token_id) {
-      await pool.query(`DELETE FROM ${db} WHERE id = ?`, [user.token_id]);
+      await execSql(pool, `DELETE FROM ${db} WHERE id = ?`, [user.token_id], { label: 'deleteOldToken', db });
     }
-    await pool.query(
+    await execSql(pool,
       `INSERT INTO ${db} (up, ord, t, val) VALUES (?, 1, ${TYPE.TOKEN}, ?)`,
-      [user.uid, token]
+      [user.uid, token],
+      { label: 'insertToken', db }
     );
 
     if (!user.xsrf) {
