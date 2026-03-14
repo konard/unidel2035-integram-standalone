@@ -6090,15 +6090,16 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
       }
 
       if (searchQuery) {
-        if (searchQuery.startsWith('@')) {
-          const searchId = parseInt(searchQuery.substring(1), 10);
-          if (!isNaN(searchId)) {
-            query += ` AND id = ?`;
-            params.push(searchId);
-          }
-        } else {
-          query += ` AND val LIKE ?`;
-          params.push(`%${searchQuery}%`);
+        // Use constructWhere to parse search DSL (@id, %like%, IN(), etc.)
+        const searchFilter = searchQuery.startsWith('@')
+          ? { F: searchQuery }
+          : { F: `%${searchQuery}%` };
+        const cwCtx = { revBT: {}, refTyps: {}, multi: new Set(), db };
+        const cw = constructWhere(String(refTypeId), searchFilter, String(refTypeId), false, cwCtx);
+        if (cw.where) {
+          // Replace vals.val/vals.id with val/id (simple query uses no alias)
+          query += cw.where.replace(/\bvals\./g, '').replace(/\ba\d+\./g, '');
+          params.push(...cw.params);
         }
       }
 
@@ -6222,20 +6223,24 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
     // Handle search parameter (?q=<search> or ?q=@<id>)
     let searchClause = '';
+    const searchParams = [];
     if (searchQuery) {
       if (searchQuery.startsWith('@')) {
-        const searchId = parseInt(searchQuery.substring(1), 10);
-        if (!isNaN(searchId)) {
-          whereClause += ` AND vals.id = ${searchId}`;
+        // Use constructWhere for ID-based search DSL
+        const cwCtx = { revBT: {}, refTyps: {}, multi: new Set(), db };
+        const cw = constructWhere(String(dic), { F: searchQuery }, String(dic), false, cwCtx);
+        if (cw.where) {
+          searchClause = cw.where;
+          searchParams.push(...cw.params);
         }
       } else {
         // PHP: CONCAT(vals.val, '/', COALESCE(a{req}.val,''), ...) LIKE '%search%'
-        const escapedSearch = searchQuery.replace(/'/g, "''").replace(/%/g, '\\%');
         let searchConcat = 'vals.val';
         for (const rq of refReqs) {
           searchConcat = `CONCAT(${searchConcat}, '/', COALESCE(a${rq.reqId}.val, ''))`;
         }
-        searchClause = ` AND ${searchConcat} LIKE '%${escapedSearch}%'`;
+        searchClause = ` AND ${searchConcat} LIKE ?`;
+        searchParams.push(`%${searchQuery}%`);
       }
     }
 
@@ -6255,7 +6260,7 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
     logger.debug('[Legacy _ref_reqs] Query', { db, id, sql: sql.replace(/\s+/g, ' ').trim() });
 
-    const [rows] = await pool.query(sql);
+    const [rows] = await pool.query(sql, searchParams);
 
     // Build result with concatenated requisite values
     // PHP: foreach($ref_reqs as $v) $list[$row["id"]] .= isset($row[$v."val"]) ? " / ".$row[$v."val"] : " / --";
