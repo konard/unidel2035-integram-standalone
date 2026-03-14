@@ -95,7 +95,7 @@
 
 | # | PHP Function | Lines | Node.js Equivalent | Status | What's Missing |
 |---|--------------|-------|-------------------|--------|----------------|
-| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Missing: sub-queries `[report_name]`, calculated fields `[SUM]`/`[AVG]`/`[MIN]`/`[MAX]`, `REP_WHERE`, `REP_PIVOT`, complex JOIN aliases, `REP_COL_FUNC` (abn_* functions) |
+| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Aggregates (`SUM`/`AVG`/`MIN`/`MAX`/`COUNT`/`GROUP_CONCAT`) and `GROUP BY` implemented in PR #266. Missing: sub-queries `[report_name]`, `REP_WHERE`, `REP_PIVOT`, complex JOIN aliases, `REP_COL_FUNC` (abn_* functions) |
 | 41 | `Get_block_data()` (case "&functions") | 4021-4027 | Not implemented | **Missing** | Report function list for calculatables |
 | 42 | `Get_block_data()` (case "&formats") | 4028-4033 | Not implemented | **Missing** | Format list for reports |
 | 43 | `exportHeader()` | 1683-1688 | Inline in CSV export | **Full** | — |
@@ -331,36 +331,35 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
 | 1 | `Compile_Report()` sub-queries `[report_name]` | Reports referencing other reports fail | Core reporting |
-| 2 | `Compile_Report()` aggregates `[SUM]`/`[AVG]`/`[MIN]`/`[MAX]` | Calculated columns in reports fail | Core reporting |
-| 3 | `Insert_batch()` | Performance degradation on bulk imports | Restore, data migration |
+| 2 | `Insert_batch()` | Performance degradation on bulk imports | Restore, data migration |
 
 ### 6.2 High (Affects Significant Features)
 
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
-| 4 | `Compile_Report()` REP_PIVOT | Pivot tables don't work | Advanced reporting |
-| 5 | `Compile_Report()` REP_WHERE | Custom WHERE clauses in reports | Advanced reporting |
-| 6 | `_ref_reqs` grant mask integration | Reference dropdowns may show unauthorized items | Security |
-| 7 | `abn_*` functions (DATE2STR, RUB2STR, etc.) | Russian locale reports fail | Localization |
+| 3 | `Compile_Report()` REP_PIVOT | Pivot tables don't work | Advanced reporting |
+| 4 | `Compile_Report()` REP_WHERE | Custom WHERE clauses in reports | Advanced reporting |
+| 5 | `_ref_reqs` grant mask integration | Reference dropdowns may show unauthorized items | Security |
+| 6 | `abn_*` functions (DATE2STR, RUB2STR, etc.) | Russian locale reports fail | Localization |
 
 ### 6.3 Medium (Nice-to-Have)
 
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
-| 8 | `HintNeeded()` | Search hints don't appear | UX |
-| 9 | `NormalSize()` | File sizes show raw bytes | UX |
-| 10 | `RepoGrant()` | Repository-level access check | Advanced permissions |
-| 11 | `build_post_fields()` | External connector POST fails | Connectors |
-| 12 | `getJsonVal()` / `checkJson()` | JSON extraction in reports | Advanced reporting |
+| 7 | `HintNeeded()` | Search hints don't appear | UX |
+| 8 | `NormalSize()` | File sizes show raw bytes | UX |
+| 9 | `RepoGrant()` | Repository-level access check | Advanced permissions |
+| 10 | `build_post_fields()` | External connector POST fails | Connectors |
+| 11 | `getJsonVal()` / `checkJson()` | JSON extraction in reports | Advanced reporting |
 
 ### 6.4 Low (Edge Cases)
 
 | Priority | Item | Impact | Dependency |
 |----------|------|--------|------------|
-| 13 | Delimiter masking functions | CSV edge cases | Export |
-| 14 | `CheckSubst()` / `CheckObjSubst()` | Column substitution | Advanced reporting |
-| 15 | `FetchAlias()` | Alias extraction | Advanced reporting |
-| 16 | `mail2DB()` | Email-to-DB linking | Multi-tenant |
+| 12 | Delimiter masking functions | CSV edge cases | Export |
+| 13 | `CheckSubst()` / `CheckObjSubst()` | Column substitution | Advanced reporting |
+| 14 | `FetchAlias()` | Alias extraction | Advanced reporting |
+| 15 | `mail2DB()` | Email-to-DB linking | Multi-tenant |
 
 ---
 
@@ -375,7 +374,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 ## 8. Recommendations
 
-1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. Sub-queries, aggregates, and pivot tables are used in production reports.
+1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. Sub-queries and pivot tables are used in production reports. (Note: Aggregates implemented in PR #266.)
 
 2. **Add batch insert** — `Insert_batch()` is critical for restore and data migration performance.
 
