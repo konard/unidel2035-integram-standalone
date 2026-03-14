@@ -275,6 +275,17 @@ router.use((req, res, next) => {
   next();
 });
 
+// Issue #390: Relax Helmet security headers for legacy routes to match PHP behavior.
+// PHP set no security headers at all, so clients may embed the application in iframes.
+// Helmet sets X-Frame-Options: DENY globally, which breaks iframe embedding.
+// For legacy routes we downgrade to SAMEORIGIN (allows same-origin iframes)
+// and remove Cross-Origin-Embedder-Policy which also blocks framing.
+router.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.removeHeader('Cross-Origin-Embedder-Policy');
+  next();
+});
+
 // Get the directory path for serving static files
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
