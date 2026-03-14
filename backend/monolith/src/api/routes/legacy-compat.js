@@ -9921,6 +9921,7 @@ async function compileReport(pool, db, reportId) {
     hasAggregates: false,       // true when at least one column uses an aggregate function
     params: {},                 // PHP: $GLOBALS["STORED_REPS"][$id]["params"] — keyed by type id (e.g. 262 = REP_WHERE)
     repParams: {},              // PHP: $GLOBALS["STORED_REPS"][$id]["rep_params"] — keyed by param name
+    refTyp: {},                 // PHP: $GLOBALS["STORED_REPS"][$id]["ref_typ"] — { [reqTypeId]: baseType } for ref columns
   };
 
   try {
@@ -9963,6 +9964,8 @@ async function compileReport(pool, db, reportId) {
       report.types[report.head.length - 1]   = reqTypeId;
       report.baseOut[report.head.length - 1] = col.col_base_t || TYPE.CHARS;
 
+      const colIsRef = !REV_BASE_TYPE[col.col_base_t] && (col.col_base_t || 0) > 0;
+
       report.columns.push({
         id:         col.id,
         name:       colLabel,
@@ -9970,9 +9973,14 @@ async function compileReport(pool, db, reportId) {
         reqTypeId,          // ← which type to LEFT JOIN on
         isMainCol:  reqTypeId === report.parentType,  // main object's own val
         baseType:   col.col_base_t || TYPE.CHARS,
-        isRef:      !REV_BASE_TYPE[col.col_base_t] && (col.col_base_t || 0) > 0,
+        isRef:      colIsRef,
         order:      col.ord,
       });
+
+      // PHP: $GLOBALS["STORED_REPS"][$id]["ref_typ"][$reqTypeId] = col_base_t
+      if (colIsRef) {
+        report.refTyp[String(reqTypeId)] = col.col_base_t;
+      }
     }
 
     // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_NAME, REP_COL_FORMULA, REP_COL_FROM, REP_COL_TO, REP_COL_HIDE, REP_COL_TOTAL ──
@@ -10144,6 +10152,28 @@ async function compileReport(pool, db, reportId) {
   }
 
   return report;
+}
+
+/**
+ * Check whether a given type is a reference type within a compiled report.
+ *
+ * PHP equivalent (index.php:1750):
+ *   function isRef($id, $par, $typ) {
+ *     if(isset($GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ]))
+ *       return $GLOBALS["STORED_REPS"][$id]["ref_typ"][$typ];
+ *     return false;
+ *   }
+ *
+ * @param {object} report - compiled report object (from compileReport)
+ * @param {number|string} typ - type ID to check
+ * @returns {number|false} the reference target type ID, or false
+ */
+function isRef(report, typ) {
+  const key = String(typ);
+  if (report && report.refTyp && report.refTyp[key] !== undefined) {
+    return report.refTyp[key];
+  }
+  return false;
 }
 
 /**
@@ -13183,6 +13213,7 @@ export {
   getFilename,
   normalSize,
   checkNewRef,
+  isRef,
   checkValGranted,
   checkRepColGranted,
   constructWhere,
