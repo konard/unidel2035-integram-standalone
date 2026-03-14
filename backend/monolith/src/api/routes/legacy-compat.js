@@ -8884,6 +8884,9 @@ router.post('/:db/_d_up/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legacyDd
     const prevSibling = siblings[0];
 
     // Atomic swap using single CASE WHEN UPDATE (PHP parity — prevents intermediate inconsistent state)
+    // PHP matches by ord values (WHERE ord=X OR ord=Y), which updates all rows
+    // with those ord values. Node.js matches by id (WHERE id IN) for precision.
+    // This diverges from PHP when duplicate ord values exist.
     await execSql(pool, `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`, [id, prevSibling.ord, prevSibling.id, obj.ord, id, prevSibling.id], { label: 'post_db_d_up_reqId_update' });
 
     logger.info('[Legacy _d_up] Requisite moved up', { db, id, newOrd: prevSibling.ord });
@@ -9148,6 +9151,9 @@ router.post('/:db/_m_up/:id', legacyAuthMiddleware, legacyXsrfCheck, async (req,
     const prevSibling = siblings[0];
 
     // Atomic swap using single CASE WHEN UPDATE (replaces 2 separate UPDATEs)
+    // PHP matches by ord values (WHERE ord=X OR ord=Y), which updates all rows
+    // with those ord values. Node.js matches by id (WHERE id IN) for precision.
+    // This diverges from PHP when duplicate ord values exist.
     await execSql(pool, `UPDATE ${db} SET ord = CASE WHEN id = ? THEN ? WHEN id = ? THEN ? END WHERE id IN (?, ?)`, [objectId, prevSibling.ord, prevSibling.id, obj.ord, objectId, prevSibling.id], { label: 'post_db_m_up_id_update' });
 
     logger.info('[Legacy _m_up] Object moved up', { db, id: objectId, newOrd: prevSibling.ord });
