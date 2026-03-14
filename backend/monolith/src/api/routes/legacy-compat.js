@@ -5177,7 +5177,7 @@ router.get('/:db/:page*', async (req, res, next) => {
             u: obj.up,
             o: obj.ord,
             r: reqIds.map(rid => (reqMap[obj.id] && reqMap[obj.id][rid] !== undefined)
-              ? reqMap[obj.id][rid] : null),
+              ? reqMap[obj.id][rid] : ''),
           })));
         }
 
@@ -9210,9 +9210,12 @@ router.post('/:db/_d_attrs/:reqId', legacyAuthMiddleware, legacyXsrfCheck, legac
     const modifiers = parseModifiers(obj.val);
 
     // Update modifiers from request (keep existing if not provided)
+    // PHP compat: PHP uses isset($_REQUEST["set_null"]) — presence alone enables NOT_NULL
     const newAlias = req.body.alias !== undefined ? (req.body.alias || null) : modifiers.alias;
-    const newRequired = req.body.required !== undefined
-      ? (req.body.required === '1' || req.body.required === true)
+    const hasSetNull = req.body.set_null !== undefined;
+    const hasRequired = req.body.required !== undefined;
+    const newRequired = hasSetNull ? true
+      : hasRequired ? (req.body.required === '1' || req.body.required === true)
       : modifiers.required;
     const newMulti = req.body.multi !== undefined
       ? (req.body.multi === '1' || req.body.multi === true)
