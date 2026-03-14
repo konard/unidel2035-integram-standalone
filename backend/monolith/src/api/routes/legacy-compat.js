@@ -1417,6 +1417,9 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
 
   for (const f of Object.keys(filter)) {
     let value = String(filter[f]);
+    // PHP parity (index.php:535-558): USE INDEX (PRIMARY) hint for CROSS JOINs
+    // when the filter is non-selective (negation, wildcard, or empty).
+    const useIdx = hintNeeded(String(filter[f])) ? ' USE INDEX (PRIMARY)' : '';
     let NOT_flag = false;
     let NOT = '';
     let NOT_EQ = '';
@@ -1503,7 +1506,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
         let joinTable, joinCond;
         if (NOT_flag) {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
             joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
             params.push(joinReq);
           } else {
@@ -1515,7 +1518,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
           params.push(idVal);
         } else {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
             joinCond = ` AND r${key}.t=?`;
             params.push(joinReq, idVal);
           } else {
@@ -1542,7 +1545,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
         let joinTable, joinCond;
         if (NOT_flag) {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
+            joinTable = `LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND a${key}.t=${ctx.refTyps[key]}`;
             joinCond = ` AND r${key}.t=a${key}.id AND r${key}.val=?`;
             params.push(joinReq);
           } else {
@@ -1553,7 +1556,7 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
           whereStr += ` AND (a${key}.id ${search_val} OR a${key}.id IS NULL)`;
         } else {
           if (ctx.refTyps && ctx.refTyps[key]) {
-            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
+            joinTable = ` JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=?`;
             joinCond = ` AND r${key}.t ${search_val}`;
             params.push(joinReq);
           } else {
@@ -1571,9 +1574,9 @@ function constructWhere(key, filter, curTyp, joinReq, ctx) {
 
     // ── Type-aware WHERE construction ──
     if (ctx.refTyps && ctx.refTyps[key]) {
-      // Reference type — CROSS JOIN pattern
+      // Reference type — CROSS JOIN pattern (PHP parity: USE INDEX hint when non-selective filter)
       if (join) {
-        const jt = ` LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=? AND a${key}.t=?`;
+        const jt = ` LEFT JOIN (${z} r${key} CROSS JOIN ${z} a${key}${useIdx}) ON r${key}.up=vals.id AND r${key}.t=a${key}.id AND r${key}.val=? AND a${key}.t=?`;
         if (!joinStr.includes(`a${key}`)) {
           joinStr += jt;
           params.push(joinReq, parseInt(ctx.refTyps[key], 10));
@@ -7246,7 +7249,9 @@ router.get('/:db/_ref_reqs/:refId', legacyAuthMiddleware, async (req, res) => {
 
       if (rq.isRef) {
         // Reference type - join through intermediate table (PHP: LEFT JOIN (z r{req} CROSS JOIN z a{req}) ON ...)
-        joinClauses += ` LEFT JOIN (\`${db}\` r${rq.reqId} CROSS JOIN \`${db}\` ${reqAlias}) ON r${rq.reqId}.up = vals.id AND ${reqAlias}.id = r${rq.reqId}.t AND ${reqAlias}.t = ${rq.base}`;
+        // PHP parity (index.php:535-558): apply USE INDEX (PRIMARY) hint when no selective filter
+        const refHint = hintNeeded(searchQuery) ? ' USE INDEX (PRIMARY)' : '';
+        joinClauses += ` LEFT JOIN (\`${db}\` r${rq.reqId} CROSS JOIN \`${db}\` ${reqAlias}${refHint}) ON r${rq.reqId}.up = vals.id AND ${reqAlias}.id = r${rq.reqId}.t AND ${reqAlias}.t = ${rq.base}`;
       } else {
         // Direct requisite (PHP: LEFT JOIN z a{req} ON a{req}.up=vals.id AND a{req}.t={req_id})
         joinClauses += ` LEFT JOIN \`${db}\` ${reqAlias} ON ${reqAlias}.up = vals.id AND ${reqAlias}.t = ${rq.reqId}`;
@@ -9405,6 +9410,71 @@ function escapeRegex(str) {
 }
 
 /**
+ * HintNeeded — MySQL query optimizer hint for JOINs on reference requisites.
+ * PHP parity: index.php lines 535–558.
+ *
+ * When a CROSS JOIN for reference resolution has no selective filter — or its
+ * filter is a negation (!) or wildcard (%) — the MySQL optimizer may choose a
+ * suboptimal plan.  In those cases we return true so callers add
+ * USE INDEX (PRIMARY) to force the primary-key lookup path.
+ *
+ * Overload 1 — filter-value based (for constructWhere / object list):
+ *   hintNeeded(filterValue)
+ *   @param {string|undefined} filterValue — the active filter string, if any
+ *
+ * Overload 2 — report-column based (for executeReport):
+ *   hintNeeded(col, requestFilters)
+ *   @param {object}  col             — compiled report column (from compileReport)
+ *   @param {object}  requestFilters  — runtime filters from the request (key → {from,to,eq,like})
+ *
+ * @returns {boolean} true when USE INDEX (PRIMARY) should be added to the CROSS JOIN
+ */
+function hintNeeded(colOrValue, requestFilters) {
+  let filterVal;
+
+  if (typeof colOrValue === 'object' && colOrValue !== null) {
+    // ── Overload 2: report column ──────────────────────────────────────
+    const col = colOrValue;
+    const filters = requestFilters || {};
+
+    // 1. Check request-level filters (PHP: $_REQUEST["FR_$str"] / $_REQUEST["TO_$str"])
+    if (col.colName) {
+      const normName = col.colName.replace(/ /g, '_');
+      const reqFilter = filters[normName] || filters[col.alias] || filters[col.name];
+      if (reqFilter) {
+        filterVal = reqFilter.from || reqFilter.to || reqFilter.eq || reqFilter.like;
+      }
+    } else {
+      const reqFilter = filters[col.alias] || filters[col.name];
+      if (reqFilter) {
+        filterVal = reqFilter.from || reqFilter.to || reqFilter.eq || reqFilter.like;
+      }
+    }
+
+    // 2. Check stored filter definitions (PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_FROM/TO][$k])
+    if (filterVal === undefined || filterVal === null || filterVal === '') {
+      filterVal = col.storedFrom || col.storedTo;
+    }
+  } else {
+    // ── Overload 1: raw filter value ───────────────────────────────────
+    filterVal = colOrValue;
+  }
+
+  // 3. If a selective (positive, non-wildcard) filter exists, hint is NOT needed
+  if (filterVal !== undefined && filterVal !== null && filterVal !== '') {
+    const s = String(filterVal);
+    if (s.length > 0 && s[0] !== '!' && s[0] !== '%') {
+      logger.debug('[HintNeeded] Hint NOT needed', { filter: s });
+      return false;
+    }
+  }
+
+  // 4. No selective filter → hint IS needed
+  logger.debug('[HintNeeded] Hint needed (no selective filter)');
+  return true;
+}
+
+/**
  * Compile a report — load columns, joins, and metadata.
  *
  * PHP data model for reports:
@@ -9419,7 +9489,10 @@ async function compileReport(pool, db, reportId) {
   // PHP REP_COL_* sub-row type constants (children of each REP_COLS row)
   const REP_COL_FUNC    = 63;   // aggregate / wrapper function (SUM, AVG, COUNT, etc.)
   const REP_COL_TOTAL   = 65;   // totals row function
+  const REP_COL_NAME    = 100;  // column display name override
   const REP_COL_FORMULA = 101;  // calculatable formula expression
+  const REP_COL_FROM    = 102;  // stored filter FROM value (PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_FROM][$k])
+  const REP_COL_TO      = 103;  // stored filter TO value   (PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_TO][$k])
   const REP_COL_HIDE    = 107;  // hidden column flag
 
   const report = {
@@ -9492,7 +9565,7 @@ async function compileReport(pool, db, reportId) {
       });
     }
 
-    // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_FORMULA, REP_COL_HIDE, REP_COL_TOTAL ──
+    // ── Fetch column sub-properties: REP_COL_FUNC, REP_COL_NAME, REP_COL_FORMULA, REP_COL_FROM, REP_COL_TO, REP_COL_HIDE, REP_COL_TOTAL ──
     // These are child rows of each REP_COLS row with specific `t` values.
     // PHP stores them in $GLOBALS["STORED_REPS"][$id][REP_COL_FUNC][$key], etc.
     const AGGR_FUNCS = new Set(['AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'GROUP_CONCAT']);
@@ -9501,7 +9574,7 @@ async function compileReport(pool, db, reportId) {
       const colPh  = colIds.map(() => '?').join(',');
       const [subRows] = await pool.query(
         `SELECT up, t, val FROM \`${db}\`
-         WHERE up IN (${colPh}) AND t IN (${REP_COL_FUNC}, ${REP_COL_FORMULA}, ${REP_COL_HIDE}, ${REP_COL_TOTAL})`,
+         WHERE up IN (${colPh}) AND t IN (${REP_COL_FUNC}, ${REP_COL_TOTAL}, ${REP_COL_NAME}, ${REP_COL_FORMULA}, ${REP_COL_FROM}, ${REP_COL_TO}, ${REP_COL_HIDE})`,
         colIds
       );
       for (const sr of subRows) {
@@ -9514,8 +9587,14 @@ async function compileReport(pool, db, reportId) {
             col.isAggregate = true;
             report.hasAggregates = true;
           }
+        } else if (tNum === REP_COL_NAME && sr.val) {
+          col.colName = sr.val.trim();         // PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_NAME][$k]
         } else if (tNum === REP_COL_FORMULA && sr.val) {
           col.formula = sr.val.trim();
+        } else if (tNum === REP_COL_FROM && sr.val) {
+          col.storedFrom = sr.val.trim();      // PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_FROM][$k]
+        } else if (tNum === REP_COL_TO && sr.val) {
+          col.storedTo = sr.val.trim();        // PHP: $GLOBALS["STORED_REPS"][$id][REP_COL_TO][$k]
         } else if (tNum === REP_COL_HIDE) {
           col.hidden = true;
         } else if (tNum === REP_COL_TOTAL && sr.val) {
@@ -9748,8 +9827,12 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
         selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
       } else {
         selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
+        // PHP parity (index.php:535-558): apply USE INDEX (PRIMARY) hint on heavy
+        // report JOINs when the column has no selective filter, helping the MySQL
+        // optimizer avoid full-table scans on CROSS-joined reference lookups.
+        const colHint = hintNeeded(col, filters) ? ' USE INDEX (PRIMARY)' : '';
         joinParts.push(
-          `LEFT JOIN \`${db}\` \`${col.alias}\`` +
+          `LEFT JOIN \`${db}\` \`${col.alias}\`${colHint}` +
           ` ON \`${col.alias}\`.up = a.id AND \`${col.alias}\`.t = ${col.reqTypeId}`
         );
       }
