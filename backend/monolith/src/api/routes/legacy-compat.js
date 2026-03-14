@@ -5555,6 +5555,31 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
       return res.status(200).json({ error: 'Cannot move metadata object' });
     }
 
+    // Type mismatch guard: old parent and new parent must be of the same type
+    const [parentRows] = await pool.query(
+      `SELECT old_p.t AS ut, new_p.t AS tt
+       FROM \`${db}\` old_p, \`${db}\` new_p
+       WHERE old_p.id = ? AND new_p.id = ?`,
+      [oldParentId, newParentId]
+    );
+    if (parentRows.length === 0) {
+      return res.status(200).json({ error: 'Parent not found' });
+    }
+    if (parentRows[0].ut !== parentRows[0].tt) {
+      return res.status(200).json({ error: `Types mismatch ${objType}!=${parentRows[0].tt}` });
+    }
+
+    // Same-parent no-op: skip if already under the target parent
+    if (oldParentId === newParentId) {
+      legacyRespond(req, res, db, {
+        id: objectId,
+        obj: null,
+        next_act: 'object',
+        args: newParentId !== 1 ? `moved&&F_U=${newParentId}` : 'moved&',
+      });
+      return;
+    }
+
     // Order adjustment in old parent: shift down peers after removed object
     await pool.query(
       `UPDATE \`${db}\` SET ord = ord - 1 WHERE up = ? AND t = ? AND ord > ?`,
@@ -5562,7 +5587,7 @@ router.post('/:db/_m_move/:id', legacyAuthMiddleware, legacyXsrfCheck, async (re
     );
 
     const newOrder = await getNextOrder(db, newParentId, objType);
-    await pool.query(`UPDATE ${db} SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
+    await pool.query(`UPDATE \`${db}\` SET up = ?, ord = ? WHERE id = ?`, [newParentId, newOrder, objectId]);
 
     logger.info('[Legacy _m_move] Object moved', { db, id: objectId, newParentId });
 
