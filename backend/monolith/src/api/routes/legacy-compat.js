@@ -10604,10 +10604,15 @@ router.get('/:db/csv_all', async (req, res) => {
       ORDER BY a.id, reqs.ord
     `);
 
-    // Build type structure (similar to PHP logic)
-    const typ = {}; // id -> name
-    const base = {}; // id -> base type
-    const reqs = {}; // id -> array of requisite IDs
+    // Build type structure with optimized JOINs (PHP parity: index.php 4101–4131)
+    // PHP builds $select[$i], $join[$i] per type so all requisite values are fetched
+    // in a single query via JOINs, instead of N+1 queries per object.
+    const typ = {};    // id -> CSV header string
+    const base = {};   // id -> base type id
+    const reqs = {};   // id -> array of requisite IDs
+    const select = {}; // id -> SQL SELECT fragment for JOINed requisites
+    const join = {};   // id -> SQL JOIN fragment for requisites
+    const arr = {};    // id -> true if this type is an array-type (has sub-requisites)
     const reqSet = new Set(); // Types used as requisites
 
     for (const row of typeRows) {
@@ -10619,77 +10624,92 @@ router.get('/:db/csv_all', async (req, res) => {
 
       if (!reqSet.has(i) && !typ[i]) {
         typ[i] = maskCsvDelimiters(row.val);
+        select[i] = '';
+        join[i] = '';
         reqs[i] = [];
       }
 
       if (row.req) {
         if (!reqs[i]) reqs[i] = [];
-        reqs[i].push({
-          reqId: row.req_id,
-          reqBase: row.req_base,
-          isRef: row.ref === 1
-        });
-        delete typ[row.req];
+        const rid = row.req_id;
+        reqs[i].push(rid);
+        base[rid] = row.req_base;
+        delete typ[row.req]; // Remove types used as requisites from independent list
         reqSet.add(row.req);
         typ[i] = (typ[i] || '') + ';' + maskCsvDelimiters(row.req);
+
+        // PHP: if($row["req_req"] > 0) — this requisite has sub-requisites (array type)
+        if (row.req_req > 0) {
+          arr[row.req_t] = true;
+        } else {
+          const r = row.req_base;
+          if (row.ref === 1) {
+            // PHP: reference JOIN — l$rid finds the link, r$rid resolves the referenced object
+            join[i] += ` LEFT JOIN (${db} l${rid} CROSS JOIN ${db} r${rid} USE INDEX (PRIMARY)) ON l${rid}.up=obj.id AND r${rid}.id=l${rid}.t AND r${rid}.t=${r}`;
+          } else {
+            const revBtR = REV_BASE_TYPE[r] || null;
+            if (['CHARS', 'MEMO', 'FILE', 'HTML'].includes(revBtR)) {
+              // PHP: text-type requisites have a sub-row for the actual text content
+              join[i] += ` LEFT JOIN ${db} r${rid} ON r${rid}.up=obj.id AND r${rid}.t=${rid} LEFT JOIN ${db} t${rid} ON t${rid}.up=r${rid}.id AND t${rid}.t=0 AND t${rid}.ord=0`;
+              select[i] += `, IF(t${rid}.id IS NULL, 0, r${rid}.id) t${rid}`;
+            } else {
+              join[i] += ` LEFT JOIN ${db} r${rid} ON r${rid}.up=obj.id AND r${rid}.t=${rid}`;
+            }
+            select[i] += `, r${rid}.val v${rid}`;
+          }
+        }
       }
     }
 
-    // Build CSV content
+    // Build CSV content with batched fetching (PHP parity: index.php 4132–4168)
+    // PHP uses cursor-based pagination with batch size = 500000/(num_reqs+1)
     let csvContent = '\ufeff'; // BOM for UTF-8
 
     for (const typeId of Object.keys(typ)) {
       const id = parseInt(typeId, 10);
       csvContent += typ[typeId];
 
-      // Get objects of this type
-      const [objects] = await pool.query(`
-        SELECT id, val FROM ${db}
-        WHERE t = ? AND up != 0
-        ORDER BY id
-        LIMIT 500000
-      `, [id]);
+      const reqCount = (reqs[id] || []).length;
+      const limit = Math.round(500000 / (reqCount + 1));
+      let last = 0;
+      let rowsNumber = 0;
 
-      for (const obj of objects) {
-        let line = '\n' + maskCsvDelimiters(formatValView(base[id], obj.val));
+      do {
+        // PHP: fetch object IDs in batches using cursor pagination
+        let idQuery;
+        if (arr[id]) {
+          // Array-type: extra parent check (obj.up's up must also be != 0)
+          idQuery = `SELECT obj.id FROM ${db} obj, ${db} up WHERE obj.t=${id} AND obj.up!=0 AND up.id=obj.up AND up.up!=0 AND obj.id>${last} ORDER BY obj.id LIMIT ${limit}`;
+        } else {
+          idQuery = `SELECT id FROM ${db} obj WHERE t=${id} AND up!=0 AND id>${last} ORDER BY id LIMIT ${limit}`;
+        }
 
-        // Get requisites for each object
-        if (reqs[id] && reqs[id].length > 0) {
-          for (const rq of reqs[id]) {
-            if (rq.isRef) {
-              // PHP parity: reference values — child.t = referenced object's ID
-              // JOIN to resolve: find child whose t points to an instance of reqId type,
-              // then get the referenced object's display val
-              const [reqRows] = await pool.query(`
-                SELECT ref_obj.val AS display_val
-                FROM ${db} child
-                JOIN ${db} ref_obj ON ref_obj.id = child.t
-                WHERE child.up = ? AND ref_obj.t = ?
-                LIMIT 1
-              `, [obj.id, rq.reqId]);
+        const [idRows] = await pool.query(idQuery);
+        rowsNumber = idRows.length;
 
-              if (reqRows.length > 0) {
-                line += ';' + maskCsvDelimiters(reqRows[0].display_val || '');
-              } else {
-                line += ';';
-              }
-            } else {
-              const [reqRows] = await pool.query(`
-                SELECT val FROM ${db}
-                WHERE up = ? AND t = ?
-                LIMIT 1
-              `, [obj.id, rq.reqId]);
+        if (idRows.length > 0) {
+          const first = idRows[0].id;
+          last = idRows[idRows.length - 1].id;
 
-              if (reqRows.length > 0) {
-                line += ';' + maskCsvDelimiters(formatValView(rq.reqBase, reqRows[0].val));
-              } else {
-                line += ';';
-              }
+          // PHP: single query with all JOINs to fetch object + all requisite values at once
+          const dataQuery = `SELECT obj.id, obj.val${select[id] || ''} FROM ${db} obj${join[id] || ''} WHERE obj.t=${id} AND obj.up!=0 AND obj.id>=${first} AND obj.id<=${last}`;
+          const [dataRows] = await pool.query(dataQuery);
+
+          let h = '';
+          let prev = 0;
+          for (const row of dataRows) {
+            if (prev !== row.id) {
+              h += '\n' + maskCsvDelimiters(formatValView(base[id], row.val));
+              prev = row.id;
+            }
+            for (const rid of (reqs[id] || [])) {
+              const v = row[`v${rid}`];
+              h += ';' + maskCsvDelimiters(formatValView(base[rid], v));
             }
           }
+          csvContent += h;
         }
-        csvContent += line;
-      }
+      } while (rowsNumber === limit);
 
       csvContent += '\n\n';
     }
