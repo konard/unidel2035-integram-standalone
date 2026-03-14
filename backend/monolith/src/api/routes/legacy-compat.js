@@ -2233,6 +2233,21 @@ function getFilename(db, id) {
 }
 
 /**
+ * Human-readable file size.
+ * PHP parity: PHP NormalSize() (index.php lines 7250–7262).
+ *
+ * @param {number} size - file size in bytes
+ * @returns {string} formatted size with unit (B, KB, MB, GB, TB)
+ */
+function normalSize(size) {
+  if (size < 1024) return size + ' B';
+  if (size < 1048576) return +(size / 1024).toFixed(2) + ' KB';
+  if (size < 1073741824) return +(size / 1048576).toFixed(2) + ' MB';
+  if (size < 1099511627776) return +(size / 1073741824).toFixed(2) + ' GB';
+  return +(size / 1099511627776).toFixed(2) + ' TB';
+}
+
+/**
  * Recursively remove a file or directory from the filesystem.
  * PHP parity: PHP RemoveDir() (index.php lines 596–616).
  *
@@ -9348,6 +9363,7 @@ router.get('/:db/dir_admin', legacyAuthMiddleware, async (req, res) => {
           name: entry.name,
           type: 'file',
           size: stats.size,
+          sizeFormatted: normalSize(stats.size),
           modified: stats.mtime.toISOString()
         });
       }
@@ -12181,6 +12197,7 @@ export {
   isBlacklisted,
   getSubdir,
   getFilename,
+  normalSize,
   checkNewRef,
   checkValGranted,
   checkRepColGranted,
