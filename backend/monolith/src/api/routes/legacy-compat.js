@@ -9347,7 +9347,7 @@ router.all('/:db/obj_meta/:id', legacyAuthMiddleware, async (req, res) => {
 
     if (rows.length === 0) {
       // PHP returns HTTP 200 with error JSON, not 404
-      return res.status(200).json({ error: 'not found' });
+      return res.status(200).json({ error: 'Object not found' });
     }
 
     // Build response matching PHP format (line 8838-8857)
