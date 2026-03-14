@@ -468,6 +468,77 @@ function generateXsrf(a, b, db) {
 }
 
 /**
+ * Refresh auth token and activity timestamp after authentication.
+ * Port of PHP updateTokens() (index.php:363).
+ *
+ * Generates cryptographically random token and XSRF (32 bytes hex each),
+ * updates or inserts the token row, creates or updates the XSRF row, and
+ * updates the activity timestamp to current epoch seconds.
+ *
+ * @param {import('mysql2/promise').Pool} pool - MySQL connection pool
+ * @param {string} db   - database (table) name
+ * @param {object} row  - auth query result with at least:
+ *   {number}      row.uid  - id of the user row (required)
+ *   {number|null} row.tok  - id of the token row (null → insert)
+ *   {number|null} row.xsrf - id of the XSRF row (null → insert)
+ *   {number|null} row.act  - id of the activity row (null → insert)
+ * @returns {Promise<{token: string, xsrf: string}>} the newly generated token and xsrf values
+ */
+async function updateTokens(pool, db, row) {
+  const safeDb = sanitizeIdentifier(db);
+  const token = crypto.randomBytes(32).toString('hex');
+  const xsrf  = crypto.randomBytes(32).toString('hex');
+
+  // Update or insert token row
+  if (row.tok) {
+    await execSql(pool,
+      `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
+      [token, row.tok],
+      { label: 'Update Token' }
+    );
+  } else {
+    await execSql(pool,
+      `INSERT INTO ${safeDb} (up, ord, t, val) VALUES (?, 1, ?, ?)`,
+      [row.uid, TYPE.TOKEN, token],
+      { label: 'Insert Token' }
+    );
+  }
+
+  // Create or update XSRF row
+  if (row.xsrf) {
+    await execSql(pool,
+      `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
+      [xsrf, row.xsrf],
+      { label: 'Update XSRF' }
+    );
+  } else {
+    await execSql(pool,
+      `INSERT INTO ${safeDb} (up, ord, t, val) VALUES (?, 1, ?, ?)`,
+      [row.uid, TYPE.XSRF, xsrf],
+      { label: 'Insert XSRF' }
+    );
+  }
+
+  // Update activity timestamp to current epoch seconds
+  const nowSec = String(Math.floor(Date.now() / 1000));
+  if (row.act) {
+    await execSql(pool,
+      `UPDATE ${safeDb} SET val = ? WHERE id = ?`,
+      [nowSec, row.act],
+      { label: 'Update Activity Timestamp' }
+    );
+  } else {
+    await execSql(pool,
+      `INSERT INTO ${safeDb} (up, ord, t, val) VALUES (?, 1, ?, ?)`,
+      [row.uid, TYPE.ACTIVITY, nowSec],
+      { label: 'Insert Activity Timestamp' }
+    );
+  }
+
+  return { token, xsrf };
+}
+
+/**
  * Safe path resolution — prevents directory traversal including URL-encoded variants.
  * Resolves userInput relative to base and verifies result stays within base.
  */
@@ -3726,26 +3797,13 @@ router.get('/auth.asp', async (req, res) => {
       // ── Existing user — update tokens (PHP: updateTokens) ──
       const row = existingRows[0];
 
-      if (row.tok_id && row.token) {
-        token = row.token;
-      } else {
-        token = generateToken();
-        await insertRow(z, row.uid, 1, TYPE.TOKEN, token);
-      }
-
-      const xsrf = generateXsrf(token, z, z);
-      if (row.xsrf_id) {
-        await updateRowValue(z, row.xsrf_id, xsrf);
-      } else {
-        await insertRow(z, row.uid, 1, TYPE.XSRF, xsrf);
-      }
-
-      // Update activity timestamp
-      if (row.act_id) {
-        await updateRowValue(z, row.act_id, String(Date.now() / 1000));
-      } else {
-        await insertRow(z, row.uid, 1, TYPE.ACTIVITY, String(Date.now() / 1000));
-      }
+      const updated = await updateTokens(pool, z, {
+        uid: row.uid,
+        tok: row.tok_id,
+        xsrf: row.xsrf_id,
+        act: row.act_id,
+      });
+      token = updated.token;
 
       if (row.db_name) {
         finalDb = row.db_name;
@@ -3892,27 +3950,7 @@ router.get('/my/register', async (req, res) => {
     await pool.query('UPDATE my SET val = ? WHERE id = ?', [hashedPwd, row.pid]);
 
     // PHP line 98: updateTokens(row) — create/update token, xsrf, activity + set cookie
-    let token;
-    if (row.tok) {
-      token = row.token;
-    } else {
-      token = generateToken();
-      await insertRow('my', row.uid, 1, TYPE.TOKEN, token);
-    }
-
-    const xsrfVal = generateXsrf(token, 'my', 'my');
-    if (row.xsrf) {
-      await pool.query('UPDATE my SET val = ? WHERE id = ?', [xsrfVal, row.xsrf]);
-    } else {
-      await insertRow('my', row.uid, 1, TYPE.XSRF, xsrfVal);
-    }
-
-    const nowSec = String(Math.floor(Date.now() / 1000));
-    if (row.act) {
-      await pool.query('UPDATE my SET val = ? WHERE id = ?', [nowSec, row.act]);
-    } else {
-      await insertRow('my', row.uid, 1, TYPE.ACTIVITY, nowSec);
-    }
+    const { token } = await updateTokens(pool, 'my', row);
 
     res.cookie('my', token, { maxAge: 2592000 * 12 * 1000, path: '/' });
 
@@ -9424,19 +9462,12 @@ router.post('/:db/jwt', async (req, res) => {
     const user = rows[0];
 
     // PHP authJWT: updateTokens() regenerates token+xsrf, sets cookie
-    const newToken = generateToken();
-    const newXsrf  = generateXsrf(newToken, db, db);
-
-    if (user.tok_id) {
-      await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [newToken, user.tok_id]);
-    } else {
-      await pool.query(`INSERT INTO \`${db}\` (up,ord,t,val) VALUES (?,1,${TYPE.TOKEN},?)`, [user.uid, newToken]);
-    }
-    if (user.xsrf_id) {
-      await pool.query(`UPDATE \`${db}\` SET val=? WHERE id=?`, [newXsrf, user.xsrf_id]);
-    } else {
-      await pool.query(`INSERT INTO \`${db}\` (up,ord,t,val) VALUES (?,1,${TYPE.XSRF},?)`, [user.uid, newXsrf]);
-    }
+    const { token: newToken, xsrf: newXsrf } = await updateTokens(pool, db, {
+      uid: user.uid,
+      tok: user.tok_id,
+      xsrf: user.xsrf_id,
+      act: null,
+    });
 
     res.cookie(db, newToken, { path: '/', httpOnly: false });
 
@@ -13483,6 +13514,7 @@ export {
   getRefOrd,
   calcOrder,
   isDbVacant,
+  updateTokens,
 };
 
 export default router;
