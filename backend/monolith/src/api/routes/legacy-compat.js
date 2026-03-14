@@ -3028,26 +3028,33 @@ async function populateReqs(pool, db, srcId, dstId) {
     let copiedVal = child.val;
 
     // For FILE-type requisites, physically copy the file to avoid shared reference
+    // PHP parity: INSERT first to obtain the new ID, then copy using hash-based paths
     if (child.base_t === TYPE.FILE && child.val && child.val.length > 0) {
-      const srcFile = path.join(uploadDir, path.basename(child.val));
-      if (fs.existsSync(srcFile)) {
-        const ext = path.extname(child.val);
-        const newName = `copy_${Date.now()}_${path.basename(child.val, ext)}${ext}`;
-        const dstFile = path.join(uploadDir, newName);
-        try {
-          fs.mkdirSync(uploadDir, { recursive: true });
-          fs.copyFileSync(srcFile, dstFile);
-          copiedVal = newName;
-        } catch (copyErr) {
-          logger.warn('[Legacy populateReqs] File copy failed', { srcFile, error: copyErr.message });
-        }
-      }
-      // FILE reqs need insertId for file naming — individual INSERT
+      // FILE reqs need insertId for file naming — individual INSERT (before copy, like PHP)
       const { insertId: fileInsertId } = await execSql(pool,
         `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
-        [dstId, child.ord, child.t, copiedVal],
+        [dstId, child.ord, child.t, child.val],
         { label: 'populateReqs/file', db }
       );
+
+      // PHP: $orig_path = GetSubdir($ch["id"])."/".GetFilename($ch["id"]).".".ext
+      const ext = child.val.includes('.') ? '.' + child.val.split('.').pop() : '';
+      const srcSubdir = getSubdir(db, child.id);
+      const srcFile = path.join(uploadDir, srcSubdir, getFilename(db, child.id) + ext);
+
+      if (fs.existsSync(srcFile)) {
+        // PHP: $new_dir = GetSubdir($id); @mkdir($new_dir);
+        const dstSubdir = getSubdir(db, fileInsertId);
+        const dstDir = path.join(uploadDir, dstSubdir);
+        const dstFile = path.join(dstDir, getFilename(db, fileInsertId) + ext);
+        try {
+          fs.mkdirSync(dstDir, { recursive: true });
+          fs.copyFileSync(srcFile, dstFile);
+        } catch (copyErr) {
+          logger.warn('[Legacy populateReqs] File copy failed', { srcFile, dstFile, error: copyErr.message });
+        }
+      }
+
       await populateReqs(pool, db, child.id, fileInsertId);
     } else if (child.ch === 1) {
       // Req has children — need insertId for recursion, individual INSERT
