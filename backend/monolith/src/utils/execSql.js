@@ -3,6 +3,7 @@
 
 import { performance } from 'node:perf_hooks';
 import { createLogger } from './logger.js';
+import { wlog, trace } from './wlog.js';
 
 const sqlLogger = createLogger('sql');
 
@@ -100,9 +101,16 @@ export async function execSql(pool, sql, params = [], options = {}) {
       logEntry.insertId = insertId;
     }
     sqlLogger.info(logEntry, 'sql-audit');
+
+    // Per-database file log (PHP: wlog)
+    if (db) {
+      const wlogMsg = `${username}@${ip}[${timing.toFixed(4)}]${sql};[${label}]`;
+      wlog(db, wlogMsg, 'sql');
+    }
   }
 
   // Trace logging for all queries (PHP: trace)
+  trace(`[${timing.toFixed(4)}] ${sql}${label ? ` [${label}]` : ''}`);
   sqlLogger.debug({
     timing: timing.toFixed(4),
     sql,
