@@ -11433,10 +11433,8 @@ router.all('/:db/report/:reportId?', async (req, res) => {
       }
 
       if (isApiRequest(req)) {
-        // PHP default JSON: column-major data[col_index][row_index]
-        // smartq.js getRep: iterates `for(i in json.data[0])` (rows of first col)
-        // smartq.js drawLine: uses `json.data[j][i]` (col j, row i)
-        // smartq.js drawFoot: checks 'totals' in json.columns[0] → embed totals in each column
+        // PHP default JSON (index.php:3828-3868): row-major rows object, integer type IDs,
+        // granted as integer 1, ref as integer 1, header/footer fields.
         const totalsMap = results.totals || {};
         // Build column entries; for object/ref columns emit a hidden {name}ID companion column
         // so smartq.js can set obj-id / ref-id attributes via zis.columns[col.name+'ID'].col
@@ -11444,17 +11442,17 @@ router.all('/:db/report/:reportId?', async (req, res) => {
         for (const col of report.columns) {
           colEntries.push({
             def: {
-              id: String(col.id),
+              id: col.id,
               name: col.name,
-              // type = requisite type ID as string (PHP mysqli returns strings for DB integers)
-              type: String(col.reqTypeId || 0),
+              // PHP parity: type = integer requisite type ID (PHP: $origType)
+              type: col.reqTypeId || 0,
               format: REV_BASE_TYPE[col.baseType] || 'CHARS',
               align: col.align || 'LEFT',
               totals: totalsMap[col.alias] !== undefined ? totalsMap[col.alias] : null,
-              // ref = truthy for reference columns; smartq uses ref-id vs obj-id
-              ref: col.isRef ? col.baseType : null,
-              // PHP parity: granted flag per column
-              granted: col.granted,
+              // PHP parity: ref = 1 (integer) for reference columns
+              ref: col.isRef ? 1 : null,
+              // PHP parity: granted = 1 (integer) only when granted, omitted otherwise
+              ...(col.granted ? { granted: 1 } : {}),
             },
             alias: col.alias,
           });
@@ -11468,18 +11466,31 @@ router.all('/:db/report/:reportId?', async (req, res) => {
                 format: 'CHARS',
                 align: 'LEFT',
                 totals: null,
-                ref: col.isRef ? col.baseType : null,
+                ref: col.isRef ? 1 : null,
               },
               alias: col.alias + '_id',
             });
           }
         }
         const cols = colEntries.map(e => e.def);
-        // Column-major: data[column_index] = [row0_val, row1_val, ...]
-        const data = colEntries.map(e =>
-          results.data.map(row => row[e.alias] !== undefined ? row[e.alias] : '')
-        );
-        return res.json({ columns: cols, data, rownum: results.rownum });
+        // PHP parity: rows is an object keyed by row index (string keys "0","1",...),
+        // each row is an object keyed by column ID → value
+        const rows = {};
+        for (let idx = 0; idx < results.data.length; idx++) {
+          const row = results.data[idx];
+          const r = {};
+          for (const e of colEntries) {
+            r[String(e.def.id)] = row[e.alias] !== undefined ? row[e.alias] : '';
+          }
+          rows[String(idx)] = r;
+        }
+        return res.json({
+          columns: cols,
+          rows,
+          totalCount: results.data.length,
+          header: report.header || '',
+          footer: [],
+        });
       }
 
       // Non-API (browser) fallback — report.html reads json.columns and row-major json.data
