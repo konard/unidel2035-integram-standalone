@@ -11,7 +11,7 @@
 | Category | Total | Full | Partial | Stub | Missing | N/A |
 |----------|-------|------|---------|------|---------|-----|
 | **Functions** | 96 | 38 | 12 | 3 | 22 | 21 |
-| **Route Case Blocks** | 31 | 24 | 3 | 0 | 2 | 2 |
+| **Route Case Blocks** | 31 | 25 | 2 | 0 | 2 | 2 |
 | **Block Type Handlers** | 82 | 0 | 0 | 0 | 0 | 82 |
 | **Global Init Code** | 5 | 3 | 1 | 0 | 1 | 0 |
 | **Helper Functions (funcs.php)** | 5 | 5 | 0 | 0 | 0 | 0 |
@@ -89,13 +89,13 @@
 | 36 | `Format_Val()` | 1338-1397 | `formatVal()` | **Full** | — |
 | 37 | `Format_Val_View()` | 1399-1489 | `formatValView()`, `formatObjVal()` | **Full** | — |
 | 38 | `Get_Align()` | 1326-1336 | `getAlign()` | **Full** | — |
-| 39 | `BuiltIn()` | 1576-1616 | `resolveBuiltIn()` | **Full** | — |
+| 39 | `BuiltIn()` | 1576-1616 | `resolveBuiltIn()` | **Full** | 11 additional placeholders added in PR #273 |
 
 ### 1.6 Report Compilation
 
 | # | PHP Function | Lines | Node.js Equivalent | Status | What's Missing |
 |---|--------------|-------|-------------------|--------|----------------|
-| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Aggregates (`SUM`/`AVG`/`MIN`/`MAX`/`COUNT`/`GROUP_CONCAT`) and `GROUP BY` implemented in PR #266. Sub-queries `[report_name]` implemented in PR #267. `REP_COL_FUNC` (abn_* functions) implemented in PR #268. GROUP_CONCAT for array-type (`:MULTI:`) requisites implemented in PR #269. REP_WHERE stored filters with BuiltIn placeholders implemented in PR #270. Missing: `REP_PIVOT`, complex JOIN aliases |
+| 40 | `Compile_Report()` | 1756-3874 | `compileReport()` + `executeReport()` | **Partial** | Aggregates (`SUM`/`AVG`/`MIN`/`MAX`/`COUNT`/`GROUP_CONCAT`) and `GROUP BY` implemented in PR #266. Sub-queries `[report_name]` implemented in PR #267. `REP_COL_FUNC` (abn_* functions) implemented in PR #268. GROUP_CONCAT for array-type (`:MULTI:`) requisites implemented in PR #269. REP_WHERE stored filters with BuiltIn placeholders implemented in PR #270. CSV export (`?format=csv`) implemented in PR #271. Missing: `REP_PIVOT`, complex JOIN aliases |
 | 41 | `Get_block_data()` (case "&functions") | 4021-4027 | Not implemented | **Missing** | Report function list for calculatables |
 | 42 | `Get_block_data()` (case "&formats") | 4028-4033 | Not implemented | **Missing** | Format list for reports |
 | 43 | `exportHeader()` | 1683-1688 | Inline in CSV export | **Full** | — |
@@ -235,7 +235,7 @@
 |---|----------|-------|---------------|--------|----------------|
 | 28 | `case "xsrf"` | 8914-8917 | `GET /:db/xsrf` | **Full** | — |
 | 29 | `case "terms"` | 8919-8942 | `GET /:db/terms` | **Full** | — |
-| 30 | `case "_ref_reqs"` | 8944-9086 | `GET /:db/_ref_reqs/:refId` | **Partial** | Missing some grant mask integration |
+| 30 | `case "_ref_reqs"` | 8944-9086 | `GET /:db/_ref_reqs/:refId` | **Full** | Dynamic formula evaluation for calculatable refs implemented in PR #272 |
 | 31 | `case "_connect"` | 9088-9111 | `ALL /:db/_connect/:id?` | **Full** | — |
 | 32 | `case "_new_db"` | 8799-8824 | `POST /my/_new_db` | **Partial** | Simplified template handling |
 | 33 | `case "obj_meta"` | 8826-8858 | `ALL /:db/obj_meta/:id` | **Full** | — |
@@ -250,7 +250,7 @@
 | 37 | `case "csv_all"` | 4087-4176 | `GET /:db/csv_all` | **Full** | — |
 | 38 | `case "restore"` | 4178-4237 | `POST /:db/restore` | **Full** | — |
 | 39 | `case "backup"` | 4239-4291 | `GET /:db/backup` | **Full** | — |
-| 40 | `case "report"` / `"smartq"` / `"sql"` | 9120-9127 | `ALL /:db/report/:reportId?` | **Partial** | Missing pivot, complex JOINs (sub-queries implemented in PR #267, stored filters REP_WHERE implemented in PR #270) |
+| 40 | `case "report"` / `"smartq"` / `"sql"` | 9120-9127 | `ALL /:db/report/:reportId?` | **Partial** | Sub-queries implemented in PR #267, stored filters REP_WHERE implemented in PR #270, CSV export implemented in PR #271. Missing: pivot tables (`REP_PIVOT`), complex JOIN aliases |
 | 41 | `case "dir_admin"` | 9128-9131 | `GET /:db/dir_admin` | **N/A** | File browser UI, PHP-specific |
 | 42 | `default:` (page render) | 9114-9158 | `GET /:db`, `GET /:db/:page*` | **N/A** | HTML template rendering |
 
@@ -339,7 +339,7 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 |----------|------|--------|------------|
 | 3 | `Compile_Report()` REP_PIVOT | Pivot tables don't work | Advanced reporting |
 | 4 | ~~`Compile_Report()` REP_WHERE~~ | ~~Custom WHERE clauses in reports~~ | ~~Advanced reporting~~ — **Implemented in PR #270** |
-| 5 | `_ref_reqs` grant mask integration | Reference dropdowns may show unauthorized items | Security |
+| 5 | ~~`_ref_reqs` grant mask integration~~ | ~~Reference dropdowns may show unauthorized items~~ | ~~Security~~ — **Implemented in PR #272** |
 | 6 | ~~`abn_*` functions (DATE2STR, RUB2STR, etc.)~~ | ~~Russian locale reports fail~~ | ~~Localization~~ — **Implemented in PR #268** |
 
 ### 6.3 Medium (Nice-to-Have)
@@ -374,12 +374,14 @@ All 82 block type handlers are **N/A** for the Node.js API server. These are PHP
 
 ## 8. Recommendations
 
-1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. Pivot tables are used in production reports. (Note: Aggregates implemented in PR #266, sub-queries implemented in PR #267, abn_* functions implemented in PR #268, GROUP_CONCAT for arrays implemented in PR #269, REP_WHERE stored filters implemented in PR #270. Remaining: REP_PIVOT, complex JOIN aliases.)
+1. **Complete `Compile_Report()` parity** — The report engine is the most critical gap. Pivot tables are used in production reports. (Note: Aggregates implemented in PR #266, sub-queries implemented in PR #267, abn_* functions implemented in PR #268, GROUP_CONCAT for arrays implemented in PR #269, REP_WHERE stored filters implemented in PR #270, CSV export implemented in PR #271. Remaining: REP_PIVOT, complex JOIN aliases.)
 
 2. **Add batch insert** — `Insert_batch()` is critical for restore and data migration performance.
 
 3. ~~**Implement `abn_*` functions**~~ — **Implemented in PR #268** — These are now available for Russian-locale reports.
 
-4. **Consider grant mask in `_ref_reqs`** — Security concern: reference dropdowns should respect row-level masks.
+4. ~~**Consider grant mask in `_ref_reqs`**~~ — **Implemented in PR #272** — Dynamic formula evaluation for calculatable reference dropdowns now works correctly.
 
 5. **Block handlers are N/A** — All 82 block handlers are PHP-specific HTML template providers. The Node.js API returns JSON, so these are correctly not implemented.
+
+6. **BuiltIn placeholders complete** — 11 additional placeholders added in PR #273 (`[YESTERDAY]`, `[TOMORROW]`, `[MONTH_AGO]`, `[WEEK_AGO]`, `[MONTH_PLUS]`, `[ROLE]`, `[ROLE_ID]`, `[TSHIFT]`, `[REMOTE_HOST]`, `[HTTP_USER_AGENT]`, `[HTTP_REFERER]`).
