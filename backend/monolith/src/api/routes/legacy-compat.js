@@ -848,6 +848,33 @@ async function checkGrant(pool, db, grants, id, t = 0, grant = 'WRITE', username
 }
 
 /**
+ * Check grant to the file repository.
+ * Matches PHP RepoGrant() (index.php:6826-6834).
+ *
+ * Logic:
+ *   1. If grants[TYPE.FILE] is set explicitly → return that level (READ / WRITE)
+ *   2. Else if the user is admin (username === db owner OR username === 'admin') → WRITE
+ *   3. Otherwise → BARRED
+ *
+ * @param {Object} grants - Loaded grants object
+ * @param {string} db - Database (schema) name — doubles as the owner username
+ * @param {string} username - Current user's username
+ * @returns {string} 'READ' | 'WRITE' | 'BARRED'
+ */
+function repoGrant(grants, db, username) {
+  // 1. Explicit grant on the FILE base-type
+  if (grants && grants[TYPE.FILE]) {
+    return grants[TYPE.FILE]; // 'READ' or 'WRITE'
+  }
+  // 2. Admin / DB-owner override
+  if (username && (username.toLowerCase() === 'admin' || username === db)) {
+    return 'WRITE';
+  }
+  // 3. No access
+  return 'BARRED';
+}
+
+/**
  * Check grant for first-level (root) children
  * Matches PHP's Grant_1level() function
  */
@@ -9119,11 +9146,20 @@ function createDiskUpload(db) {
   });
 }
 
-router.post('/:db/upload', (req, res, next) => {
+router.post('/:db/upload', legacyAuthMiddleware, (req, res, next) => {
   const { db } = req.params;
   if (!isValidDbName(db)) {
     return res.status(200).json({ error: 'Invalid database' });
   }
+
+  // PHP parity: RepoGrant() must return WRITE for uploads
+  const { grants, username } = req.legacyUser || {};
+  const grant = repoGrant(grants || {}, db, username || '');
+  if (grant !== 'WRITE') {
+    logger.warn('[Legacy upload] Repo grant denied', { db, username, grant });
+    return res.status(200).json({ error: 'Insufficient permissions to access this workplace' });
+  }
+
   // Instantiate multer with disk storage for this specific db
   createDiskUpload(db).single('file')(req, res, (err) => {
     if (err) {
@@ -9191,11 +9227,19 @@ router.post('/:db/upload', (req, res, next) => {
  * File download endpoint
  * GET /:db/download/:filename
  */
-router.get('/:db/download/:filename', async (req, res) => {
+router.get('/:db/download/:filename', legacyAuthMiddleware, async (req, res) => {
   const { db, filename } = req.params;
 
   if (!isValidDbName(db)) {
     return res.status(200).json({ error: 'Invalid database'  });
+  }
+
+  // PHP parity: RepoGrant() — any non-BARRED level (READ or WRITE) permits download
+  const { grants, username } = req.legacyUser || {};
+  const grant = repoGrant(grants || {}, db, username || '');
+  if (grant === 'BARRED') {
+    logger.warn('[Legacy download] Repo grant denied', { db, username, grant });
+    return res.status(200).json({ error: 'Insufficient permissions to access this workplace' });
   }
 
   try {
@@ -9222,12 +9266,20 @@ router.get('/:db/download/:filename', async (req, res) => {
  * Directory listing endpoint
  * GET /:db/dir_admin
  */
-router.get('/:db/dir_admin', async (req, res) => {
+router.get('/:db/dir_admin', legacyAuthMiddleware, async (req, res) => {
   const { db } = req.params;
   const { download, add_path, gf } = req.query;
 
   if (!isValidDbName(db)) {
     return res.status(200).json({ error: 'Invalid database'  });
+  }
+
+  // PHP parity: RepoGrant() check before dir_admin (index.php:6610-6612)
+  const { grants, username } = req.legacyUser || {};
+  const grant = repoGrant(grants || {}, db, username || '');
+  if (grant === 'BARRED') {
+    logger.warn('[Legacy dir_admin] Repo grant denied', { db, username, grant });
+    return res.status(200).json({ error: 'Insufficient permissions to access this workplace' });
   }
 
   try {
