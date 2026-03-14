@@ -11899,6 +11899,662 @@ router.get('/:db/bki-export', async (req, res) => {
 });
 
 // ============================================================================
+// BKI import — structured import with type resolution and ID substitution
+// PHP: index.php lines 5222–5765 (&uni_obj_head import block)
+// ============================================================================
+
+// Name→ID mapping for base types (inverse of REV_BASE_TYPE)
+// PHP parity: $GLOBALS["BT"] = array_flip($GLOBALS["basics"])
+const BASE_TYPE_BY_NAME = {};
+for (const [id, name] of Object.entries(REV_BASE_TYPE)) {
+  BASE_TYPE_BY_NAME[name] = Number(id);
+}
+
+/**
+ * ResolveType — find or create local type matching an imported type definition.
+ * PHP parity: index.php lines 3970–3990
+ *
+ * If a local type with the same (val, base_type) exists at root, uses it.
+ * Otherwise creates a new type row. Records old→new ID mapping in ctx.localStruct.subst.
+ *
+ * @param {object}   pool - MySQL pool
+ * @param {string}   db   - database name
+ * @param {string[]} typ  - parsed type descriptor [id, name, baseTypeName, "unique"?]
+ * @param {object}   ctx  - shared import context
+ * @returns {number} resolved local type ID
+ */
+async function resolveType(pool, db, typ, ctx) {
+  const baseTypeId = BASE_TYPE_BY_NAME[typ[2]];
+  if (baseTypeId === undefined) {
+    throw new Error(`Unknown base type "${typ[2]}" for imported type "${typ[1]}"`);
+  }
+
+  const [rows] = await pool.query(
+    `SELECT id FROM \`${db}\` WHERE val = ? AND up = 0 AND t = ?`,
+    [typ[1], baseTypeId]
+  );
+
+  let id;
+  if (rows.length > 0) {
+    id = rows[0].id;
+    await constructHeader(pool, db, id, ctx);
+  } else {
+    // No analogue — insert new type
+    const ord = typ[3] ? 1 : 0; // "unique" flag → ord=1
+    const [ins] = await pool.query(
+      `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (0, ?, ?, ?)`,
+      [ord, baseTypeId, typ[1]]
+    );
+    id = ins.insertId;
+    ctx.localStruct[id] = { 0: `${id}:${MaskDelimiters(typ[1])}:${baseTypeId}${typ[3] ? ':unique' : ''}` };
+  }
+
+  if (id !== Number(typ[0])) {
+    if (!ctx.localStruct.subst) ctx.localStruct.subst = {};
+    ctx.localStruct.subst[typ[0]] = id;
+  }
+  return id;
+}
+
+/**
+ * isOccupied — check if an ID exists in the database.
+ * PHP parity: index.php lines 978–983
+ */
+async function isOccupied(pool, db, id) {
+  const [rows] = await pool.query(`SELECT 1 FROM \`${db}\` WHERE id = ? LIMIT 1`, [id]);
+  return rows.length > 0;
+}
+
+/**
+ * bkiInsertRow — insert a single row and return its new ID.
+ * PHP parity: Insert() — index.php lines 7054–7059
+ * Named differently from the existing insertRow() to avoid collision.
+ */
+async function bkiInsertRow(pool, db, up, ord, t, val) {
+  const [result] = await pool.query(
+    `INSERT INTO \`${db}\` (up, ord, t, val) VALUES (?, ?, ?, ?)`,
+    [up, ord, t, val]
+  );
+  return result.insertId;
+}
+
+/**
+ * getOrd — get next ord value for children of a parent (optionally filtered by type).
+ * PHP parity: Get_Ord() — index.php lines 7012–7018
+ */
+async function getOrd(pool, db, parent, typ = 0) {
+  const sql = typ
+    ? `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM \`${db}\` WHERE up = ? AND t = ?`
+    : `SELECT COALESCE(MAX(ord), 0) + 1 AS next_ord FROM \`${db}\` WHERE up = ?`;
+  const params = typ ? [parent, typ] : [parent];
+  const [rows] = await pool.query(sql, params);
+  return rows[0].next_ord;
+}
+
+/**
+ * BKI import route.
+ * POST /:db/bki-import
+ *
+ * Accepts a .bki file (in ZIP or raw) via multipart upload (field "file")
+ * or raw body text. Parses BKI header + DATA section, resolves type conflicts,
+ * and imports with ID substitution via checkSubst/checkObjSubst.
+ *
+ * PHP parity: index.php lines 5222–5765 (&uni_obj_head import block)
+ */
+router.post('/:db/bki-import', (req, res, next) => {
+  upload.single('file')(req, res, next);
+}, async (req, res) => {
+  const { db } = req.params;
+  if (!isValidDbName(db)) {
+    return res.status(200).json({ error: 'Invalid database' });
+  }
+
+  try {
+    const pool = getPool();
+
+    // ── Auth & grant check ──
+    const token = req.cookies[db] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    let username = '';
+    let grants = {};
+
+    if (token) {
+      const [userRows] = await pool.query(`
+        SELECT u.id, u.val AS username, role_def.id AS role_id
+        FROM \`${db}\` tok
+        JOIN \`${db}\` u ON tok.up = u.id
+        LEFT JOIN (\`${db}\` r CROSS JOIN \`${db}\` role_def)
+          ON r.up = u.id AND role_def.id = r.t AND role_def.t = ${TYPE.ROLE}
+        WHERE tok.val = ? AND tok.t = ${TYPE.TOKEN}
+        LIMIT 1
+      `, [token]);
+
+      if (userRows.length > 0) {
+        username = userRows[0].username;
+        grants = await getGrants(pool, db, userRows[0].role_id, {
+          username: userRows[0].username, roleId: userRows[0].role_id,
+        });
+      }
+    }
+
+    if (!grants.EXPORT?.[1] && username.toLowerCase() !== 'admin' && username !== db) {
+      return res.status(403).json({ error: 'You do not have permission to import to the database' });
+    }
+
+    // ── Get BKI content ──
+    let bkiContent = '';
+    if (req.file) {
+      const entries = readZip(req.file.buffer);
+      const bkiEntry = entries.find(e => e.name.endsWith('.bki')) || entries.find(e => e.name.endsWith('.dmp')) || entries[0];
+      if (!bkiEntry) return res.status(400).json({ error: 'No .bki file found in ZIP' });
+      bkiContent = bkiEntry.content.toString('utf8');
+    } else if (typeof req.body === 'string') {
+      bkiContent = req.body;
+    } else if (req.body?.content) {
+      bkiContent = req.body.content;
+    } else if (req.body?.data) {
+      bkiContent = req.body.data;
+    }
+
+    if (!bkiContent) {
+      return res.status(400).json({ error: 'No BKI content provided' });
+    }
+
+    // Remove BOM if present
+    if (bkiContent.charCodeAt(0) === 0xFEFF || bkiContent.startsWith('\xEF\xBB\xBF')) {
+      bkiContent = bkiContent.replace(/^\uFEFF/, '').replace(/^\xEF\xBB\xBF/, '');
+    }
+
+    const lines = bkiContent.split(/\r?\n/);
+    let lineIdx = 0;
+
+    // ── Detect plain data vs full BKI ──
+    const firstLine = lines[0] || '';
+    const plainData = firstLine.startsWith('DATA');
+
+    // Build import context (reuse constructHeader's ctx format)
+    const ctx = {
+      localStruct: {},
+      base: {},
+      uniq: {},
+      parents: {},
+      linx: {},
+      refs: {},
+      arrays: {},
+      pwds: {},
+      multi: {},
+      termDefs: {},
+      objSubst: {},
+    };
+
+    let rootTypeId;
+    const imported = {}; // imported structure from BKI header
+
+    if (plainData) {
+      // Plain data — structure already exists in DB, just import data rows
+      const id = Number(req.body?.id || req.query?.id);
+      if (!id || id <= 1) {
+        return res.status(400).json({ error: 'Plain DATA import requires ?id=<typeId> parameter' });
+      }
+      rootTypeId = id;
+      await constructHeader(pool, db, rootTypeId, ctx);
+      lineIdx = 1; // skip "DATA" line
+    } else {
+      // Full BKI — parse header first
+      // First line is the root type definition
+      const rootTypParts = firstLine.split(':');
+      rootTypeId = Number(rootTypParts[0]);
+      if (!rootTypeId || rootTypeId <= 1) {
+        return res.status(400).json({ error: `Invalid metadata type ${rootTypParts[0]}` });
+      }
+
+      // Build local structure for root type
+      await constructHeader(pool, db, rootTypeId, ctx);
+
+      // ── Parse header lines (type definitions) until DATA ──
+      for (lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const line = lines[lineIdx].trim();
+        if (line === 'DATA' || line === '') {
+          if (line === 'DATA') { lineIdx++; }
+          break;
+        }
+
+        // Parse type definition line: "id:name:baseType:attr;reqId:reqDef;..."
+        const fields = UnHideDelimiters(line).split(';').filter(s => s.length > 0);
+        const typ = fields[0].split(':');
+        const obj = Number(typ[0]);
+        if (!obj) continue;
+
+        // Store imported structure
+        let order = 0;
+        for (const field of fields) {
+          imported[obj] = imported[obj] || {};
+          imported[obj][order++] = UnHideDelimiters(field);
+        }
+
+        // Resolve type conflicts (only for non-reference types: count > 2 parts)
+        if (typ.length > 2) {
+          if (await isOccupied(pool, db, obj)) {
+            await constructHeader(pool, db, obj, ctx);
+            if (ctx.localStruct[obj] && ctx.localStruct[obj][0] !== imported[obj][0]) {
+              await resolveType(pool, db, typ, ctx);
+            }
+          } else {
+            // ID is free — create type with this ID
+            const baseTypeId = BASE_TYPE_BY_NAME[typ[2]];
+            if (baseTypeId !== undefined) {
+              await pool.query(
+                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 0, ?, ?, ?)`,
+                [obj, typ[3] ? 1 : 0, baseTypeId, typ[1]]
+              );
+              ctx.localStruct[obj] = { 0: imported[obj][0] };
+            }
+          }
+        }
+      }
+
+      // ── Reconcile imported structure with local ──
+      // PHP parity: index.php lines 5331–5435
+      const localTypes = {};
+
+      for (const [parStr, reqs] of Object.entries(imported)) {
+        const par = Number(parStr);
+        const parent = checkSubst(par, ctx);
+
+        for (const [orderStr, req] of Object.entries(reqs)) {
+          const order = Number(orderStr);
+          if (order === 0) continue;
+
+          const typ = UnHideDelimiters(HideDelimiters(req).split(':')).length > 0
+            ? HideDelimiters(req).split(':').map(s => UnHideDelimiters(s))
+            : [req];
+
+          const value = typ[0] + ':' + checkSubst(Number(typ[1]) || typ[1], ctx);
+
+          // Check if this requisite already exists in local structure
+          let found = false;
+          let localType = null;
+          if (ctx.localStruct[parent]) {
+            for (const [lt, lv] of Object.entries(ctx.localStruct[parent])) {
+              if (lv.startsWith(value)) {
+                found = true;
+                localType = lt;
+                break;
+              }
+            }
+          }
+
+          if (found) {
+            if (typ[0] === 'ref') {
+              localTypes[par] = localTypes[par] || {};
+              localTypes[par][order] = typ[2];
+            } else {
+              localTypes[par] = localTypes[par] || {};
+              localTypes[par][order] = localType;
+            }
+          } else if (typ[0] === 'ref') {
+            // Reference requisite — create or find
+            const reqID = Number(typ[1]);
+            let refID = Number(typ[2]);
+            const refObj = imported[typ[2]] ? imported[typ[2]][0].split(':') : [];
+            const refObjName = checkSubst(Number(refObj[1]) || 0, ctx);
+
+            // Create ref object if needed
+            if (await isOccupied(pool, db, refID)) {
+              const [seekRows] = await pool.query(
+                `SELECT id FROM \`${db}\` WHERE up = 0 AND t = ? AND val = ''`,
+                [refObjName]
+              );
+              if (seekRows.length > 0) {
+                refID = seekRows[0].id;
+              } else {
+                refID = await bkiInsertRow(pool, db, 0, 0, refObjName, '');
+                if (!ctx.localStruct.subst) ctx.localStruct.subst = {};
+                ctx.localStruct.subst[typ[2]] = refID;
+              }
+            } else {
+              await pool.query(
+                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 0, 0, ?, '')`,
+                [refID, refObjName]
+              );
+            }
+            ctx.refs[refID] = '';
+
+            // Create ref requisite if needed
+            let finalReqID = reqID;
+            if (await isOccupied(pool, db, reqID)) {
+              const [seekRows] = await pool.query(
+                `SELECT id FROM \`${db}\` WHERE t = ? AND up = ?`,
+                [refID, parent]
+              );
+              if (seekRows.length > 0) {
+                finalReqID = seekRows[0].id;
+              } else {
+                finalReqID = await bkiInsertRow(pool, db, parent, order, refID,
+                  typ[3] ? UnMaskDelimiters(typ[3]) : '');
+                if (!ctx.localStruct.subst) ctx.localStruct.subst = {};
+                ctx.localStruct.subst[reqID] = finalReqID;
+              }
+            } else {
+              await pool.query(
+                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, ?, ?, ?, '')`,
+                [reqID, parent, order, refID]
+              );
+            }
+
+            // Check MULTI
+            if (typ[3] && UnMaskDelimiters(typ[3]).includes(':MULTI:')) {
+              ctx.multi[finalReqID] = refID;
+            }
+            ctx.refs[finalReqID] = refID;
+            localTypes[par] = localTypes[par] || {};
+            localTypes[par][order] = checkSubst(finalReqID, ctx);
+          } else if (typ[0] === 'arr') {
+            // Array requisite
+            const arrTypeId = checkSubst(Number(typ[1]), ctx);
+            const newReqId = await bkiInsertRow(pool, db, parent, order, arrTypeId,
+              typ[2] ? UnMaskDelimiters(typ[2]) : '');
+            ctx.localStruct[parent] = ctx.localStruct[parent] || {};
+            ctx.localStruct[parent][newReqId] = req;
+            localTypes[par] = localTypes[par] || {};
+            localTypes[par][order] = newReqId;
+            ctx.parents[arrTypeId] = parent;
+          } else {
+            // Plain requisite — find analogue or create new
+            const baseId = BASE_TYPE_BY_NAME[typ[1]];
+            let typeId;
+            if (baseId !== undefined) {
+              const [seekRows] = await pool.query(
+                `SELECT id FROM \`${db}\` WHERE val = ? AND up = 0 AND id != t AND t = ?`,
+                [typ[0], baseId]
+              );
+              if (seekRows.length > 0) {
+                typeId = seekRows[0].id;
+              } else {
+                typeId = await bkiInsertRow(pool, db, 0, 0, baseId, typ[0]);
+              }
+            } else {
+              typeId = await bkiInsertRow(pool, db, 0, 0, BASE_TYPE_BY_NAME.SHORT || 3, typ[0]);
+            }
+            const nextOrd = await getOrd(pool, db, parent);
+            const newReqId = await bkiInsertRow(pool, db, parent, nextOrd, typeId,
+              typ[2] ? UnMaskDelimiters(typ[2]) : '');
+            ctx.localStruct[parent] = ctx.localStruct[parent] || {};
+            ctx.localStruct[parent][newReqId] = req;
+            localTypes[par] = localTypes[par] || {};
+            localTypes[par][order] = newReqId;
+          }
+        }
+      }
+
+      // Store localTypes in ctx for data import phase
+      ctx._localTypes = localTypes;
+    }
+
+    // ── Import DATA rows ──
+    // PHP parity: index.php lines 5437–5761
+    const parentId = Number(req.body?.parent || req.query?.parent) || 1;
+    const curParent = { 0: parentId };
+    const curOrder = {};
+    const batchRows = [];
+    let importCount = 0;
+    let warnings = '';
+
+    const typesCount = ctx._localTypes && ctx._localTypes[rootTypeId]
+      ? Object.keys(ctx._localTypes[rootTypeId]).length
+      : (ctx.localStruct[rootTypeId] ? Object.keys(ctx.localStruct[rootTypeId]).length : 0);
+    const isUnique = ctx.uniq[rootTypeId] === '1' || ctx.uniq[rootTypeId] === 1;
+
+    for (; lineIdx < lines.length; lineIdx++) {
+      let line = lines[lineIdx];
+      if (!line || line.trim().length === 0) continue;
+
+      if (plainData) {
+        // Plain data format: semicolon-separated fields matching local structure
+        const fields = UnHideDelimiters(HideDelimiters(line).split(';')).length > 0
+          ? HideDelimiters(line).split(';').map(s => UnHideDelimiters(s))
+          : line.split(';');
+
+        if (!fields[0] || fields[0].trim() === '') {
+          warnings += `Skipped empty object at line ${lineIdx + 1}. `;
+          continue;
+        }
+
+        // Format the main value
+        const mainVal = formatVal(ctx.base[rootTypeId], UnMaskDelimiters(fields[0]));
+
+        // Check unique constraint
+        let existingId = null;
+        if (isUnique) {
+          const [existRows] = await pool.query(
+            `SELECT id FROM \`${db}\` WHERE up = ? AND t = ? AND val = ? LIMIT 1`,
+            [curParent[ctx.parents[rootTypeId]] || parentId, rootTypeId, mainVal]
+          );
+          if (existRows.length > 0) existingId = existRows[0].id;
+        }
+
+        const newId = existingId || await bkiInsertRow(pool, db,
+          curParent[ctx.parents[rootTypeId]] || parentId,
+          curOrder[curParent[ctx.parents[rootTypeId]] || parentId]
+            ? ++curOrder[curParent[ctx.parents[rootTypeId]] || parentId]
+            : (curOrder[curParent[ctx.parents[rootTypeId]] || parentId] = await getOrd(pool, db, curParent[ctx.parents[rootTypeId]] || parentId, rootTypeId)),
+          rootTypeId, mainVal);
+
+        // Import requisite values
+        let fieldIdx = 1;
+        for (const [key] of Object.entries(ctx.localStruct[rootTypeId] || {}).sort((a, b) => Number(a[0]) - Number(b[0]))) {
+          if (Number(key) === 0) continue;
+          if (fieldIdx >= fields.length) break;
+          const fieldVal = fields[fieldIdx++];
+          if (!fieldVal || fieldVal.length === 0) continue;
+
+          if (ctx.refs[key] !== undefined) {
+            // Reference — resolve by value
+            const refType = ctx.refs[key];
+            if (ctx.multi[key]) {
+              const multies = fieldVal.split(',');
+              let ord = 1;
+              for (const ref of multies) {
+                const refInt = parseInt(ref.trim(), 10);
+                if (refInt) {
+                  batchRows.push([newId, ord++, checkObjSubst(refInt, ctx), Number(key)]);
+                }
+              }
+            } else if (parseInt(fieldVal, 10)) {
+              batchRows.push([newId, 1, checkObjSubst(parseInt(fieldVal, 10), ctx), Number(key)]);
+            }
+          } else {
+            // Plain value
+            const fmtVal = formatVal(ctx.base[key], UnMaskDelimiters(fieldVal));
+            if (fmtVal !== ' ' && fmtVal !== '') {
+              batchRows.push([newId, 1, Number(key), fmtVal]);
+            }
+          }
+        }
+        importCount++;
+      } else {
+        // Full BKI data format: "refAttr:typeId:name:val;req1;req2;..."
+        const fields = HideDelimiters(line).split(';').map(s => UnHideDelimiters(s));
+        const typ = HideDelimiters(fields[0]).split(':').map(s => UnHideDelimiters(s));
+
+        let isref = 0;
+        if (typ.length === 4) {
+          // Reference attribute
+          isref = checkSubst(parseInt(typ.shift(), 10), ctx);
+        }
+
+        const orig = parseInt(typ[0], 10);
+        const t = checkSubst(orig, ctx);
+
+        if (!ctx.localStruct[t]) {
+          return res.status(400).json({
+            error: `Line ${lineIdx + 1}: Invalid type ${t} not present in metadata`,
+          });
+        }
+
+        if (typ[2] === undefined || typ[2] === '') {
+          return res.status(400).json({
+            error: `Line ${lineIdx + 1}: Empty object of type ${t}`,
+          });
+        }
+
+        // Resolve parent
+        let parent, ord;
+        if (curParent[ctx.parents[t]] !== undefined) {
+          parent = curParent[ctx.parents[t]];
+          if (curOrder[parent] !== undefined) {
+            ord = ++curOrder[parent];
+          } else {
+            ord = curOrder[parent] = await getOrd(pool, db, parent, t);
+          }
+        } else {
+          parent = 1;
+          ord = 1;
+        }
+
+        let newId;
+        if (typ[1] === '' || typ[1] === undefined) {
+          // No ID specified — just insert
+          newId = await bkiInsertRow(pool, db, parent, ord, t, UnMaskDelimiters(typ[2]));
+        } else {
+          // ID specified — check for collision
+          newId = parseInt(typ[1], 10);
+          const [checkRows] = await pool.query(
+            `SELECT t, val FROM \`${db}\` WHERE id = ?`, [newId]
+          );
+          if (checkRows.length > 0) {
+            if (checkRows[0].t === t && checkRows[0].val === typ[2]) {
+              // Exact match — reuse
+            } else {
+              // ID collision — create new and record substitution
+              const [valCheck] = await pool.query(
+                `SELECT id FROM \`${db}\` WHERE t = ? AND val = ?`,
+                [t, typ[2]]
+              );
+              if (valCheck.length > 0) {
+                newId = ctx.objSubst[newId] = valCheck[0].id;
+              } else {
+                const createdId = await bkiInsertRow(pool, db, parent, ord, t, UnMaskDelimiters(typ[2]));
+                ctx.objSubst[newId] = createdId;
+                newId = createdId;
+              }
+            }
+          } else {
+            // ID is free
+            if (isref) {
+              await pool.query(
+                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 1, 1, ?, ?)`,
+                [newId, t, UnMaskDelimiters(typ[2])]
+              );
+            } else {
+              await pool.query(
+                `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, ?, ?, ?, ?)`,
+                [newId, parent, ord, t, UnMaskDelimiters(typ[2])]
+              );
+            }
+          }
+        }
+
+        curParent[t] = newId;
+
+        // Import requisite values from remaining fields
+        let fieldOrder = 0;
+        for (let fi = 1; fi < fields.length; fi++) {
+          fieldOrder++;
+          const fieldVal = fields[fi];
+          if (!fieldVal || fieldVal.length === 0) continue;
+
+          const key = (ctx._localTypes && ctx._localTypes[orig] && ctx._localTypes[orig][fieldOrder])
+            ? ctx._localTypes[orig][fieldOrder]
+            : (ctx.localStruct[t] ? Object.keys(ctx.localStruct[t]).sort((a, b) => Number(a) - Number(b))[fieldOrder] : null);
+
+          if (!key) continue;
+
+          if (ctx.refs[key] !== undefined) {
+            // Reference
+            if (ctx.multi[key]) {
+              const multies = fieldVal.split(',');
+              let refOrd = 1;
+              for (const ref of multies) {
+                const refInt = parseInt(ref.trim(), 10);
+                if (refInt) {
+                  batchRows.push([newId, refOrd++, checkObjSubst(refInt, ctx), Number(key)]);
+                }
+              }
+            } else if (fieldVal.includes(':') || parseInt(fieldVal, 10) === 0) {
+              // Reference by value "ID:Value" or ":Value"
+              const refType = ctx.refs[key];
+              let refObjID = 0;
+              let refObjVal = fieldVal;
+              if (fieldVal.includes(':')) {
+                const tmp = HideDelimiters(fieldVal).split(':').map(s => UnHideDelimiters(s));
+                refObjID = parseInt(tmp[0], 10) || 0;
+                refObjVal = tmp[1] || '';
+              }
+
+              if (refObjID > 0) {
+                const [chk] = await pool.query(
+                  `SELECT t, val FROM \`${db}\` WHERE id = ?`, [refObjID]
+                );
+                if (chk.length > 0) {
+                  if (chk[0].t !== refType) {
+                    // Type mismatch — create new
+                    refObjID = ctx.objSubst[refObjID] = await bkiInsertRow(pool, db, 1, 1, refType, refObjVal);
+                  }
+                } else if (refObjVal) {
+                  await pool.query(
+                    `INSERT INTO \`${db}\` (id, up, ord, t, val) VALUES (?, 1, 1, ?, ?)`,
+                    [refObjID, refType, refObjVal]
+                  );
+                }
+              } else if (refObjVal) {
+                const [seekRows] = await pool.query(
+                  `SELECT id FROM \`${db}\` WHERE t = ? AND val = ?`,
+                  [refType, refObjVal]
+                );
+                if (seekRows.length > 0) {
+                  refObjID = seekRows[0].id;
+                } else {
+                  refObjID = await bkiInsertRow(pool, db, 1, 1, refType, refObjVal);
+                }
+              }
+              if (refObjID) {
+                batchRows.push([newId, 1, refObjID, Number(key)]);
+              }
+            } else if (parseInt(fieldVal, 10) !== 0) {
+              // Reference set by ID
+              batchRows.push([newId, 1, checkObjSubst(parseInt(fieldVal, 10), ctx), Number(key)]);
+            }
+          } else {
+            // Plain requisite
+            batchRows.push([newId, 1, Number(key), UnMaskDelimiters(fieldVal)]);
+          }
+        }
+        importCount++;
+      }
+    }
+
+    // Flush batch rows
+    if (batchRows.length > 0) {
+      await insertBatch(pool, db, batchRows, {
+        columns: '`up`, `ord`, `t`, `val`',
+        ignore: true,
+      });
+    }
+
+    logger.info('[Legacy BKI import] Completed', { db, importCount, batchRows: batchRows.length, warnings: warnings || undefined });
+    res.json({
+      status: 'Ok',
+      imported: importCount,
+      rows: batchRows.length,
+      warnings: warnings || undefined,
+    });
+  } catch (error) {
+    logger.error('[Legacy BKI import] Error', { error: error.message, db });
+    res.status(500).json({ error: 'BKI import failed: ' + error.message });
+  }
+});
+
+// ============================================================================
 // restore - Import from binary dump (P0 Critical)
 // PHP: index.php lines 4178–4238
 // Parses compact dump format and generates INSERT statements
