@@ -8410,6 +8410,156 @@ router.get('/:db/dir_admin', async (req, res) => {
 // Phase 4: Full Report System with Filtering (remaining 10%)
 // ============================================================================
 
+const MAX_REPORT_SUBQUERY_DEPTH = 10;
+
+/**
+ * Build a SELECT SQL string for a compiled report (no execution, no LIMIT).
+ * Used to produce subquery SQL when a report is referenced via [report_name].
+ *
+ * PHP equivalent: when Get_block_data($sub_query, FALSE) is called, the report
+ * is compiled and its SQL stored in GLOBALS["STORED_REPS"][$id]["sql"].
+ */
+async function buildReportSubquerySQL(pool, db, report, depth = 0) {
+  if (!report || !report.parentType || report.parentType <= 0) return null;
+
+  const AGGR_FUNCS = new Set(['AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'GROUP_CONCAT']);
+  const selectParts = ['a.id', 'a.val AS main_val'];
+  const joinParts   = [];
+
+  for (const col of report.columns) {
+    if (!col.reqTypeId || isNaN(col.reqTypeId)) continue;
+
+    const rawExpr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
+    let fieldExpr = rawExpr;
+    if (col.formula) {
+      // Resolve [report_name] refs in the formula before processing [THIS]
+      let resolvedFormula = await resolveReportSubqueries(pool, db, col.formula, depth);
+      fieldExpr = resolvedFormula.includes('[THIS]')
+        ? resolvedFormula.replace(/\[THIS\]/g, rawExpr)
+        : resolvedFormula;
+    }
+    if (col.func && AGGR_FUNCS.has(col.func)) {
+      const bt = REV_BASE_TYPE[col.baseType] || 'SHORT';
+      if (col.func === 'GROUP_CONCAT') {
+        fieldExpr = `GROUP_CONCAT(DISTINCT ${fieldExpr})`;
+      } else if (bt === 'NUMBER' || bt === 'SIGNED' || bt === 'DATETIME') {
+        fieldExpr = `${col.func}(CAST(${fieldExpr} AS DOUBLE))`;
+      } else {
+        fieldExpr = `${col.func}(${fieldExpr})`;
+      }
+    } else if (col.func) {
+      fieldExpr = `${col.func}(${fieldExpr})`;
+    }
+
+    selectParts.push(`${fieldExpr} AS \`${col.alias}\``);
+    if (!col.isMainCol) {
+      joinParts.push(
+        `LEFT JOIN \`${db}\` \`${col.alias}\`` +
+        ` ON \`${col.alias}\`.up = a.id AND \`${col.alias}\`.t = ${col.reqTypeId}`
+      );
+    }
+  }
+
+  const parts = [
+    `SELECT ${selectParts.join(', ')}`,
+    `FROM \`${db}\` a`,
+    ...joinParts,
+    `WHERE a.t = ${parseInt(report.parentType, 10)} AND a.up != 0`,
+  ];
+
+  // GROUP BY if report uses aggregates
+  if (report.hasAggregates) {
+    const groupParts = [];
+    for (const col of report.columns) {
+      if (col.hidden || col.isAggregate) continue;
+      if (col.formula && /\b(SUM|AVG|COUNT|MIN|MAX|GROUP_CONCAT)\s*\(/i.test(col.formula)) continue;
+      const expr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
+      groupParts.push(expr);
+    }
+    if (groupParts.length > 0) parts.push(`GROUP BY ${groupParts.join(', ')}`);
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * Resolve [report_name] references in a SQL string by replacing them with
+ * compiled subquery SQL wrapped in parentheses.
+ *
+ * PHP equivalent: lines 2941-3021 of index.php — splits on '[' to find
+ * report name tokens, calls Get_block_data(name, FALSE), and replaces
+ * [name] / '[name]' with (compiled_sql) across all SQL parts.
+ *
+ * @param {object} pool    - DB pool
+ * @param {string} db      - Database name
+ * @param {string} sqlStr  - SQL string potentially containing [report_name] refs
+ * @param {number} depth   - Current recursion depth (for infinite-loop guard)
+ * @returns {Promise<string>} SQL with subqueries resolved
+ */
+async function resolveReportSubqueries(pool, db, sqlStr, depth = 0) {
+  if (depth >= MAX_REPORT_SUBQUERY_DEPTH) {
+    logger.warn('[Report] Subquery depth limit reached', { depth, db });
+    return sqlStr;
+  }
+
+  // Find all [name] references (excluding [THIS] which is handled separately)
+  const refPattern = /\[([^\]]+)\]/g;
+  const refs = new Set();
+  let match;
+  while ((match = refPattern.exec(sqlStr)) !== null) {
+    const name = match[1];
+    if (name === 'THIS') continue;
+    refs.add(name);
+  }
+
+  if (refs.size === 0) return sqlStr;
+
+  let result = sqlStr;
+
+  for (const reportName of refs) {
+    // Look up report by name
+    const [nameRows] = await pool.query(
+      `SELECT id FROM \`${db}\` WHERE val = ? AND t = ${TYPE.REPORT} LIMIT 1`,
+      [reportName]
+    );
+    if (nameRows.length === 0) {
+      logger.warn('[Report] Subquery reference not found', { reportName, db });
+      continue;
+    }
+
+    const subReportId = nameRows[0].id;
+    const subReport = await compileReport(pool, db, subReportId);
+    if (!subReport) {
+      logger.warn('[Report] Failed to compile subquery report', { reportName, subReportId, db });
+      continue;
+    }
+
+    let subSQL = await buildReportSubquerySQL(pool, db, subReport, depth + 1);
+    if (!subSQL) {
+      logger.warn('[Report] Failed to build subquery SQL', { reportName, subReportId, db });
+      continue;
+    }
+
+    // Recursively resolve any nested [report_name] references in the subquery
+    subSQL = await resolveReportSubqueries(pool, db, subSQL, depth + 1);
+
+    const replacement = `(${subSQL})`;
+
+    // Replace both '[name]' (quoted) and [name] (unquoted) — PHP does both
+    result = result.replace(new RegExp(`'\\[${escapeRegex(reportName)}\\]'`, 'g'), replacement);
+    result = result.replace(new RegExp(`\\[${escapeRegex(reportName)}\\]`, 'g'), replacement);
+
+    logger.debug('[Report] Resolved subquery', { reportName, subReportId, depth });
+  }
+
+  return result;
+}
+
+/** Escape a string for use in a RegExp */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Compile a report — load columns, joins, and metadata.
  *
@@ -8566,7 +8716,7 @@ async function compileReport(pool, db, reportId) {
  *
  * Filters: keys are column aliases or names; values are {from, to, eq, like}.
  */
-async function executeReport(pool, db, report, filters = {}, limit = 100, offset = 0, orderParam = null) {
+async function executeReport(pool, db, report, filters = {}, limit = 100, offset = 0, orderParam = null, _subqueryDepth = 0) {
   const results = { data: [], totals: {}, rownum: 0 };
 
   try {
@@ -8588,14 +8738,20 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
       // Raw field expression before any function wrapping
       const rawExpr = col.isMainCol ? 'a.val' : `\`${col.alias}\`.val`;
 
-      // Handle REP_COL_FORMULA: replace [THIS] with the raw field reference
+      // Handle REP_COL_FORMULA: replace [THIS] with the raw field reference,
+      // then resolve any [report_name] subquery references in the formula.
       let fieldExpr = rawExpr;
       if (col.formula) {
-        if (col.formula.includes('[THIS]')) {
-          fieldExpr = col.formula.replace(/\[THIS\]/g, rawExpr);
+        let resolvedFormula = col.formula;
+
+        // Resolve [report_name] subqueries in the formula (PHP parity)
+        resolvedFormula = await resolveReportSubqueries(pool, db, resolvedFormula, _subqueryDepth);
+
+        if (resolvedFormula.includes('[THIS]')) {
+          fieldExpr = resolvedFormula.replace(/\[THIS\]/g, rawExpr);
         } else {
           // Pure formula (calculatable column) — use formula as-is
-          fieldExpr = col.formula;
+          fieldExpr = resolvedFormula;
         }
       }
 
@@ -8758,7 +8914,12 @@ async function executeReport(pool, db, report, filters = {}, limit = 100, offset
     sqlParts.push(`ORDER BY ${orderClause}`);
     sqlParts.push(`LIMIT ${lim} OFFSET ${off}`);
 
-    const sql = sqlParts.join('\n');
+    let sql = sqlParts.join('\n');
+
+    // ── Resolve [report_name] subquery references (PHP parity) ──────────
+    // PHP lines 2941-3021: scan all SQL parts for [report_name] patterns,
+    // compile the referenced report, and replace with (subquery_sql).
+    sql = await resolveReportSubqueries(pool, db, sql, _subqueryDepth);
 
     logger.debug('[Report] SQL', { sql });
 
